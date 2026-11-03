@@ -84,9 +84,37 @@ export const config = {
     get maxSteps() {
       return int("AGENT_MAX_STEPS", 6);
     },
-    /** Number of past user/assistant messages kept per conversation. */
+    /**
+     * Messages kept per private conversation. A safety cap against unbounded
+     * growth, not a context budget: lists trim back to this once they pass it by 25%.
+     */
     get historyLimit() {
-      return int("AGENT_HISTORY_LIMIT", 20);
+      return int("AGENT_HISTORY_LIMIT", 100);
+    },
+    /** Messages kept per group (everyone's messages are recorded); what an @ run sees. */
+    get groupHistoryLimit() {
+      return int("AGENT_GROUP_HISTORY_LIMIT", 200);
+    },
+    /** How many recent messages an ambient run sees (they're frequent, so keep them cheap). */
+    get ambientContext() {
+      return int("AGENT_AMBIENT_CONTEXT", 40);
+    },
+    /** A conversation's history is deleted after this many days without messages. */
+    get historyTtlDays() {
+      return int("AGENT_HISTORY_TTL_DAYS", 7);
+    },
+    /**
+     * Ordinary (non-@) group messages are always recorded; at most one per this
+     * many seconds per group is shown to the agent, which decides whether to chime
+     * in. 0 = record only, never trigger the agent.
+     */
+    get ambientIntervalSeconds() {
+      const n = Number.parseInt(process.env.AGENT_AMBIENT_INTERVAL_SECONDS ?? "", 10);
+      return Number.isFinite(n) && n >= 0 ? n : 10;
+    },
+    /** Step budget for an ambient run: decide, maybe look something up, talk. */
+    get ambientMaxSteps() {
+      return int("AGENT_AMBIENT_MAX_STEPS", 3);
     },
   },
 

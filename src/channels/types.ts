@@ -6,6 +6,12 @@ export interface InboundMessage {
   /** Conversation key: a DM peer, a group, a chat… History is stored per conversation. */
   conversationId: string;
   chatType: "private" | "group";
+  /**
+   * "direct" (default): addressed to the bot (DM or @), always answered.
+   * "ambient": an ordinary group message; recorded in history, and only
+   * occasionally (sampled) shown to the agent, which may stay silent.
+   */
+  mode?: "direct" | "ambient";
   userId: string;
   /** Display name when the platform provides one (QQ v2 events don't). */
   senderName?: string;

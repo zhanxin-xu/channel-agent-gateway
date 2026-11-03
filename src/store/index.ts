@@ -9,13 +9,21 @@
  */
 import { config } from "../config.js";
 
+/**
+ * Lists may grow to this multiple of `keep` before being trimmed back to `keep`.
+ * Trimming in batches keeps the oldest entries (the start of the model's input)
+ * stable between messages, so the model provider's prompt cache keeps hitting;
+ * it also skips the LTRIM on most writes.
+ */
+export const TRIM_SLACK = 1.25;
+
 export interface Store {
-  /** All items of a list, oldest first. */
-  list(key: string): Promise<string[]>;
+  /** The newest `last` items of a list (all when omitted), oldest first. */
+  list(key: string, last?: number): Promise<string[]>;
   /**
-   * Append items to a list, keep only the newest `keep`, refresh the TTL.
-   * Appending (rather than read-modify-write) means two messages handled at
-   * the same time can't overwrite each other's turns.
+   * Append items to a list and refresh its TTL; once it exceeds `keep` ×
+   * TRIM_SLACK, trim it back to the newest `keep`. Appending (rather than
+   * read-modify-write) means concurrent handlers can't overwrite each other.
    */
   append(key: string, items: string[], keep: number, ttlSeconds: number): Promise<void>;
   /** Set only if absent. Returns true when this call created the key. */
@@ -35,12 +43,14 @@ export class MemoryStore implements Store {
     return hit;
   }
 
-  async list(key: string) {
-    return [...(this.live(key)?.value ?? [])];
+  async list(key: string, last?: number) {
+    const value = this.live(key)?.value ?? [];
+    return last ? value.slice(-last) : [...value];
   }
 
   async append(key: string, items: string[], keep: number, ttlSeconds: number) {
-    const value = [...(this.live(key)?.value ?? []), ...items].slice(-keep);
+    let value = [...(this.live(key)?.value ?? []), ...items];
+    if (value.length > Math.floor(keep * TRIM_SLACK)) value = value.slice(-keep);
     this.data.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
   }
 
@@ -88,13 +98,14 @@ export class UpstashStore implements Store {
     return data.map((d) => d.result);
   }
 
-  async list(key: string) {
-    return ((await this.command("LRANGE", key, 0, -1)) as string[] | null) ?? [];
+  async list(key: string, last?: number) {
+    return ((await this.command("LRANGE", key, last ? -last : 0, -1)) as string[] | null) ?? [];
   }
 
   async append(key: string, items: string[], keep: number, ttlSeconds: number) {
     if (!items.length) return;
-    await this.pipeline(["RPUSH", key, ...items], ["LTRIM", key, -keep, -1], ["EXPIRE", key, ttlSeconds]);
+    const [length] = await this.pipeline(["RPUSH", key, ...items], ["EXPIRE", key, ttlSeconds]);
+    if (Number(length) > Math.floor(keep * TRIM_SLACK)) await this.command("LTRIM", key, -keep, -1);
   }
 
   async claim(key: string, ttlSeconds: number) {

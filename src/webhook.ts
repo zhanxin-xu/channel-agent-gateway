@@ -43,9 +43,11 @@ export async function handleWebhook(request: Request, channelName: string): Prom
   // Signatures are computed over the exact bytes, so read the raw body once.
   const rawBody = await request.text();
   const op = /"op"\s*:\s*(\d+)/.exec(rawBody)?.[1];
+  const event = /"t"\s*:\s*"(\w+)"/.exec(rawBody)?.[1];
   console.log(
     `[webhook] ${channelName} ${request.method} ua=${request.headers.get("user-agent") ?? "-"} ` +
-      `appid=${request.headers.get("x-bot-appid") ?? "-"} bytes=${rawBody.length}${op ? ` op=${op}` : ""}`,
+      `appid=${request.headers.get("x-bot-appid") ?? "-"} bytes=${rawBody.length}` +
+      `${op ? ` op=${op}` : ""}${event ? ` t=${event}` : ""}`,
   );
   const result = await adapter.receive(request, rawBody);
   if (result.kind === "respond") return result.response;

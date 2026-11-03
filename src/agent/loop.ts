@@ -5,7 +5,8 @@
  * turn replays the transcript: the previous response's `output` items are
  * appended to `input` verbatim, followed by a `function_call_output` for every
  * `function_call`. The loop ends when a response contains no function calls,
- * or when the step budget runs out (the last request sets tool_choice "none").
+ * when a step only called the talk tools (send_message / send_sticker), or
+ * when the step budget runs out (the last request sets tool_choice "none").
  *
  * The request body is `{ model, ...OPENROUTER_EXTRA_BODY, instructions, input,
  * tools, tool_choice }`, so any provider-specific parameter (provider routing,
@@ -75,16 +76,26 @@ async function createResponse(body: Record<string, unknown>): Promise<ResponsesR
   return data;
 }
 
+/** Tools that only talk. A step that calls nothing else ends the turn (saves one model call). */
+const TALK_TOOLS = new Set(["send_message", "send_sticker"]);
+
 export async function runAgent(opts: {
   systemPrompt: string;
-  history: HistoryMessage[];
-  userText: string;
+  /** The conversation so far, oldest first; the message being answered is already in it. */
+  input: HistoryMessage[];
+  /**
+   * Per-run guidance appended after the history as a developer message (not
+   * stored). Kept out of `instructions` so the cached prompt prefix stays the same.
+   */
+  note?: string;
+  maxSteps?: number;
   ctx: ToolContext;
 }): Promise<AgentResult> {
   const { model, extraBody } = config.openrouter;
-  const maxSteps = config.agent.maxSteps;
+  const maxSteps = opts.maxSteps ?? config.agent.maxSteps;
 
-  const input: unknown[] = [...opts.history, { role: "user", content: opts.userText }];
+  const input: unknown[] = [...opts.input];
+  if (opts.note) input.push({ role: "developer", content: opts.note });
   const toolDefs = activeTools().map((t) => ({
     type: "function",
     name: t.name,
@@ -121,6 +132,11 @@ export async function runAgent(opts: {
       const result = await runTool(call.name, call.arguments, opts.ctx);
       console.log(`[agent] tool ${call.name}(${call.arguments}) -> ${result.slice(0, 200)}`);
       input.push({ type: "function_call_output", call_id: call.call_id, output: result });
+    }
+
+    // Only talked this step: the turn is done, no need to ask the model again.
+    if (calls.every((c) => TALK_TOOLS.has(c.name))) {
+      return { text: "", steps: step, reasoningTokens };
     }
   }
 

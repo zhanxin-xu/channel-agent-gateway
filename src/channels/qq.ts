@@ -143,10 +143,19 @@ interface QQMessageEvent {
   content?: string;
   /** When the user sent it, e.g. "2026-11-03T20:43:00+08:00". */
   timestamp?: string;
-  author?: { id?: string; user_openid?: string; member_openid?: string };
+  author?: { id?: string; user_openid?: string; member_openid?: string; username?: string; bot?: boolean };
+  /** Present on some group payloads; `is_you` marks a mention of this bot. */
+  mentions?: Array<{ is_you?: boolean }>;
   group_openid?: string;
   channel_id?: string;
   guild_id?: string;
+}
+
+/** Same signals as the official SDK: `mentions[].is_you`, or a `<@!AppID>` marker in the text. */
+function mentionsBot(d: QQMessageEvent): boolean {
+  if (d.mentions?.some((m) => m?.is_you === true)) return true;
+  const appId = config.qq.appId;
+  return Boolean(appId) && new RegExp(`<@!?${appId}>`).test(d.content ?? "");
 }
 
 /** Strip channel-style mentions (`<@!123>`) and surrounding whitespace. */
@@ -179,13 +188,21 @@ function parseEvent(t: string, d: QQMessageEvent): InboundMessage | undefined {
         replyContext: { scope: "c2c", target: openid, msgId: d.id },
       };
     }
-    case "GROUP_AT_MESSAGE_CREATE": {
+    // GROUP_AT_MESSAGE_CREATE: someone @-ed the bot. GROUP_MESSAGE_CREATE: every
+    // group message, delivered only when the group owner lets the bot receive
+    // all messages; it may also cover @ messages, so check for a mention.
+    case "GROUP_AT_MESSAGE_CREATE":
+    case "GROUP_MESSAGE_CREATE": {
+      if (d.author?.bot) return undefined; // never react to other bots
       const group = d.group_openid ?? "";
+      const mentioned = t === "GROUP_AT_MESSAGE_CREATE" || mentionsBot(d);
       return {
         ...base,
         conversationId: `group:${group}`,
         chatType: "group",
+        mode: mentioned ? "direct" : "ambient",
         userId: d.author?.member_openid ?? "",
+        senderName: d.author?.username || undefined,
         replyContext: { scope: "group", target: group, msgId: d.id },
       };
     }

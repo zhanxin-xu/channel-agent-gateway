@@ -317,7 +317,7 @@ await test("qq: c2c → ACK, Responses API tool loop, passive reply", async () =
   assert.deepEqual(sent.body, { content: "答案是 20", msg_type: 0, msg_id: "msg-1", msg_seq: 1 });
 });
 
-await test("qq: send_message twice → two passive replies, final text not sent", async () => {
+await test("qq: send_message twice in one step → two passive replies, turn ends without a 2nd model call", async () => {
   const event = { op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "msg-2", content: "连发两条", author: { user_openid: "USER1" } } };
   await handleWebhook(qqRequest(event), "qq");
   await drain();
@@ -326,10 +326,7 @@ await test("qq: send_message twice → two passive replies, final text not sent"
     { content: "第一条", msg_type: 0, msg_id: "msg-2", msg_seq: 1 },
     { content: "第二条", msg_type: 0, msg_id: "msg-2", msg_seq: 2 },
   ]);
-  // Both calls were answered with a function_call_output before the model finished.
-  const outputs = llmRequests().at(-1)!.body.input.filter((i: any) => i.type === "function_call_output");
-  assert.deepEqual(outputs.map((o: any) => o.call_id), ["call_a", "call_b"]);
-  assert.match(outputs[0].output, /^sent \(1\/5\)/);
+  assert.equal(llmCalls, 1, "a step that only talks ends the turn");
 });
 
 await test("stickers: CDN hotlink by default, STICKER_BASE_URL override", async () => {
@@ -395,12 +392,16 @@ await test("send_message: per-turn limit", async () => {
   assert.match(await runTool("send_message", '{"text":"  "}', noCtx), /^Error: text is empty/);
 });
 
-await test("message header: time, scene, sender", () => {
+await test("message header: time, scene, sender, @你", () => {
   const base = { channel: "qq", eventId: "e", conversationId: "g", text: "hi", replyContext: {} };
   const now = new Date("2026-11-03T12:43:00Z");
   assert.match(
     messageHeader({ ...base, chatType: "group", userId: "5f0ee621a747e4683b6834" }, now),
-    /^\[2026\/11\/03.*20:43 Asia\/Shanghai｜群聊｜发送人 #3B6834\]$/,
+    /^\[2026\/11\/03.*20:43 Asia\/Shanghai｜群聊｜发送人 #3B6834｜@你\]$/,
+  );
+  assert.match(
+    messageHeader({ ...base, chatType: "group", mode: "ambient", userId: "5f0ee621a747e4683b6834", senderName: "老王" }, now),
+    /｜群聊｜发送人 老王 #3B6834\]$/,
   );
   assert.match(
     messageHeader({ ...base, chatType: "private", userId: "7", senderName: "Alice" }, now),
@@ -408,20 +409,24 @@ await test("message header: time, scene, sender", () => {
   );
 });
 
-await test("upstash store: claim, append+trim via pipeline, list, del", async () => {
+await test("upstash store: claim, append with batched trim, list tail, del", async () => {
   const { UpstashStore } = await import("../src/store/index.js");
   const store = new UpstashStore("https://redis.example.com/", "rd-token");
 
   assert.equal(await store.claim("evt:x", 60), true);
   assert.equal(await store.claim("evt:x", 60), false, "second claim (webhook retry) is rejected");
 
-  await store.append("chat:k", ["a", "b"], 3, 600);
-  await store.append("chat:k", ["c", "d"], 3, 600);
-  assert.deepEqual(await store.list("chat:k"), ["b", "c", "d"], "keeps the newest 3");
-
+  // keep=4 → may grow to floor(4 × 1.25) = 5 before trimming back to 4.
+  await store.append("chat:k", ["a", "b", "c"], 4, 600);
+  await store.append("chat:k", ["d", "e"], 4, 600);
+  assert.deepEqual(await store.list("chat:k"), ["a", "b", "c", "d", "e"], "within slack: no trim yet");
   const pipe = calls.findLast((c) => c.url === "https://redis.example.com/pipeline")!;
   assert.equal(pipe.headers.get("authorization"), "Bearer rd-token");
-  assert.deepEqual(pipe.body, [["RPUSH", "chat:k", "c", "d"], ["LTRIM", "chat:k", "-3", "-1"], ["EXPIRE", "chat:k", "600"]]);
+  assert.deepEqual(pipe.body, [["RPUSH", "chat:k", "d", "e"], ["EXPIRE", "chat:k", "600"]], "no LTRIM on normal writes");
+
+  await store.append("chat:k", ["f"], 4, 600);
+  assert.deepEqual(await store.list("chat:k"), ["c", "d", "e", "f"], "over slack: trimmed back to the newest 4");
+  assert.deepEqual(await store.list("chat:k", 2), ["e", "f"], "list(key, n) reads only the tail");
 
   await store.del("chat:k");
   assert.deepEqual(await store.list("chat:k"), []);
@@ -510,6 +515,72 @@ await test("http: sync reply, history kept, /reset", async () => {
   assert.match(prevUser.content, /｜私聊｜发送人 #NYMOUS\]\nfirst$/, "history keeps the header line");
   assert.deepEqual(prevAssistant, { role: "assistant", content: "答案是 20" });
   assert.equal((await httpCall("/reset")).reply, "已清空本会话的历史记录。");
+});
+
+// ── Full group messages (GROUP_MESSAGE_CREATE) ──
+const groupMsg = (group: string, id: string, content: string, author: Record<string, unknown> = { member_openid: "MA", username: "老王" }) =>
+  qqRequest({ op: 0, t: "GROUP_MESSAGE_CREATE", d: { id, content, group_openid: group, author } });
+const groupAt = (group: string, id: string, content: string, author: Record<string, unknown> = { member_openid: "MB" }) =>
+  qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id, content, group_openid: group, author } });
+const sentTo = (group: string) => calls.filter((c) => c.url.endsWith(`/v2/groups/${group}/messages`));
+const userLines = (req: Call) => req.body.input.filter((i: any) => i.role === "user").map((i: any) => i.content as string);
+
+await test("qq group: ordinary messages recorded; ≤1 ambient run per window; ambient text not auto-sent; @ sees it all", async () => {
+  await handleWebhook(groupMsg("GROUP3", "a1", "今天吃啥"), "qq");
+  await drain();
+  assert.equal(llmCalls, 2, "first ordinary message is sampled into an ambient run");
+  const ambient = llmRequests()[0]!;
+  assert.equal(ambient.body.input.at(-1).role, "developer");
+  assert.match(ambient.body.input.at(-1).content, /没人 @ 你/);
+  assert.match(ambient.body.input.at(-2).content, /｜群聊｜发送人 老王 #MA\]\n今天吃啥$/, "no @你 marker, nickname shown");
+  assert.equal(sentTo("GROUP3").length, 0, "ambient run's plain text is not auto-sent");
+
+  await handleWebhook(groupMsg("GROUP3", "a2", "火锅吧"), "qq");
+  await drain();
+  assert.equal(llmCalls, 2, "second message inside the window is only recorded");
+
+  await handleWebhook(groupAt("GROUP3", "a3", " 你觉得呢"), "qq");
+  await drain();
+  const direct = llmRequests()[2]!;
+  const lines = userLines(direct);
+  assert.equal(lines.length, 3);
+  assert.match(lines[0]!, /今天吃啥$/);
+  assert.match(lines[1]!, /火锅吧$/);
+  assert.match(lines[2]!, /｜@你\]\n你觉得呢$/);
+  assert.match(direct.body.input.at(-1).content, /#MB 刚 @ 了你：「你觉得呢」/);
+  assert.equal(sentTo("GROUP3").length, 1, "the @ is answered");
+});
+
+await test("qq group: one message as both full and @ events → recorded once, answered once", async () => {
+  // Full event first, carrying the <@!AppID> marker → treated as direct.
+  await handleWebhook(groupMsg("GROUP4", "b1", "<@!102000000> 在吗", { member_openid: "MC" }), "qq");
+  await handleWebhook(groupAt("GROUP4", "b1", " 在吗", { member_openid: "MC" }), "qq");
+  await drain();
+  assert.equal(llmCalls, 2, "one agent run");
+  assert.deepEqual(userLines(llmRequests()[0]!).length, 1);
+  assert.equal(sentTo("GROUP4").length, 1);
+
+  // @ event first, then the full event without a marker → the full one is dropped.
+  await handleWebhook(groupAt("GROUP4", "b2", " 早", { member_openid: "MC" }), "qq");
+  await handleWebhook(groupMsg("GROUP4", "b2", "早", { member_openid: "MC" }), "qq");
+  await drain();
+  assert.equal(llmCalls, 4, "still one run for b2");
+  const lines = userLines(llmRequests()[2]!);
+  assert.equal(lines.filter((l: string) => /\n早$/.test(l)).length, 1, "b2 recorded once");
+});
+
+await test("qq group: other bots ignored; AGENT_AMBIENT_INTERVAL_SECONDS=0 records without running the agent", async () => {
+  process.env.AGENT_AMBIENT_INTERVAL_SECONDS = "0";
+  await handleWebhook(groupMsg("GROUP5", "c1", "hello"), "qq");
+  await handleWebhook(groupMsg("GROUP5", "c2", "我是机器人", { member_openid: "BOT", bot: true }), "qq");
+  await drain();
+  assert.equal(llmCalls, 0);
+  delete process.env.AGENT_AMBIENT_INTERVAL_SECONDS;
+
+  await handleWebhook(groupAt("GROUP5", "c3", " 刚才说啥了"), "qq");
+  await drain();
+  const lines = userLines(llmRequests()[0]!);
+  assert.deepEqual(lines.map((l: string) => l.split("\n")[1]), ["hello", "刚才说啥了"], "bot message not recorded");
 });
 
 await test("unknown channel → 404", async () => {
