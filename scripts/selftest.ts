@@ -648,16 +648,17 @@ await test("qq voice/video/file: voice uses QQ's transcript, others become place
   assert.match(text, /\n\[语音\] 你好呀\n\[视频\]\n\[文件：报告\.pdf\]$/);
 });
 
-await test("qq group image without @: recorded as [图片], ambient run gets no pixels", async () => {
+await test("qq group image without @: sampled ambient run sees the pixels, history keeps [图片]", async () => {
   await handleWebhook(
     qqRequest({ op: 0, t: "GROUP_MESSAGE_CREATE", d: { id: "gi1", content: "", group_openid: "GROUP6", attachments: [{ content_type: "image/png", url: "https://multimedia.nt.qq.com.cn/c.png" }], author: { member_openid: "MZ" } } }),
     "qq",
   );
   await drain();
-  assert.ok(!calls.some((c) => c.url.endsWith("/c.png")), "not downloaded");
+  assert.ok(calls.some((c) => c.url.endsWith("/c.png")), "downloaded");
   const users = llmRequests()[0]!.body.input.filter((i: any) => i.role === "user");
-  assert.ok(users.every((u: any) => typeof u.content === "string"));
-  assert.match(users.at(-1).content, /\n\[图片\]$/);
+  assert.match(users.at(-1).content[0].text, /\n\[图片\]$/);
+  assert.equal(users.at(-1).content[1].type, "input_image");
+  assert.ok(users.slice(0, -1).every((u: any) => typeof u.content === "string"), "only the latest message has pixels");
 });
 
 await test("unknown channel → 404", async () => {

@@ -28,7 +28,7 @@ const historyKey = (m: InboundMessage) => `chat:${m.channel}:${m.conversationId}
 /** Guidance for an ambient run, appended after the history (see runAgent `note`). */
 const AMBIENT_NOTE =
   "（系统提示）这次没人 @ 你，你只是在旁边看群聊。默认不说话：不调用任何工具直接结束，就是不回复。" +
-  "只有这些时候才插话：有人在聊你、提到「大肥鱼」；有个你能接得很妙的梗；有人问了个问题没人答而你确实知道。" +
+  "只有这些时候才插话：有人在聊你、提到「大肥鱼」；有个你能接得很妙的梗；有人发了张值得吐槽的图；有人问了个问题没人答而你确实知道。" +
   "插话要短，一两句或一张表情包。";
 
 const shortId = (m: InboundMessage) => `#${m.userId.slice(-6).toUpperCase() || "?"}`;
@@ -117,7 +117,7 @@ export async function handleMessage(
   }
 
   // Record the message first, so concurrent handlers see it in order.
-  // Images are stored as "[图片]" placeholders; only this turn's direct run sees the pixels.
+  // Images are stored as "[图片]" placeholders; only the run for this message sees the pixels.
   const images = message.images ?? [];
   const body = [message.text, ...images.map(() => "[图片]")].filter(Boolean).join("\n");
   const userText = `${messageHeader(message)}\n${body}`;
@@ -139,8 +139,9 @@ export async function handleMessage(
   try {
     const started = Date.now();
     const input: AgentInputItem[] = history;
-    // Direct runs look at this message's images: swap its history entry for a multimodal one.
-    if (direct && images.length) {
+    // Look at this message's images (direct runs, and sampled ambient runs so the
+    // bot can react to a picture): swap its history entry for a multimodal one.
+    if (images.length) {
       const parts = await loadImageParts(images);
       const text = parts.length ? userText : `${userText}\n（图片没加载出来）`;
       const multimodal: MultimodalUserMessage = { role: "user", content: [{ type: "input_text", text }, ...parts] };
