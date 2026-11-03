@@ -575,6 +575,19 @@ await test("qq group: one message as both full and @ events → recorded once, a
   assert.equal(lines.filter((l: string) => /\n早$/.test(l)).length, 1, "b2 recorded once");
 });
 
+await test("qq group: a bare @ (no text) is still answered", async () => {
+  await handleWebhook(groupAt("GROUP7", "e1", " "), "qq");
+  await drain();
+  assert.ok(llmCalls >= 1, "agent ran");
+  assert.match(userLines(llmRequests()[0]!).at(-1), /｜@你\]\n（只 @ 了你，没说话）$/);
+  assert.equal(sentTo("GROUP7").length, 1);
+
+  // An ordinary message with nothing in it is still ignored.
+  await handleWebhook(groupMsg("GROUP7", "e2", " "), "qq");
+  await drain();
+  assert.equal(sentTo("GROUP7").length, 1);
+});
+
 await test("qq group: other bots ignored; AGENT_AMBIENT_INTERVAL_SECONDS=0 records without running the agent", async () => {
   process.env.AGENT_AMBIENT_INTERVAL_SECONDS = "0";
   await handleWebhook(groupMsg("GROUP5", "c1", "hello"), "qq");

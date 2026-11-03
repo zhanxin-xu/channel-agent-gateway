@@ -189,6 +189,8 @@ function toInbound(t: string, d: QQMessageEvent): InboundMessage | undefined {
   const { images, notes } = parseAttachments(d.attachments);
   if (images.length) message.images = images;
   if (notes.length) message.text = [message.text, ...notes].filter(Boolean).join("\n");
+  // A bare "@大肥鱼" has no text once the mention is stripped, but it's still someone calling the bot.
+  if (message.mode !== "ambient" && !message.text && !images.length) message.text = "（只 @ 了你，没说话）";
   const window = REPLY_WINDOW_MS[message.replyContext.scope!];
   if (window) {
     // Prefer the message's own time; fall back to now. Never trust a time in the future.
