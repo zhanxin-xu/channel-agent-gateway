@@ -25,8 +25,8 @@ export interface Tool {
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<string> | string;
 }
 
-/** QQ allows a handful of passive replies per inbound message; stay under it everywhere. */
-export const MAX_MESSAGES_PER_TURN = 4;
+/** QQ allows 5 replies per inbound message (bot-docs send.md); apply the same cap on every channel. */
+export const MAX_MESSAGES_PER_TURN = 5;
 
 const sendMessage: Tool = {
   name: "send_message",

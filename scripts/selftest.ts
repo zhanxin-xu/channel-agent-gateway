@@ -329,7 +329,7 @@ await test("qq: send_message twice → two passive replies, final text not sent"
   // Both calls were answered with a function_call_output before the model finished.
   const outputs = llmRequests().at(-1)!.body.input.filter((i: any) => i.type === "function_call_output");
   assert.deepEqual(outputs.map((o: any) => o.call_id), ["call_a", "call_b"]);
-  assert.match(outputs[0].output, /^sent \(1\/4\)/);
+  assert.match(outputs[0].output, /^sent \(1\/5\)/);
 });
 
 await test("stickers: CDN hotlink by default, STICKER_BASE_URL override", async () => {
@@ -390,8 +390,8 @@ await test("http: sticker degrades to a text line; history records it", async ()
 });
 
 await test("send_message: per-turn limit", async () => {
-  const ctx = { sent: ["1", "2", "3", "4"], send: async () => {}, sendSticker: async () => {} };
-  assert.match(await runTool("send_message", '{"text":"5"}', ctx), /^Error: already sent 4 messages/);
+  const ctx = { sent: ["1", "2", "3", "4", "5"], send: async () => {}, sendSticker: async () => {} };
+  assert.match(await runTool("send_message", '{"text":"6"}', ctx), /^Error: already sent 5 messages/);
   assert.match(await runTool("send_message", '{"text":"  "}', noCtx), /^Error: text is empty/);
 });
 
@@ -439,6 +439,42 @@ await test("qq: group @ message replies to group", async () => {
   await handleWebhook(qqRequest(event), "qq");
   await drain();
   assert.ok(calls.some((c) => c.url.endsWith("/v2/groups/GROUP1/messages") && c.body.msg_id === "g-1"));
+});
+
+await test("qq reply window: group 5 min, c2c 60 min (from the message timestamp)", async () => {
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+  const groupMsgs = () => calls.filter((c) => c.url.endsWith("/v2/groups/GROUP2/messages"));
+  const userMsgs = () => calls.filter((c) => c.url.endsWith("/v2/users/USER9/messages"));
+
+  // Group message from 6 minutes ago: past the 5-minute window, so nothing is posted to QQ.
+  await handleWebhook(qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id: "g-old", content: "hi", timestamp: minutesAgo(6), group_openid: "GROUP2", author: { member_openid: "M2" } } }), "qq");
+  await drain();
+  assert.equal(groupMsgs().length, 0, "expired group reply is not sent");
+  const toolOut = llmRequests().at(-1)!.body.input.find((i: any) => i.type === "function_call_output");
+  assert.ok(toolOut, "model still ran");
+
+  // Group message from 4 minutes ago: still inside the window.
+  await handleWebhook(qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id: "g-new", content: "hi", timestamp: minutesAgo(4), group_openid: "GROUP2", author: { member_openid: "M2" } } }), "qq");
+  await drain();
+  assert.equal(groupMsgs().length, 1);
+
+  // C2C message from 30 minutes ago is fine (60-minute window); 61 minutes is not.
+  await handleWebhook(qqRequest({ op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "c-30", content: "hi", timestamp: minutesAgo(30), author: { user_openid: "USER9" } } }), "qq");
+  await handleWebhook(qqRequest({ op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "c-61", content: "hi", timestamp: minutesAgo(61), author: { user_openid: "USER9" } } }), "qq");
+  await drain();
+  assert.deepEqual(userMsgs().map((c) => c.body.msg_id), ["c-30"]);
+});
+
+await test("qq: 5 replies per message, the 6th is refused before calling QQ", async () => {
+  const { qqAdapter } = await import("../src/channels/qq.js");
+  const msg = {
+    channel: "qq", eventId: "e", conversationId: "c2c:U", chatType: "private" as const, userId: "U", text: "x",
+    replyContext: { scope: "c2c", target: "U5", msgId: "m-5", expiresAt: String(Date.now() + 60_000) } as Record<string, string>,
+  };
+  for (let i = 1; i <= 5; i++) await qqAdapter.send!(msg, `第${i}条`);
+  await assert.rejects(qqAdapter.send!(msg, "第6条"), /at most 5 replies/);
+  const seqs = calls.filter((c) => c.url.endsWith("/v2/users/U5/messages")).map((c) => c.body.msg_seq);
+  assert.deepEqual(seqs, [1, 2, 3, 4, 5]);
 });
 
 await test("telegram: secret check + reply", async () => {

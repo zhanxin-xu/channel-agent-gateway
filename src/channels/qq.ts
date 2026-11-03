@@ -16,8 +16,17 @@ const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 const OP_DISPATCH = 0;
 const OP_HTTP_CALLBACK_ACK = 12;
 const OP_VALIDATION = 13;
-/** QQ allows a handful of passive replies per inbound msg_id. */
-const MAX_PASSIVE_REPLIES = 4;
+/**
+ * Passive-reply rules (bot-docs send.md): each inbound message can be replied
+ * to at most 5 times, within 60 minutes in C2C and 5 minutes in groups (guild
+ * channels: 5 minutes too). The window starts at the message's own timestamp.
+ */
+export const MAX_PASSIVE_REPLIES = 5;
+const REPLY_WINDOW_MS: Record<string, number> = {
+  c2c: 60 * 60_000,
+  group: 5 * 60_000,
+  channel: 5 * 60_000,
+};
 const MAX_CHUNK = 1800;
 
 // ── Ed25519 (QQ spec: repeat secret until >= 32 chars, take first 32 bytes as seed) ──
@@ -101,11 +110,20 @@ async function uploadImage(base: string, url: string): Promise<string> {
   return res.file_info;
 }
 
-/** Next msg_seq for this inbound message; several replies to one msg_id must not repeat it. */
+/**
+ * Claim the next passive-reply slot for this inbound message and return its
+ * msg_seq. Fails fast (before calling QQ) when the reply window has passed or
+ * all slots are used; the error reaches the model as a tool error.
+ */
 function nextSeq(replyContext: Record<string, string>): number {
+  const expiresAt = Number(replyContext.expiresAt ?? Infinity);
+  if (Date.now() > expiresAt) {
+    const minutes = Math.round((REPLY_WINDOW_MS[replyContext.scope!] ?? 0) / 60_000);
+    throw new Error(`reply window closed: QQ only accepts replies within ${minutes} minutes of the message`);
+  }
   const seq = Number(replyContext.seq ?? 0) + 1;
   if (seq > MAX_PASSIVE_REPLIES) {
-    throw new Error(`QQ allows at most ${MAX_PASSIVE_REPLIES} passive replies per message`);
+    throw new Error(`QQ allows at most ${MAX_PASSIVE_REPLIES} replies per message`);
   }
   replyContext.seq = String(seq);
   return seq;
@@ -123,6 +141,8 @@ interface QQPayload {
 interface QQMessageEvent {
   id: string;
   content?: string;
+  /** When the user sent it, e.g. "2026-11-03T20:43:00+08:00". */
+  timestamp?: string;
   author?: { id?: string; user_openid?: string; member_openid?: string };
   group_openid?: string;
   channel_id?: string;
@@ -135,6 +155,18 @@ function cleanContent(content: string | undefined): string {
 }
 
 function toInbound(t: string, d: QQMessageEvent): InboundMessage | undefined {
+  const message = parseEvent(t, d);
+  if (!message) return undefined;
+  const window = REPLY_WINDOW_MS[message.replyContext.scope!];
+  if (window) {
+    // Prefer the message's own time; fall back to now. Never trust a time in the future.
+    const sentAt = Math.min(Date.parse(d.timestamp ?? "") || Date.now(), Date.now());
+    message.replyContext.expiresAt = String(sentAt + window);
+  }
+  return message;
+}
+
+function parseEvent(t: string, d: QQMessageEvent): InboundMessage | undefined {
   const base = { channel: "qq", eventId: d.id, text: cleanContent(d.content) };
   switch (t) {
     case "C2C_MESSAGE_CREATE": {
