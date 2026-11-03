@@ -20,6 +20,14 @@ export interface HistoryMessage {
   content: string;
 }
 
+/** A user message with images, for the current turn only (history stores text). */
+export interface MultimodalUserMessage {
+  role: "user";
+  content: Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string; detail: "low" }>;
+}
+
+export type AgentInputItem = HistoryMessage | MultimodalUserMessage;
+
 export interface AgentResult {
   text: string;
   steps: number;
@@ -82,7 +90,7 @@ const TALK_TOOLS = new Set(["send_message", "send_sticker"]);
 export async function runAgent(opts: {
   systemPrompt: string;
   /** The conversation so far, oldest first; the message being answered is already in it. */
-  input: HistoryMessage[];
+  input: AgentInputItem[];
   /**
    * Per-run guidance appended after the history as a developer message (not
    * stored). Kept out of `instructions` so the cached prompt prefix stays the same.

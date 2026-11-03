@@ -13,9 +13,12 @@ export interface InboundMessage {
    */
   mode?: "direct" | "ambient";
   userId: string;
-  /** Display name when the platform provides one (QQ v2 events don't). */
+  /** Display name when the platform provides one. */
   senderName?: string;
+  /** Message text. Voice/video/file attachments appear here as "[语音] …", "[视频]", "[文件：…]". */
   text: string;
+  /** Images attached to the message (the agent sees them on direct runs). */
+  images?: Array<{ url: string; contentType: string }>;
   /** Channel-specific data the adapter needs to reply (msg_id, chat_id, …). */
   replyContext: Record<string, string>;
   /** Public origin of this deployment (set by the webhook route), for URLs to our static files. */

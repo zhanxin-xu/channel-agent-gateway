@@ -95,7 +95,9 @@ function fakeResponses(body: any) {
   llmCalls++;
   const toolOutput = body.input.findLast((i: any) => i.type === "function_call_output");
   // Drop the "[time｜scene｜sender]" header line the gateway prepends.
-  const userText: string = body.input.findLast((i: any) => i.role === "user").content.split("\n").slice(1).join("\n");
+  const lastUser = body.input.findLast((i: any) => i.role === "user");
+  const raw: string = typeof lastUser.content === "string" ? lastUser.content : lastUser.content.find((p: any) => p.type === "input_text").text;
+  const userText = raw.split("\n").slice(1).join("\n");
   let output: unknown[];
   if (userText.includes("表情")) {
     output = toolOutput
@@ -160,6 +162,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     });
   }
   if (url.startsWith("https://redis.example.com")) return fakeUpstash(url, body);
+  if (url.startsWith("https://multimedia.nt.qq.com.cn/")) {
+    if (url.includes("missing")) return new Response("gone", { status: 404 });
+    return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "content-type": "image/png" } });
+  }
   if (url === "https://bots.qq.com/app/getAppAccessToken") return Response.json({ access_token: "qq-token", expires_in: "7200" });
   if (url.startsWith("https://api.sgroup.qq.com/v2/") && url.endsWith("/files")) {
     return Response.json({ file_uuid: "u1", file_info: "FILEINFO", ttl: 3600 });
@@ -581,6 +587,64 @@ await test("qq group: other bots ignored; AGENT_AMBIENT_INTERVAL_SECONDS=0 recor
   await drain();
   const lines = userLines(llmRequests()[0]!);
   assert.deepEqual(lines.map((l: string) => l.split("\n")[1]), ["hello", "刚才说啥了"], "bot message not recorded");
+});
+
+// ── Attachments ──
+const c2cWith = (id: string, content: string, attachments: unknown[]) =>
+  qqRequest({ op: 0, t: "C2C_MESSAGE_CREATE", d: { id, content, attachments, author: { user_openid: "IMGUSER" } } });
+
+await test("qq image: downloaded, sent to the model inline (detail low); history keeps [图片]", async () => {
+  await handleWebhook(c2cWith("i1", "这是啥", [{ content_type: "image/png", url: "//multimedia.nt.qq.com.cn/a.png" }]), "qq");
+  await drain();
+  assert.ok(calls.some((c) => c.url === "https://multimedia.nt.qq.com.cn/a.png"), "// URL normalized to https and fetched");
+  const msg = llmRequests()[0]!.body.input.at(-1);
+  assert.equal(msg.role, "user");
+  assert.match(msg.content[0].text, /｜私聊｜发送人 #MGUSER\]\n这是啥\n\[图片\]$/);
+  assert.deepEqual(msg.content[1], { type: "input_image", image_url: "data:image/png;base64,iVBORw==", detail: "low" });
+
+  // Image-only message, next turn: the earlier image is a text placeholder in history.
+  await handleWebhook(c2cWith("i2", "", [{ content_type: "image/jpeg", url: "https://multimedia.nt.qq.com.cn/b.jpg" }]), "qq");
+  await drain();
+  // First model call of the second turn (each turn here is tool call + answer = 2 calls).
+  const input = llmRequests()[2]!.body.input;
+  assert.equal(typeof input.find((i: any) => i.role === "user").content, "string", "past image is text only");
+  assert.match(input.find((i: any) => i.role === "user").content, /这是啥\n\[图片\]$/);
+  assert.equal(input.at(-1).content[1].type, "input_image", "image-only message still runs the agent");
+});
+
+await test("qq image: download failure tells the model instead of failing the turn", async () => {
+  await handleWebhook(c2cWith("i3", "看看", [{ content_type: "image/png", url: "https://multimedia.nt.qq.com.cn/missing.png" }]), "qq");
+  await drain();
+  const msg = llmRequests()[0]!.body.input.at(-1);
+  assert.equal(msg.content.length, 1);
+  assert.match(msg.content[0].text, /看看\n\[图片\]\n（图片没加载出来）$/);
+  assert.equal(calls.filter((c) => c.url.endsWith("/v2/users/IMGUSER/messages")).length, 1, "still replies");
+});
+
+await test("qq voice/video/file: voice uses QQ's transcript, others become placeholders", async () => {
+  await handleWebhook(
+    c2cWith("v1", "", [
+      { content_type: "voice", url: "//x/v.silk", asr_refer_text: "你好呀" },
+      { content_type: "video/mp4", url: "//x/v.mp4" },
+      { content_type: "file", url: "//x/f", filename: "报告.pdf" },
+    ]),
+    "qq",
+  );
+  await drain();
+  const text: string = llmRequests()[0]!.body.input.at(-1).content;
+  assert.match(text, /\n\[语音\] 你好呀\n\[视频\]\n\[文件：报告\.pdf\]$/);
+});
+
+await test("qq group image without @: recorded as [图片], ambient run gets no pixels", async () => {
+  await handleWebhook(
+    qqRequest({ op: 0, t: "GROUP_MESSAGE_CREATE", d: { id: "gi1", content: "", group_openid: "GROUP6", attachments: [{ content_type: "image/png", url: "https://multimedia.nt.qq.com.cn/c.png" }], author: { member_openid: "MZ" } } }),
+    "qq",
+  );
+  await drain();
+  assert.ok(!calls.some((c) => c.url.endsWith("/c.png")), "not downloaded");
+  const users = llmRequests()[0]!.body.input.filter((i: any) => i.role === "user");
+  assert.ok(users.every((u: any) => typeof u.content === "string"));
+  assert.match(users.at(-1).content, /\n\[图片\]$/);
 });
 
 await test("unknown channel → 404", async () => {

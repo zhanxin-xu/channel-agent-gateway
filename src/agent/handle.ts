@@ -14,7 +14,8 @@
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import { config } from "../config.js";
 import { getStore } from "../store/index.js";
-import { runAgent, type HistoryMessage } from "./loop.js";
+import { loadImageParts } from "./images.js";
+import { runAgent, type AgentInputItem, type HistoryMessage, type MultimodalUserMessage } from "./loop.js";
 import { DEFAULT_STICKER_BASE_URL, stickerUrl } from "./stickers.js";
 import { SYSTEM_PROMPT } from "./system-prompt.js";
 import type { ToolContext } from "./tools.js";
@@ -116,7 +117,10 @@ export async function handleMessage(
   }
 
   // Record the message first, so concurrent handlers see it in order.
-  const userText = `${messageHeader(message)}\n${message.text}`;
+  // Images are stored as "[图片]" placeholders; only this turn's direct run sees the pixels.
+  const images = message.images ?? [];
+  const body = [message.text, ...images.map(() => "[图片]")].filter(Boolean).join("\n");
+  const userText = `${messageHeader(message)}\n${body}`;
   if (firstSeen) await store.append(key, [JSON.stringify({ role: "user", content: userText })], limit, ttl);
 
   // Ambient: at most one agent run per interval per conversation.
@@ -134,14 +138,25 @@ export async function handleMessage(
 
   try {
     const started = Date.now();
+    const input: AgentInputItem[] = history;
+    // Direct runs look at this message's images: swap its history entry for a multimodal one.
+    if (direct && images.length) {
+      const parts = await loadImageParts(images);
+      const text = parts.length ? userText : `${userText}\n（图片没加载出来）`;
+      const multimodal: MultimodalUserMessage = { role: "user", content: [{ type: "input_text", text }, ...parts] };
+      const at = history.findLastIndex((m) => m.role === "user" && m.content === userText);
+      if (at >= 0) input.splice(at, 1, multimodal);
+      else input.push(multimodal); // recorded earlier by the ambient path, with a different header
+    }
+
     const result = await runAgent({
       systemPrompt: [SYSTEM_PROMPT, adapter.promptHint].filter(Boolean).join("\n\n"),
-      input: history,
+      input,
       // In a busy group, point at the message to answer.
       note: !direct
         ? AMBIENT_NOTE
         : message.chatType === "group"
-          ? `（系统提示）${senderLabel(message)} 刚 @ 了你：「${message.text.slice(0, 100)}」，回复这条。`
+          ? `（系统提示）${senderLabel(message)} 刚 @ 了你：「${(body || "[图片]").slice(0, 100)}」，回复这条。`
           : undefined,
       maxSteps: direct ? config.agent.maxSteps : config.agent.ambientMaxSteps,
       ctx,

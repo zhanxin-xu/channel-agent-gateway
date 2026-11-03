@@ -146,6 +146,8 @@ interface QQMessageEvent {
   author?: { id?: string; user_openid?: string; member_openid?: string; username?: string; bot?: boolean };
   /** Present on some group payloads; `is_you` marks a mention of this bot. */
   mentions?: Array<{ is_you?: boolean }>;
+  /** Images, voice (with QQ's own transcript), video, files. URLs may start with "//". */
+  attachments?: Array<{ content_type?: string; url?: string; filename?: string; asr_refer_text?: string }>;
   group_openid?: string;
   channel_id?: string;
   guild_id?: string;
@@ -163,9 +165,30 @@ function cleanContent(content: string | undefined): string {
   return (content ?? "").replace(/<@!?\w+>/g, "").trim();
 }
 
+/**
+ * Split attachments into images (for the model to look at) and text notes:
+ * voice becomes QQ's own transcript ("[语音] …"), video and files a placeholder.
+ */
+function parseAttachments(list: QQMessageEvent["attachments"] = []) {
+  const images: Array<{ url: string; contentType: string }> = [];
+  const notes: string[] = [];
+  for (const a of list) {
+    const type = a.content_type ?? "";
+    const url = a.url?.startsWith("//") ? `https:${a.url}` : (a.url ?? "");
+    if (type.startsWith("image/") && url.startsWith("https://")) images.push({ url, contentType: type });
+    else if (type === "voice" || type.startsWith("audio/")) notes.push(a.asr_refer_text ? `[语音] ${a.asr_refer_text}` : "[语音]");
+    else if (type.startsWith("video/")) notes.push("[视频]");
+    else notes.push(`[文件${a.filename ? `：${a.filename}` : ""}]`);
+  }
+  return { images, notes };
+}
+
 function toInbound(t: string, d: QQMessageEvent): InboundMessage | undefined {
   const message = parseEvent(t, d);
   if (!message) return undefined;
+  const { images, notes } = parseAttachments(d.attachments);
+  if (images.length) message.images = images;
+  if (notes.length) message.text = [message.text, ...notes].filter(Boolean).join("\n");
   const window = REPLY_WINDOW_MS[message.replyContext.scope!];
   if (window) {
     // Prefer the message's own time; fall back to now. Never trust a time in the future.
@@ -273,7 +296,7 @@ export const qqAdapter: ChannelAdapter = {
     if (payload.op !== OP_DISPATCH || !payload.t || !payload.d) return { kind: "respond", response: ACK() };
 
     const message = toInbound(payload.t, payload.d as unknown as QQMessageEvent);
-    if (!message || !message.text) return { kind: "respond", response: ACK() };
+    if (!message || (!message.text && !message.images?.length)) return { kind: "respond", response: ACK() };
     return { kind: "message", message, ack: ACK() };
   },
 
