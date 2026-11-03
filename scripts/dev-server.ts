@@ -1,0 +1,39 @@
+/**
+ * Local dev server: `npm run dev`, then POST to http://localhost:3000/api/webhook/<channel>.
+ * Loads `.env.local` if present. Expose it with a tunnel (cloudflared, ngrok)
+ * to receive real QQ / Telegram webhooks without deploying.
+ */
+import { existsSync } from "node:fs";
+import http from "node:http";
+import { channelFromUrl, handleWebhook } from "../src/webhook.js";
+
+if (existsSync(".env.local")) process.loadEnvFile(".env.local");
+
+const port = Number(process.env.PORT ?? 3000);
+
+http
+  .createServer(async (req, res) => {
+    try {
+      const url = `http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`;
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const body = chunks.length ? Buffer.concat(chunks) : undefined;
+      const headers = new Headers();
+      for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string") headers.set(k, v);
+
+      if (!new URL(url).pathname.startsWith("/api/webhook/")) {
+        res.writeHead(404).end("not found");
+        return;
+      }
+      const response = await handleWebhook(
+        new Request(url, { method: req.method, headers, body: req.method === "GET" ? undefined : body }),
+        channelFromUrl(url),
+      );
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      res.end(Buffer.from(await response.arrayBuffer()));
+    } catch (err) {
+      console.error(err);
+      res.writeHead(500).end("internal error");
+    }
+  })
+  .listen(port, () => console.log(`dev server on http://localhost:${port}/api/webhook/{qq,telegram,http}`));

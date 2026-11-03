@@ -1,0 +1,279 @@
+/**
+ * QQ Bot (QQ 开放平台 Bot API v2) over HTTP webhook.
+ *
+ * Inbound:  QQ POSTs `{ op, id, d, s, t }` to the callback URL, signed with
+ *           Ed25519 (seed derived from AppSecret). op:13 = URL validation,
+ *           op:0 = event dispatch, answered with `{ op: 12, d: 0 }` ACK.
+ * Outbound: REST on api.sgroup.qq.com with `Authorization: QQBot {access_token}`,
+ *           replying passively (msg_id + msg_seq) to the inbound message.
+ */
+import crypto from "node:crypto";
+import { config } from "../config.js";
+import { chunkText, json, type ChannelAdapter, type InboundMessage, type ReceiveResult } from "./types.js";
+
+const API_BASE = "https://api.sgroup.qq.com";
+const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
+const OP_DISPATCH = 0;
+const OP_HTTP_CALLBACK_ACK = 12;
+const OP_VALIDATION = 13;
+/** QQ allows a handful of passive replies per inbound msg_id. */
+const MAX_PASSIVE_REPLIES = 4;
+const MAX_CHUNK = 1800;
+
+// ── Ed25519 (QQ spec: repeat secret until >= 32 chars, take first 32 bytes as seed) ──
+
+const PKCS8_ED25519_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+
+function keyPair(secret: string) {
+  let seed = secret;
+  while (seed.length < 32) seed += seed;
+  const privateKey = crypto.createPrivateKey({
+    key: Buffer.concat([PKCS8_ED25519_PREFIX, Buffer.from(seed.slice(0, 32), "utf8")]),
+    format: "der",
+    type: "pkcs8",
+  });
+  return { privateKey, publicKey: crypto.createPublicKey(privateKey) };
+}
+
+export function qqSign(secret: string, message: string): string {
+  return crypto.sign(null, Buffer.from(message, "utf8"), keyPair(secret).privateKey).toString("hex");
+}
+
+export function qqVerify(secret: string, timestamp: string, body: string, signatureHex: string): boolean {
+  try {
+    const msg = Buffer.from(timestamp + body, "utf8");
+    return crypto.verify(null, msg, keyPair(secret).publicKey, Buffer.from(signatureHex, "hex"));
+  } catch {
+    return false;
+  }
+}
+
+// ── Access token (cached per warm instance; valid ~7200s) ──
+
+let cachedToken: { value: string; expiresAt: number } | undefined;
+
+async function getAccessToken(): Promise<string> {
+  if (cachedToken && Date.now() < cachedToken.expiresAt - 5 * 60_000) return cachedToken.value;
+  const res = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ appId: config.qq.appId, clientSecret: config.qq.appSecret }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number | string };
+  if (!res.ok || !data.access_token) {
+    throw new Error(`QQ getAppAccessToken failed: HTTP ${res.status} ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  cachedToken = { value: data.access_token, expiresAt: Date.now() + Number(data.expires_in ?? 7200) * 1000 };
+  return cachedToken.value;
+}
+
+async function qqApi<T = unknown>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(API_BASE + path, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `QQBot ${await getAccessToken()}` },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`QQ POST ${path} failed: HTTP ${res.status} ${text.slice(0, 300)}`);
+  }
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
+/**
+ * Rich media is two steps: upload by URL (QQ fetches it) to get a file_info,
+ * then send it as msg_type 7. file_info is reusable per target until its ttl
+ * runs out, so cache it per warm instance.
+ */
+const uploadCache = new Map<string, { fileInfo: string; expiresAt: number }>();
+
+async function uploadImage(base: string, url: string): Promise<string> {
+  const key = `${base}|${url}`;
+  const hit = uploadCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.fileInfo;
+  const res = await qqApi<{ file_info?: string; ttl?: number }>(`${base}/files`, {
+    file_type: 1, // image
+    url,
+    srv_send_msg: false,
+  });
+  if (!res.file_info) throw new Error(`QQ upload ${base}/files returned no file_info`);
+  if (res.ttl && res.ttl > 60) uploadCache.set(key, { fileInfo: res.file_info, expiresAt: Date.now() + (res.ttl - 60) * 1000 });
+  return res.file_info;
+}
+
+/** Next msg_seq for this inbound message; several replies to one msg_id must not repeat it. */
+function nextSeq(replyContext: Record<string, string>): number {
+  const seq = Number(replyContext.seq ?? 0) + 1;
+  if (seq > MAX_PASSIVE_REPLIES) {
+    throw new Error(`QQ allows at most ${MAX_PASSIVE_REPLIES} passive replies per message`);
+  }
+  replyContext.seq = String(seq);
+  return seq;
+}
+
+// ── Payload types (only the fields we use) ──
+
+interface QQPayload {
+  op: number;
+  id?: string;
+  t?: string;
+  d?: Record<string, unknown>;
+}
+
+interface QQMessageEvent {
+  id: string;
+  content?: string;
+  author?: { id?: string; user_openid?: string; member_openid?: string };
+  group_openid?: string;
+  channel_id?: string;
+  guild_id?: string;
+}
+
+/** Strip channel-style mentions (`<@!123>`) and surrounding whitespace. */
+function cleanContent(content: string | undefined): string {
+  return (content ?? "").replace(/<@!?\w+>/g, "").trim();
+}
+
+function toInbound(t: string, d: QQMessageEvent): InboundMessage | undefined {
+  const base = { channel: "qq", eventId: d.id, text: cleanContent(d.content) };
+  switch (t) {
+    case "C2C_MESSAGE_CREATE": {
+      const openid = d.author?.user_openid ?? "";
+      return {
+        ...base,
+        conversationId: `c2c:${openid}`,
+        chatType: "private",
+        userId: openid,
+        replyContext: { scope: "c2c", target: openid, msgId: d.id },
+      };
+    }
+    case "GROUP_AT_MESSAGE_CREATE": {
+      const group = d.group_openid ?? "";
+      return {
+        ...base,
+        conversationId: `group:${group}`,
+        chatType: "group",
+        userId: d.author?.member_openid ?? "",
+        replyContext: { scope: "group", target: group, msgId: d.id },
+      };
+    }
+    case "AT_MESSAGE_CREATE": {
+      const channelId = d.channel_id ?? "";
+      return {
+        ...base,
+        conversationId: `channel:${channelId}`,
+        chatType: "group",
+        userId: d.author?.id ?? "",
+        replyContext: { scope: "channel", target: channelId, msgId: d.id },
+      };
+    }
+    case "DIRECT_MESSAGE_CREATE": {
+      const guildId = d.guild_id ?? "";
+      return {
+        ...base,
+        conversationId: `dm:${guildId}`,
+        chatType: "private",
+        userId: d.author?.id ?? "",
+        replyContext: { scope: "dm", target: guildId, msgId: d.id },
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
+const ACK = () => json({ op: OP_HTTP_CALLBACK_ACK, d: 0 });
+
+export const qqAdapter: ChannelAdapter = {
+  name: "qq",
+  promptHint: "This is QQ: reply in plain text, no Markdown syntax. Keep replies under 1500 characters.",
+
+  isConfigured() {
+    return Boolean(config.qq.appId && config.qq.appSecret);
+  },
+
+  async receive(req, rawBody): Promise<ReceiveResult> {
+    let payload: QQPayload;
+    try {
+      payload = JSON.parse(rawBody) as QQPayload;
+    } catch {
+      return { kind: "respond", response: json({ error: "invalid json" }, 400) };
+    }
+
+    // Callback URL validation: sign event_ts + plain_token.
+    if (payload.op === OP_VALIDATION) {
+      const plainToken = String(payload.d?.plain_token ?? "");
+      const eventTs = String(payload.d?.event_ts ?? "");
+      // The platform rejects the URL if AppSecret is stale; the AppID header shows which bot is asking.
+      const botAppId = req.headers.get("x-bot-appid") ?? "";
+      console.log(`[qq] callback validation from appid=${botAppId || "?"} (configured ${config.qq.appId}, match=${botAppId === config.qq.appId})`);
+      if (!plainToken || !eventTs) return { kind: "respond", response: json({ error: "invalid validation" }, 400) };
+      return {
+        kind: "respond",
+        response: json({ plain_token: plainToken, signature: qqSign(config.qq.appSecret, eventTs + plainToken) }),
+      };
+    }
+
+    const timestamp = req.headers.get("x-signature-timestamp") ?? "";
+    const signature = req.headers.get("x-signature-ed25519") ?? "";
+    if (!timestamp || !signature || !qqVerify(config.qq.appSecret, timestamp, rawBody, signature)) {
+      console.warn(`[qq] rejected event: bad signature (appid=${req.headers.get("x-bot-appid") ?? "?"}); is QQ_APP_SECRET current?`);
+      return { kind: "respond", response: json({ error: "invalid signature" }, 401) };
+    }
+
+    if (payload.op !== OP_DISPATCH || !payload.t || !payload.d) return { kind: "respond", response: ACK() };
+
+    const message = toInbound(payload.t, payload.d as unknown as QQMessageEvent);
+    if (!message || !message.text) return { kind: "respond", response: ACK() };
+    return { kind: "message", message, ack: ACK() };
+  },
+
+  // Called once per outgoing message; several calls may answer the same inbound
+  // msg_id, so msg_seq keeps counting across calls via replyContext.seq.
+  async send(message, text) {
+    const ctx = message.replyContext;
+    const { scope, target, msgId } = ctx;
+    for (const content of chunkText(text, MAX_CHUNK)) {
+      const seq = nextSeq(ctx);
+      switch (scope) {
+        case "c2c":
+        case "group":
+          await qqApi(`${v2Base(scope, target!)}/messages`, { content, msg_type: 0, msg_id: msgId, msg_seq: seq });
+          break;
+        case "channel":
+          await qqApi(`/channels/${target}/messages`, { content, msg_id: msgId });
+          break;
+        case "dm":
+          await qqApi(`/dms/${target}/messages`, { content, msg_id: msgId });
+          break;
+      }
+    }
+  },
+
+  async sendImage(message, url) {
+    const ctx = message.replyContext;
+    const { scope, target, msgId } = ctx;
+    switch (scope) {
+      case "c2c":
+      case "group": {
+        const base = v2Base(scope, target!);
+        const fileInfo = await uploadImage(base, url);
+        await qqApi(`${base}/messages`, { msg_type: 7, media: { file_info: fileInfo }, msg_id: msgId, msg_seq: nextSeq(ctx) });
+        break;
+      }
+      // Guild channels take the image URL directly.
+      case "channel":
+        nextSeq(ctx);
+        await qqApi(`/channels/${target}/messages`, { image: url, msg_id: msgId });
+        break;
+      case "dm":
+        nextSeq(ctx);
+        await qqApi(`/dms/${target}/messages`, { image: url, msg_id: msgId });
+        break;
+    }
+  },
+};
+
+function v2Base(scope: string, target: string): string {
+  return scope === "c2c" ? `/v2/users/${target}` : `/v2/groups/${target}`;
+}

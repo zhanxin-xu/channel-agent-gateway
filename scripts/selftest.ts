@@ -1,0 +1,481 @@
+/**
+ * Offline end-to-end test: `npm test`.
+ * Stubs global fetch (Responses API, DeepSeek tools, QQ, Telegram) and Vercel's
+ * waitUntil, then drives each channel through the real webhook handler and agent loop.
+ */
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+
+process.env.OPENROUTER_API_KEY = "test-key";
+process.env.OPENROUTER_BASE_URL = "https://gw.example.com/api/v1/";
+process.env.OPENROUTER_MODEL = "openai/gpt-6-luna";
+process.env.OPENROUTER_EXTRA_BODY = '{"provider":{"only":["openai"],"allow_fallbacks":false},"max_output_tokens":2000}';
+process.env.OPENROUTER_EXTRA_HEADERS = '{"X-Title":"selftest"}';
+process.env.DEEPSEEK_API_KEY = "ds-key";
+process.env.QQ_APP_ID = "102000000";
+process.env.QQ_APP_SECRET = "naOC0ocQE3shWLAfffVLB1rhYPG7";
+process.env.TELEGRAM_BOT_TOKEN = "123:abc";
+process.env.TELEGRAM_WEBHOOK_SECRET = "tg-secret";
+process.env.HTTP_CHANNEL_TOKEN = "http-secret";
+delete process.env.UPSTASH_REDIS_REST_URL;
+delete process.env.KV_REST_API_URL;
+
+// ── Capture waitUntil promises ──
+const pending: Promise<unknown>[] = [];
+(globalThis as Record<symbol, unknown>)[Symbol.for("@vercel/request-context")] = {
+  get: () => ({ waitUntil: (p: Promise<unknown>) => pending.push(p) }),
+};
+const drain = async () => {
+  await Promise.all(pending.splice(0));
+};
+
+// ── Stub fetch ──
+interface Call {
+  url: string;
+  body: any;
+  headers: Headers;
+}
+const calls: Call[] = [];
+let llmCalls = 0;
+
+const textMessage = (text: string) => ({
+  type: "message",
+  role: "assistant",
+  status: "completed",
+  content: [{ type: "output_text", text, annotations: [] }],
+});
+const sendCall = (callId: string, text: string) => ({
+  type: "function_call",
+  id: `fc_${callId}`,
+  call_id: callId,
+  name: "send_message",
+  arguments: JSON.stringify({ text }),
+});
+
+/** Minimal Upstash REST emulator: POST / with one command, POST /pipeline with many. */
+const redis = new Map<string, string | string[]>();
+function runRedis([cmd, key, ...args]: string[]): unknown {
+  const list = () => (redis.get(key!) as string[] | undefined) ?? [];
+  const at = (i: number, len: number) => (i < 0 ? len + i : i);
+  switch (cmd) {
+    case "SET":
+      if (args.includes("NX") && redis.has(key!)) return null;
+      redis.set(key!, args[0]!);
+      return "OK";
+    case "RPUSH":
+      redis.set(key!, [...list(), ...args]);
+      return list().length;
+    case "LTRIM": {
+      const l = list();
+      redis.set(key!, l.slice(at(Number(args[0]), l.length), at(Number(args[1]), l.length) + 1));
+      return "OK";
+    }
+    case "LRANGE": {
+      const l = list();
+      return l.slice(at(Number(args[0]), l.length), at(Number(args[1]), l.length) + 1);
+    }
+    case "EXPIRE":
+      return 1;
+    case "DEL":
+      return redis.delete(key!) ? 1 : 0;
+    default:
+      return { error: `unknown command ${cmd}` };
+  }
+}
+function fakeUpstash(url: string, body: any) {
+  if (new URL(url).pathname === "/pipeline") return Response.json(body.map((c: string[]) => ({ result: runRedis(c) })));
+  return Response.json({ result: runRedis(body) });
+}
+
+/**
+ * Fake Responses API. First turn asks for a tool, second turn answers in plain
+ * text (exercising the fallback). Messages containing "连发" use send_message twice.
+ */
+function fakeResponses(body: any) {
+  llmCalls++;
+  const toolOutput = body.input.findLast((i: any) => i.type === "function_call_output");
+  // Drop the "[time｜scene｜sender]" header line the gateway prepends.
+  const userText: string = body.input.findLast((i: any) => i.role === "user").content.split("\n").slice(1).join("\n");
+  let output: unknown[];
+  if (userText.includes("表情")) {
+    output = toolOutput
+      ? []
+      : [{ type: "function_call", id: "fc_s", call_id: "call_s1", name: "send_sticker", arguments: JSON.stringify({ name: "红温了" }) }, sendCall("call_s2", "气死我了")];
+  } else if (userText.includes("连发")) {
+    output = toolOutput
+      ? [textMessage("这句是收尾文字，不应该被发出去")]
+      : [sendCall("call_a", "第一条"), sendCall("call_b", "第二条")];
+  } else if (toolOutput) {
+    output = [{ type: "reasoning", id: "rs_2", summary: [] }, textMessage(`答案是 ${toolOutput.output}`)];
+  } else {
+    output = [
+      { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "enc" },
+      userText.startsWith("搜索")
+        ? { type: "function_call", id: "fc_1", call_id: "call_s", name: "web_search", arguments: JSON.stringify({ query: userText.slice(2).trim() }) }
+        : { type: "function_call", id: "fc_1", call_id: "call_1", name: "calculate", arguments: '{"expression":"(2+3)*4"}' },
+    ];
+  }
+  return Response.json({
+    id: "resp_1",
+    object: "response",
+    status: "completed",
+    model: body.model,
+    output,
+    usage: { input_tokens: 10, output_tokens: 5, output_tokens_details: { reasoning_tokens: 3 } },
+  });
+}
+
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const req = new Request(input, init);
+  const url = req.url;
+  const text = await req.text();
+  const body = text ? JSON.parse(text) : undefined;
+  calls.push({ url, body, headers: req.headers });
+
+  if (url === "https://gw.example.com/api/v1/responses") return fakeResponses(body);
+  if (url === "https://api.deepseek.com/v1/tools/search") {
+    return Response.json({ results: [{ title: "DeepSeek V4", url: "https://example.com/v4", summary: "发布了", rerank_score: 2.1, authority: 3 }] });
+  }
+  if (url === "https://api.deepseek.com/v1/tools/fetch") return Response.json({ title: "T", content: "# body" });
+  if (url === "https://api.deepseek.com/user/balance") {
+    return Response.json({
+      is_available: true,
+      balance_infos: [{ currency: "CNY", total_balance: "12.50", granted_balance: "2.50", topped_up_balance: "10.00" }],
+    });
+  }
+  if (url === "https://gw.example.com/api/v1/key") {
+    return Response.json({
+      data: {
+        label: "sk-or-v1-abc...xyz",
+        limit: 20,
+        limit_remaining: 14.5,
+        limit_reset: "monthly",
+        usage: 5.5,
+        usage_daily: 0.3,
+        usage_weekly: 1.2,
+        usage_monthly: 5.5,
+        is_free_tier: false,
+        effective_budget: { scope: "api_key", limit_usd: 20, spend_usd: 5.5, remaining_usd: 14.5, reset_interval: "monthly", resets_at: "2026-12-01T00:00:00Z" },
+      },
+    });
+  }
+  if (url.startsWith("https://redis.example.com")) return fakeUpstash(url, body);
+  if (url === "https://bots.qq.com/app/getAppAccessToken") return Response.json({ access_token: "qq-token", expires_in: "7200" });
+  if (url.startsWith("https://api.sgroup.qq.com/v2/") && url.endsWith("/files")) {
+    return Response.json({ file_uuid: "u1", file_info: "FILEINFO", ttl: 3600 });
+  }
+  if (url.startsWith("https://api.sgroup.qq.com/")) return Response.json({ id: "sent", timestamp: 1 });
+  if (url.startsWith("https://api.telegram.org/")) return Response.json({ ok: true, result: {} });
+  throw new Error(`unexpected fetch ${url}`);
+}) as typeof fetch;
+
+const { handleWebhook } = await import("../src/webhook.js");
+const { evaluate, activeTools, runTool } = await import("../src/agent/tools.js");
+const { messageHeader } = await import("../src/agent/handle.js");
+const qqHint = (await import("../src/channels/qq.js")).qqAdapter.promptHint!;
+const { config } = await import("../src/config.js");
+
+/** Tool context for calling tools directly, outside a conversation. */
+const noCtx = { sent: [] as string[], send: async () => {}, sendSticker: async () => {} };
+
+// ── QQ signing helpers (independent of the implementation under test) ──
+function qqKeys(secret: string) {
+  let seed = secret;
+  while (seed.length < 32) seed += seed;
+  const privateKey = crypto.createPrivateKey({
+    key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(seed.slice(0, 32))]),
+    format: "der",
+    type: "pkcs8",
+  });
+  return { privateKey, publicKey: crypto.createPublicKey(privateKey) };
+}
+const keys = qqKeys(process.env.QQ_APP_SECRET!);
+
+function qqRequest(payload: unknown, sign = true) {
+  const body = JSON.stringify(payload);
+  const ts = "1725000000";
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (sign) {
+    headers["x-signature-timestamp"] = ts;
+    headers["x-signature-ed25519"] = crypto.sign(null, Buffer.from(ts + body), keys.privateKey).toString("hex");
+  }
+  return new Request("http://localhost/api/webhook/qq", { method: "POST", headers, body });
+}
+
+const httpCall = (text: string, conversationId = "c1") =>
+  handleWebhook(
+    new Request("http://localhost/api/webhook/http", {
+      method: "POST",
+      headers: { authorization: "Bearer http-secret" },
+      body: JSON.stringify({ conversationId, text }),
+    }),
+    "http",
+  ).then((r) => r.json() as Promise<{ reply: string }>);
+
+const llmRequests = () => calls.filter((c) => c.url.endsWith("/responses"));
+
+let passed = 0;
+async function test(name: string, fn: () => Promise<void> | void) {
+  calls.length = 0;
+  llmCalls = 0;
+  await fn();
+  passed++;
+  console.log(`✓ ${name}`);
+}
+
+await test("calculator", () => {
+  assert.equal(evaluate("(2+3)*4"), 20);
+  assert.equal(evaluate("2^3^2"), 512);
+  assert.equal(evaluate("-1.5 + 10 % 4"), 0.5);
+  assert.throws(() => evaluate("2 +"));
+});
+
+await test("config: extra body / base url parsing", () => {
+  assert.equal(config.openrouter.baseUrl, "https://gw.example.com/api/v1");
+  const saved = process.env.OPENROUTER_EXTRA_BODY;
+  process.env.OPENROUTER_EXTRA_BODY = "{bad";
+  assert.throws(() => config.openrouter.extraBody, /OPENROUTER_EXTRA_BODY is not valid JSON/);
+  process.env.OPENROUTER_EXTRA_BODY = "[1]";
+  assert.throws(() => config.openrouter.extraBody, /must be a JSON object/);
+  process.env.OPENROUTER_EXTRA_BODY = saved;
+});
+
+await test("DeepSeek-backed tools only enabled with DEEPSEEK_API_KEY", () => {
+  assert.deepEqual(
+    activeTools().map((t) => t.name),
+    ["send_message", "send_sticker", "get_current_time", "calculate", "web_search", "web_fetch", "get_search_balance", "get_llm_key_limit"],
+  );
+  process.env.DEEPSEEK_API_KEY = "";
+  assert.deepEqual(
+    activeTools().map((t) => t.name),
+    ["send_message", "send_sticker", "get_current_time", "calculate", "get_llm_key_limit"],
+  );
+  process.env.DEEPSEEK_API_KEY = "ds-key";
+});
+
+await test("get_search_balance: DeepSeek /user/balance", async () => {
+  const out = JSON.parse(await runTool("get_search_balance", "{}", noCtx));
+  const req = calls.find((c) => c.url === "https://api.deepseek.com/user/balance")!;
+  assert.equal(req.headers.get("authorization"), "Bearer ds-key");
+  assert.equal(out.available, true);
+  assert.deepEqual(out.balances[0], { currency: "CNY", total: "12.50", granted: "2.50", topped_up: "10.00", approx_search_calls_left: 2500 });
+});
+
+await test("get_llm_key_limit: {baseUrl}/key with extra headers", async () => {
+  const out = JSON.parse(await runTool("get_llm_key_limit", "{}", noCtx));
+  const req = calls.find((c) => c.url === "https://gw.example.com/api/v1/key")!;
+  assert.equal(req.headers.get("authorization"), "Bearer test-key");
+  assert.equal(req.headers.get("x-title"), "selftest");
+  assert.equal(out.limit_remaining, 14.5);
+  assert.deepEqual(out.usage, { today: 0.3, this_week: 1.2, this_month: 5.5, all_time: 5.5 });
+  assert.equal(out.effective_budget.remaining, 14.5);
+});
+
+await test("qq: op13 callback validation", async () => {
+  const res = await handleWebhook(qqRequest({ op: 13, d: { plain_token: "abc", event_ts: "123" } }, false), "qq");
+  const data = (await res.json()) as { plain_token: string; signature: string };
+  assert.equal(data.plain_token, "abc");
+  assert.ok(crypto.verify(null, Buffer.from("123abc"), keys.publicKey, Buffer.from(data.signature, "hex")));
+});
+
+await test("qq: rejects bad signature", async () => {
+  const req = qqRequest({ op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "m0", content: "hi", author: { user_openid: "u" } } });
+  req.headers.set("x-signature-ed25519", "00".repeat(64));
+  assert.equal((await handleWebhook(req, "qq")).status, 401);
+});
+
+await test("qq: c2c → ACK, Responses API tool loop, passive reply", async () => {
+  const event = { op: 0, id: "C2C_MESSAGE_CREATE:1", t: "C2C_MESSAGE_CREATE", d: { id: "msg-1", content: " 算一下 (2+3)*4 ", author: { user_openid: "USER1" } } };
+  const res = await handleWebhook(qqRequest(event), "qq");
+  assert.deepEqual(await res.json(), { op: 12, d: 0 });
+  await drain();
+
+  assert.equal(llmCalls, 2, "tool round-trip = 2 model calls");
+  const [first, second] = llmRequests();
+  assert.equal(first!.headers.get("authorization"), "Bearer test-key");
+  assert.equal(first!.headers.get("x-title"), "selftest");
+  assert.equal(first!.body.model, "openai/gpt-6-luna");
+  assert.deepEqual(first!.body.provider, { only: ["openai"], allow_fallbacks: false }, "extra body passed through");
+  assert.equal(first!.body.max_output_tokens, 2000);
+  assert.ok(first!.body.instructions.startsWith("# 角色设定"), "built-in persona prompt");
+  assert.ok(first!.body.instructions.endsWith(qqHint), "channel hint appended");
+  assert.equal(first!.body.input.length, 1);
+  assert.match(first!.body.input[0].content, /^\[\d{4}\/\d{2}\/\d{2}.* Asia\/Shanghai｜私聊｜发送人 #USER1\]\n算一下 \(2\+3\)\*4$/);
+  assert.equal(first!.body.tools[0].type, "function");
+  assert.equal(first!.body.tools[0].name, "send_message");
+
+  // Stateless replay: reasoning + function_call echoed back, then the output.
+  assert.deepEqual(
+    second!.body.input.slice(1).map((i: any) => i.type),
+    ["reasoning", "function_call", "function_call_output"],
+  );
+  assert.equal(second!.body.input[1].encrypted_content, "enc");
+  assert.deepEqual(second!.body.input[3], { type: "function_call_output", call_id: "call_1", output: "20" });
+
+  const sent = calls.find((c) => c.url.includes("/v2/users/USER1/messages"))!;
+  assert.equal(sent.headers.get("authorization"), "QQBot qq-token");
+  assert.deepEqual(sent.body, { content: "答案是 20", msg_type: 0, msg_id: "msg-1", msg_seq: 1 });
+});
+
+await test("qq: send_message twice → two passive replies, final text not sent", async () => {
+  const event = { op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "msg-2", content: "连发两条", author: { user_openid: "USER1" } } };
+  await handleWebhook(qqRequest(event), "qq");
+  await drain();
+  const sent = calls.filter((c) => c.url.includes("/v2/users/USER1/messages")).map((c) => c.body);
+  assert.deepEqual(sent, [
+    { content: "第一条", msg_type: 0, msg_id: "msg-2", msg_seq: 1 },
+    { content: "第二条", msg_type: 0, msg_id: "msg-2", msg_seq: 2 },
+  ]);
+  // Both calls were answered with a function_call_output before the model finished.
+  const outputs = llmRequests().at(-1)!.body.input.filter((i: any) => i.type === "function_call_output");
+  assert.deepEqual(outputs.map((o: any) => o.call_id), ["call_a", "call_b"]);
+  assert.match(outputs[0].output, /^sent \(1\/4\)/);
+});
+
+await test("stickers: CDN hotlink by default, STICKER_BASE_URL override", async () => {
+  const { STICKERS, stickerUrl, DEFAULT_STICKER_BASE_URL } = await import("../src/agent/stickers.js");
+  assert.ok(Object.keys(STICKERS).length >= 30);
+  assert.ok(Object.values(STICKERS).every((s) => /^\d+\.(gif|webp)$/.test(s.file)));
+  assert.equal(stickerUrl(DEFAULT_STICKER_BASE_URL, "红温了"), "https://img.aigengtu.com/meme/3153.gif");
+  assert.equal(stickerUrl("https://my.cdn/s/", "得加钱"), "https://my.cdn/s/097.webp");
+});
+
+await test("qq: send_sticker → upload by URL, msg_type 7, then text with next msg_seq", async () => {
+  const event = { op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "msg-3", content: "来个表情", author: { user_openid: "USER1" } } };
+  await handleWebhook(qqRequest(event), "qq");
+  await drain();
+  const upload = calls.find((c) => c.url === "https://api.sgroup.qq.com/v2/users/USER1/files")!;
+  assert.deepEqual(upload.body, { file_type: 1, url: "https://img.aigengtu.com/meme/3153.gif", srv_send_msg: false });
+  const sent = calls.filter((c) => c.url.endsWith("/v2/users/USER1/messages")).map((c) => c.body);
+  assert.deepEqual(sent, [
+    { msg_type: 7, media: { file_info: "FILEINFO" }, msg_id: "msg-3", msg_seq: 1 },
+    { content: "气死我了", msg_type: 0, msg_id: "msg-3", msg_seq: 2 },
+  ]);
+});
+
+await test("telegram: GIF sticker goes through sendAnimation", async () => {
+  const update = { update_id: 10, message: { message_id: 6, text: "表情来", chat: { id: 42, type: "private" }, from: { id: 7 } } };
+  await handleWebhook(
+    new Request("https://bot.example.com/api/webhook/telegram", {
+      method: "POST",
+      headers: { "x-telegram-bot-api-secret-token": "tg-secret" },
+      body: JSON.stringify(update),
+    }),
+    "telegram",
+  );
+  await drain();
+  const anim = calls.find((c) => c.url.endsWith("/sendAnimation"))!;
+  assert.equal(anim.body.animation, "https://img.aigengtu.com/meme/3153.gif");
+  assert.equal(anim.body.reply_parameters.message_id, 6, "first message quotes the user");
+  assert.equal(calls.find((c) => c.url.endsWith("/sendMessage"))!.body.reply_parameters, undefined);
+});
+
+await test("http: sticker degrades to a text line; history records it", async () => {
+  const { messages } = (await (
+    await handleWebhook(
+      new Request("http://localhost/api/webhook/http", {
+        method: "POST",
+        headers: { authorization: "Bearer http-secret", "x-forwarded-host": "qqbot.example.cn", "x-forwarded-proto": "https" },
+        body: JSON.stringify({ conversationId: "stk", text: "表情" }),
+      }),
+      "http",
+    )
+  ).json()) as { messages: string[] };
+  assert.deepEqual(messages, ["[表情包：红温了] https://img.aigengtu.com/meme/3153.gif", "气死我了"]);
+  await httpCall("next", "stk");
+  const prevAssistant = llmRequests().at(-1)!.body.input[1];
+  assert.deepEqual(prevAssistant, { role: "assistant", content: "[表情包：红温了]\n气死我了" });
+});
+
+await test("send_message: per-turn limit", async () => {
+  const ctx = { sent: ["1", "2", "3", "4"], send: async () => {}, sendSticker: async () => {} };
+  assert.match(await runTool("send_message", '{"text":"5"}', ctx), /^Error: already sent 4 messages/);
+  assert.match(await runTool("send_message", '{"text":"  "}', noCtx), /^Error: text is empty/);
+});
+
+await test("message header: time, scene, sender", () => {
+  const base = { channel: "qq", eventId: "e", conversationId: "g", text: "hi", replyContext: {} };
+  const now = new Date("2026-11-03T12:43:00Z");
+  assert.match(
+    messageHeader({ ...base, chatType: "group", userId: "5f0ee621a747e4683b6834" }, now),
+    /^\[2026\/11\/03.*20:43 Asia\/Shanghai｜群聊｜发送人 #3B6834\]$/,
+  );
+  assert.match(
+    messageHeader({ ...base, chatType: "private", userId: "7", senderName: "Alice" }, now),
+    /｜私聊｜发送人 Alice #7\]$/,
+  );
+});
+
+await test("upstash store: claim, append+trim via pipeline, list, del", async () => {
+  const { UpstashStore } = await import("../src/store/index.js");
+  const store = new UpstashStore("https://redis.example.com/", "rd-token");
+
+  assert.equal(await store.claim("evt:x", 60), true);
+  assert.equal(await store.claim("evt:x", 60), false, "second claim (webhook retry) is rejected");
+
+  await store.append("chat:k", ["a", "b"], 3, 600);
+  await store.append("chat:k", ["c", "d"], 3, 600);
+  assert.deepEqual(await store.list("chat:k"), ["b", "c", "d"], "keeps the newest 3");
+
+  const pipe = calls.findLast((c) => c.url === "https://redis.example.com/pipeline")!;
+  assert.equal(pipe.headers.get("authorization"), "Bearer rd-token");
+  assert.deepEqual(pipe.body, [["RPUSH", "chat:k", "c", "d"], ["LTRIM", "chat:k", "-3", "-1"], ["EXPIRE", "chat:k", "600"]]);
+
+  await store.del("chat:k");
+  assert.deepEqual(await store.list("chat:k"), []);
+});
+
+await test("qq: retried event is de-duplicated", async () => {
+  const event = { op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "msg-1", content: "again", author: { user_openid: "USER1" } } };
+  await handleWebhook(qqRequest(event), "qq");
+  await drain();
+  assert.equal(llmCalls, 0);
+});
+
+await test("qq: group @ message replies to group", async () => {
+  const event = { op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id: "g-1", content: " hi", group_openid: "GROUP1", author: { member_openid: "M1" } } };
+  await handleWebhook(qqRequest(event), "qq");
+  await drain();
+  assert.ok(calls.some((c) => c.url.endsWith("/v2/groups/GROUP1/messages") && c.body.msg_id === "g-1"));
+});
+
+await test("telegram: secret check + reply", async () => {
+  const update = { update_id: 9, message: { message_id: 5, text: "hello", chat: { id: 42, type: "private" }, from: { id: 7 } } };
+  const bad = new Request("http://localhost/api/webhook/telegram", { method: "POST", body: JSON.stringify(update) });
+  assert.equal((await handleWebhook(bad, "telegram")).status, 401);
+
+  const good = new Request("http://localhost/api/webhook/telegram", {
+    method: "POST",
+    headers: { "x-telegram-bot-api-secret-token": "tg-secret" },
+    body: JSON.stringify(update),
+  });
+  assert.equal((await handleWebhook(good, "telegram")).status, 200);
+  await drain();
+  const sent = calls.find((c) => c.url.endsWith("/sendMessage"))!;
+  assert.equal(sent.body.chat_id, "42");
+  assert.ok(calls.some((c) => c.url.endsWith("/sendChatAction")));
+});
+
+await test("http: web_search via DeepSeek tool API", async () => {
+  const { reply } = await httpCall("搜索 DeepSeek V4", "search");
+  const search = calls.find((c) => c.url.endsWith("/v1/tools/search"))!;
+  assert.equal(search.headers.get("authorization"), "Bearer ds-key");
+  assert.deepEqual(search.body, { query: "DeepSeek V4", count: 5 });
+  assert.ok(reply.includes("https://example.com/v4"), "search results reach the model");
+});
+
+await test("http: sync reply, history kept, /reset", async () => {
+  assert.equal((await httpCall("first")).reply, "答案是 20");
+  await httpCall("second");
+  const [prevUser, prevAssistant] = llmRequests().at(-1)!.body.input;
+  assert.equal(prevUser.role, "user");
+  assert.match(prevUser.content, /｜私聊｜发送人 #NYMOUS\]\nfirst$/, "history keeps the header line");
+  assert.deepEqual(prevAssistant, { role: "assistant", content: "答案是 20" });
+  assert.equal((await httpCall("/reset")).reply, "已清空本会话的历史记录。");
+});
+
+await test("unknown channel → 404", async () => {
+  assert.equal((await handleWebhook(new Request("http://x/api/webhook/nope", { method: "POST" }), "nope")).status, 404);
+});
+
+console.log(`\n${passed} tests passed`);

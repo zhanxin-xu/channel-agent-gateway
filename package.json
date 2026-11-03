@@ -1,0 +1,24 @@
+{
+  "name": "channel-agent-gateway",
+  "version": "0.1.0",
+  "description": "Vercel serverless gateway: multi-channel webhooks -> OpenRouter agent loop -> reply",
+  "scripts": {
+    "dev": "tsx watch scripts/dev-server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx scripts/selftest.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@vercel/functions": "^3.10.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "tsx": "^4.23.15",
+    "typescript": "5.9"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  }
+}
