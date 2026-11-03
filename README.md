@@ -151,8 +151,9 @@ OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"
 
 **图片不在本仓库里**：表情包图片版权归原作者，本仓库不包含、也不再分发这些图片。代码发送表情包时，直接引用原站公开 CDN 上的图片地址，例如 `https://img.aigengtu.com/meme/3153.gif`。原站 README 明确说明欢迎开发者这样热链。
 
-- 想用自己托管的图片，把图片按同样的文件名（站点编号）放到你自己的地址下，再设置 `STICKER_BASE_URL`，例如 `https://你的域名/stickers`。
-- 梗图原图是 webp 格式。如果发现 QQ 不支持 webp，可以自行转成 jpg 后自托管，并把 `stickers.ts` 里对应的扩展名改掉。
+- **尺寸统一为最长边 512px**：QQ 会按图片的像素尺寸来决定显示大小。Q 版 GIF 的原图本来就是 512×512；梗图的原图有 700–1250px，所以改用原站提供的 512px 预览版（`0_preview/meme/NNN.webp`），这样两类表情包在聊天里显示的大小一致。
+- **QQ 已实测**：GIF 和 webp 都能正常发送。
+- **自托管**：想用自己托管的图片，就按相同的路径（`meme/NNN.gif`、`0_preview/meme/NNN.webp`）放到你自己的地址下，再设置 `STICKER_BASE_URL`，例如 `https://你的域名/stickers`。
 
 **各渠道的发送方式**：
 

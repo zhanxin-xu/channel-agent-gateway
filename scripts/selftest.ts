@@ -335,9 +335,11 @@ await test("qq: send_message twice → two passive replies, final text not sent"
 await test("stickers: CDN hotlink by default, STICKER_BASE_URL override", async () => {
   const { STICKERS, stickerUrl, DEFAULT_STICKER_BASE_URL } = await import("../src/agent/stickers.js");
   assert.ok(Object.keys(STICKERS).length >= 30);
-  assert.ok(Object.values(STICKERS).every((s) => /^\d+\.(gif|webp)$/.test(s.file)));
+  // GIFs are 512px originals; static memes use the 512px previews so sizes match in chat.
+  assert.ok(Object.values(STICKERS).every((s) => /^(meme\/\d+\.gif|0_preview\/meme\/\d+\.webp)$/.test(s.file)));
   assert.equal(stickerUrl(DEFAULT_STICKER_BASE_URL, "红温了"), "https://img.aigengtu.com/meme/3153.gif");
-  assert.equal(stickerUrl("https://my.cdn/s/", "得加钱"), "https://my.cdn/s/097.webp");
+  assert.equal(stickerUrl(DEFAULT_STICKER_BASE_URL, "得加钱"), "https://img.aigengtu.com/0_preview/meme/097.webp");
+  assert.equal(stickerUrl("https://my.cdn/s/", "得加钱"), "https://my.cdn/s/0_preview/meme/097.webp");
 });
 
 await test("qq: send_sticker → upload by URL, msg_type 7, then text with next msg_seq", async () => {
