@@ -5,6 +5,7 @@
 <h1 align="center">serverless-agent-gateway</h1>
 
 <p align="center">
+  <a href="https://serverless-agent.cnday.cn"><img src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-serverless--agent.cnday.cn-2f5de6" alt="官网"></a>
   <a href="https://github.com/zhanxin-xu/serverless-agent-gateway/actions/workflows/ci.yml"><img src="https://github.com/zhanxin-xu/serverless-agent-gateway/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/node-24.x-339933?logo=node.js&amp;logoColor=white" alt="Node.js 24">
@@ -14,6 +15,8 @@
 一个部署在 Vercel Functions 上的多渠道 AI 机器人网关。QQ、Telegram 或任意 HTTP 客户端通过 Webhook 把消息推进来，网关跑一个带工具调用的 agent loop，再从原渠道把回复发回去。
 
 仓库自带一个示例人设「大肥鱼」：一个嘴毒、爱抬杠的群友。改一个文件就能换成你自己的机器人。
+
+官网：[serverless-agent.cnday.cn](https://serverless-agent.cnday.cn)（源码在 [`site/`](site/)，作为独立的 Vercel 项目部署）。
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fserverless-agent-gateway&env=OPENROUTER_API_KEY&envDescription=OpenRouter%20API%20key%20for%20the%20model)
 

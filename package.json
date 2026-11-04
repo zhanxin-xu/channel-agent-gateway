@@ -13,7 +13,7 @@
     "openrouter",
     "responses-api"
   ],
-  "homepage": "https://github.com/zhanxin-xu/serverless-agent-gateway#readme",
+  "homepage": "https://serverless-agent.cnday.cn",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zhanxin-xu/serverless-agent-gateway.git"

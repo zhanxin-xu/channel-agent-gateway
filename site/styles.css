@@ -45,6 +45,7 @@ html:not(.js) .loader { display: none; }
 .nav { position: fixed; inset: 0 0 auto; z-index: 20; display: flex; align-items: center; justify-content: space-between; padding: 18px clamp(16px, 3vw, 32px); mix-blend-mode: multiply; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500; letter-spacing: -0.01em; }
 .brand img { border-radius: 50%; }
+.brand em { font-style: normal; color: var(--fg-3); font-weight: 400; margin-left: 0.3em; }
 .nav nav { display: flex; gap: clamp(14px, 2.4vw, 28px); font-size: 13.5px; color: var(--fg-2); }
 .nav nav a { position: relative; transition: color 0.25s; }
 .nav nav a::after { content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 1px; background: currentColor; transform: scaleX(0); transform-origin: right; transition: transform 0.45s var(--ease); }
