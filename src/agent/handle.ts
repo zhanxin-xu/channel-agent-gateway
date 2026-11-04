@@ -11,7 +11,7 @@
  * AGENT_HISTORY_LIMIT (private) / AGENT_GROUP_HISTORY_LIMIT (group) entries on
  * every write, and expires after AGENT_HISTORY_TTL_DAYS without messages.
  */
-import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
+import type { ChannelAdapter, InboundMessage, OutgoingFile } from "../channels/types.js";
 import { config } from "../config.js";
 import { getStore } from "../store/index.js";
 import { loadImageParts } from "./images.js";
@@ -60,10 +60,14 @@ export function messageHeader(m: InboundMessage, now = new Date()): string {
   return `[${time} ${timeZone}｜${scene}｜发送人 ${senderLabel(m)}${mention}]`;
 }
 
-/** How messages reach the chat. Without `image`, stickers degrade to a text line with the URL. */
+/**
+ * How messages reach the chat. Without `image`, stickers degrade to a text
+ * line with the URL; without `file`, send_file fails with a tool error.
+ */
 export interface Deliver {
   text(text: string): Promise<void>;
   image?(url: string): Promise<void>;
+  file?(file: OutgoingFile): Promise<void>;
 }
 
 /**
@@ -80,7 +84,6 @@ export async function handleMessage(
   message: InboundMessage,
   deliver: Deliver,
 ): Promise<string[] | undefined> {
-  const deadline = Date.now() + config.agent.maxDurationSeconds * 1000;
   const store = getStore();
   const direct = message.mode !== "ambient";
   const key = historyKey(message);
@@ -100,6 +103,7 @@ export async function handleMessage(
 
   const ctx: ToolContext = {
     sent: [],
+    deadline: Date.now() + config.agent.maxDurationSeconds * 1000,
     chat: {
       key: `${message.channel}:${message.conversationId}`,
       scene: message.chatType === "group" ? "群聊" : "私聊",
@@ -115,6 +119,11 @@ export async function handleMessage(
       if (deliver.image) await deliver.image(url);
       else await deliver.text(`[表情包：${name}] ${url}`);
       this.sent.push(`[表情包：${name}]`);
+    },
+    async sendFile(file) {
+      if (!deliver.file) throw new Error(`the ${adapter.name} channel can't send files`);
+      await deliver.file(file);
+      this.sent.push(`[文件：${file.name}]`);
     },
   };
 
@@ -168,7 +177,6 @@ export async function handleMessage(
           ? `（系统提示）${senderLabel(message)} 刚 @ 了你：「${(body || "[图片]").slice(0, 100)}」，回复这条。`
           : undefined,
       maxSteps: direct ? config.agent.maxSteps : config.agent.ambientMaxSteps,
-      deadline,
       mustReply: direct,
       ctx,
     });

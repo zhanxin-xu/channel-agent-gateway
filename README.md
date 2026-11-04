@@ -268,7 +268,7 @@ QQ 消息事件里的 `attachments` 字段会按类型分别处理：
 | `web_fetch` | 调用 DeepSeek 抓取接口 `POST /v1/tools/fetch`，以 Markdown 返回网页正文（截断到 12k 字符） | 配置了 `DEEPSEEK_API_KEY` |
 | `get_search_balance` | 查询 DeepSeek 账户余额（`GET /user/balance`），区分赠送余额和充值余额，并按 ¥5/千次估算还能搜索多少次 | 配置了 `DEEPSEEK_API_KEY` |
 | `remember` / `recall` / `forget` | 长期记忆：写入一条、按语义检索、按 id 删除（见下） | 配置了 `UPSTASH_VECTOR_REST_URL` 和 `UPSTASH_VECTOR_REST_TOKEN` |
-| `bash` / `write_file` / `read_file` | 在 Linux 沙盒里执行命令、写文件、读文件；读到图片时会直接给模型看（见下） | 部署在 Vercel 上（或本地有 `VERCEL_OIDC_TOKEN`），`SANDBOX_ENABLED=0` 可关闭 |
+| `bash` / `write_file` / `read_file` / `send_file` | 在 Linux 沙盒里执行命令、写文件、读文件（读到图片时会直接给模型看），以及把工作区里的文件发到聊天里（见下） | 部署在 Vercel 上（或本地有 `VERCEL_OIDC_TOKEN`），`SANDBOX_ENABLED=0` 可关闭 |
 | `get_llm_key_limit` | 查询模型 Key 的额度（`GET {OPENROUTER_BASE_URL}/key`）：限额、剩余额度、重置周期，以及今日、本周、本月和累计用量（美元），另外返回最先触发拦截的预算 | 配置了 `OPENROUTER_API_KEY` |
 
 > 余额和额度属于账户信息。机器人如果对外开放（比如进了群），任何人都能问到这些信息。介意的话，在 `src/agent/tools.ts` 里把这两个工具移除即可。
@@ -289,7 +289,8 @@ DeepSeek 的这两个接口是普通 HTTP API，所以由本服务作为函数�
 - **每个聊天一块盘**：每个聊天有一块自己的 Vercel Drive（Hobby 默认 1 GiB），挂在 `/workspace`。盘名是聊天 ID 的哈希（`chat-xxxx`）。
 - **沙盒随用随建**：一次 agent 运行里第一次调用工作区工具时才创建沙盒，这次运行的所有工具调用共用它，运行结束就停掉。
 - **哪些东西能留下**：`/workspace` 里的文件下次还在；装的包、`/tmp` 等其他位置，每轮都会清空。沙盒创建时设了 `persistent: false`，停掉时不做快照，不占快照存储。
-- **单条命令限时**：默认 60 秒（`SANDBOX_COMMAND_TIMEOUT_SECONDS`），超时会被 `timeout` 杀掉，已有的输出保留。输出过长时保留开头和结尾。
+- **单条命令限时**：默认 60 秒（`SANDBOX_COMMAND_TIMEOUT_SECONDS`），超时会被 `timeout` 杀掉，已有的输出保留。输出过长时保留开头和结尾。这一轮快到函数的 300 秒上限时，限时会自动缩短，命令跑完后至少还剩 15 秒给模型回复；剩余时间不够时直接报错，让模型先汇报现有结果。
+- **发文件**：`send_file` 读取工作区里的文件发到聊天，最大 5MB，计入每轮 5 条消息。QQ 先调用 `POST /v2/{users|groups}/{id}/files` 直接上传文件内容（`file_data`，base64），再发送 `msg_type: 7`。类型按扩展名判断：png/jpg/gif 发成图片，mp4 发成视频，mp3/wav/silk 发成语音，其他都发成文件。QQ 频道不支持发文件。Telegram 用 `sendPhoto` / `sendAnimation` / `sendDocument` 上传。通用 HTTP 渠道不能发文件。
 - **读图片**：`read_file` 读到 png/jpg/gif/webp 时，图片会作为一条用户消息附在工具结果后面给模型看（`detail: "auto"`），不会存进历史。
 - **同一聊天并发**：同一块盘同一时间只能被一个沙盒读写挂载。同一聊天的两次运行撞上时，后来的会重试几次，还不行就让模型告诉用户稍后再试。
 - **认证**：部署在 Vercel 上时，SDK 自动使用项目的 OIDC token，不用配置。本地运行需要先 `vercel env pull` 拿到 `VERCEL_OIDC_TOKEN`。

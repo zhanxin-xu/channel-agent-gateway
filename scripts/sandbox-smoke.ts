@@ -8,7 +8,15 @@ import { closeWorkspace, driveName } from "../src/agent/sandbox.js";
 
 process.env.SANDBOX_ENABLED = "1";
 const chat = { key: "smoke:test", scene: "私聊" as const, sender: "#SMOKE" };
-const newCtx = (): ToolContext => ({ sent: [], send: async () => {}, sendSticker: async () => {}, chat, images: [] });
+const newCtx = (): ToolContext => ({
+  sent: [],
+  send: async () => {},
+  sendSticker: async () => {},
+  sendFile: async () => {},
+  deadline: Date.now() + 300_000,
+  chat,
+  images: [],
+});
 const step = async (ctx: ToolContext, name: string, args: unknown) => {
   const t = Date.now();
   const out = await runTool(name, JSON.stringify(args), ctx);

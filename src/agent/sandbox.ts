@@ -15,12 +15,18 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { config } from "../config.js";
 import type { ImagePart } from "./images.js";
+import { MAX_MESSAGES_PER_TURN } from "./limits.js";
 import type { Tool, ToolContext } from "./tools.js";
 
 export const WORKDIR = "/workspace";
 const MAX_OUTPUT_CHARS = 8_000;
 const MAX_TEXT_CHARS = 12_000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+/** QQ's direct (non-chunked) upload limit; also plenty for chat. */
+const MAX_SEND_BYTES = 5 * 1024 * 1024;
+/** Time left for the model to reply after a command, and for `timeout -k` to kill it. */
+const REPLY_RESERVE_MS = 15_000;
+const KILL_GRACE_SECONDS = 5;
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -133,6 +139,15 @@ function clip(text: string, max: number): string {
   return `${text.slice(0, head)}\n…[${text.length - max} characters cut]…\n${text.slice(text.length - (max - head))}`;
 }
 
+/**
+ * A command's time limit: the configured one, cut short near the function's
+ * deadline so the model still has REPLY_RESERVE_MS to answer afterwards.
+ */
+export function commandLimitSeconds(ctx: ToolContext): number {
+  const left = Math.floor((ctx.deadline - Date.now() - REPLY_RESERVE_MS) / 1000) - KILL_GRACE_SECONDS;
+  return Math.min(config.sandbox.commandTimeoutSeconds, left);
+}
+
 const enabled = () => config.sandbox.enabled;
 
 const WORKSPACE_NOTE =
@@ -143,7 +158,8 @@ export const bash: Tool = {
   name: "bash",
   description:
     `Run a bash command in your workspace (working directory ${WORKDIR}). ${WORKSPACE_NOTE} ` +
-    "Each command is killed after a time limit (60s by default); output is stdout+stderr, clipped when long. " +
+    "Each command is killed after a time limit (60s by default, shorter when this turn is running out of time); " +
+    "output is stdout+stderr, clipped when long. " +
     "Starting the sandbox takes a few seconds, so batch work into one command where you can.",
   parameters: {
     type: "object",
@@ -154,7 +170,8 @@ export const bash: Tool = {
   async run(args, ctx) {
     const command = String(args.command ?? "");
     if (!command.trim()) throw new Error("command is empty");
-    const limit = config.sandbox.commandTimeoutSeconds;
+    const limit = commandLimitSeconds(ctx);
+    if (limit < 5) throw new Error("no time left in this turn to run commands; tell them what you have so far");
     const { exitCode, output } = await (await workspaceFor(ctx)).run(command, limit);
     const status = exitCode === 124 ? `timed out after ${limit}s` : `exit ${exitCode ?? "?"}`;
     return `${status}\n${clip(output, MAX_OUTPUT_CHARS) || "(no output)"}`;
@@ -206,5 +223,32 @@ export const readFile: Tool = {
     }
     if (bytes.includes(0)) return `${file} is a binary file (${bytes.byteLength} bytes); inspect it with bash instead.`;
     return clip(bytes.toString("utf8"), MAX_TEXT_CHARS);
+  },
+};
+
+export const sendFile: Tool = {
+  name: "send_file",
+  description:
+    "Send a file from your workspace to the chat, as its own message (counts toward the same " +
+    `${MAX_MESSAGES_PER_TURN}-messages-per-turn limit as send_message). png/jpg/gif show as pictures, mp4 as video, ` +
+    "mp3/wav/silk as voice, anything else as a file attachment. At most 5 MB.",
+  parameters: {
+    type: "object",
+    properties: { path: { type: "string", description: `File path (relative paths are under ${WORKDIR}).` } },
+    required: ["path"],
+  },
+  enabled,
+  async run(args, ctx) {
+    if (ctx.sent.length >= MAX_MESSAGES_PER_TURN) {
+      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; end your turn now`);
+    }
+    const file = resolvePath(String(args.path ?? ""));
+    const data = await (await workspaceFor(ctx)).read(file);
+    if (!data) throw new Error(`${file} not found`);
+    if (data.byteLength > MAX_SEND_BYTES) {
+      throw new Error(`${file} is ${data.byteLength} bytes, over the 5 MB limit; compress or split it`);
+    }
+    await ctx.sendFile({ name: path.posix.basename(file), data });
+    return `sent ${file} (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, end your turn without writing any text.`;
   },
 };

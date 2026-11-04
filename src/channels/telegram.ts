@@ -7,7 +7,7 @@
  */
 import crypto from "node:crypto";
 import { config } from "../config.js";
-import { chunkText, json, type ChannelAdapter, type ReceiveResult } from "./types.js";
+import { chunkText, json, type ChannelAdapter, type OutgoingFile, type ReceiveResult } from "./types.js";
 
 const MAX_CHUNK = 4000;
 
@@ -33,6 +33,15 @@ async function tg(method: string, body: unknown): Promise<void> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (!res.ok) throw new Error(`Telegram ${method} failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
+}
+
+/** Multipart upload (sendPhoto / sendAnimation / sendDocument with file bytes). */
+async function tgUpload(method: string, fields: Record<string, string>, field: string, file: OutgoingFile): Promise<void> {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.set(key, value);
+  form.set(field, new Blob([new Uint8Array(file.data)]), file.name);
+  const res = await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/${method}`, { method: "POST", body: form });
   if (!res.ok) throw new Error(`Telegram ${method} failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
@@ -102,6 +111,16 @@ export const telegramAdapter: ChannelAdapter = {
     // GIFs go through sendAnimation so they play instead of showing a still frame.
     if (/\.gif$/i.test(url)) await tg("sendAnimation", { chat_id: ctx.chatId, animation: url, ...quoteOnce(ctx) });
     else await tg("sendPhoto", { chat_id: ctx.chatId, photo: url, ...quoteOnce(ctx) });
+  },
+
+  async sendFile(message, file) {
+    const ctx = message.replyContext;
+    const quote = quoteOnce(ctx);
+    const fields: Record<string, string> = { chat_id: ctx.chatId! };
+    if (quote.reply_parameters) fields.reply_parameters = JSON.stringify(quote.reply_parameters);
+    if (/\.gif$/i.test(file.name)) await tgUpload("sendAnimation", fields, "animation", file);
+    else if (/\.(png|jpe?g|webp)$/i.test(file.name)) await tgUpload("sendPhoto", fields, "photo", file);
+    else await tgUpload("sendDocument", fields, "document", file);
   },
 };
 

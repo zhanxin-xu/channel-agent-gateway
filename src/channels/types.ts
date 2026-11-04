@@ -31,6 +31,12 @@ export type ReceiveResult =
   /** A message for the agent. `ack` is returned to the platform immediately. */
   | { kind: "message"; message: InboundMessage; ack?: Response };
 
+/** A file the agent sends from its workspace. */
+export interface OutgoingFile {
+  name: string;
+  data: Buffer;
+}
+
 export interface ChannelAdapter {
   readonly name: string;
   /** Extra instructions appended to the system prompt, e.g. formatting limits. */
@@ -45,6 +51,8 @@ export interface ChannelAdapter {
   send?(message: InboundMessage, text: string): Promise<void>;
   /** Send an image by public URL (stickers). Adapters without it get a text fallback. */
   sendImage?(message: InboundMessage, url: string): Promise<void>;
+  /** Upload and send a file's bytes (send_file). Adapters without it can't send files. */
+  sendFile?(message: InboundMessage, file: OutgoingFile): Promise<void>;
   /** Optional "typing…" indicator shown while the agent runs. */
   typing?(message: InboundMessage): Promise<void>;
 }

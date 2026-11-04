@@ -136,6 +136,10 @@ function fakeResponses(body: any) {
     const last = body.input.at(-1);
     const calc = { type: "function_call", id: "fc_l", call_id: `call_l${llmCalls}`, name: "calculate", arguments: '{"expression":"1+1"}' };
     output = last.role === "developer" && last.content.includes("最后一步") ? [calc, sendCall("call_done", "做到一半")] : [calc];
+  } else if (userText.startsWith("发文件")) {
+    output = toolOutput
+      ? [textMessage(`结果：${toolOutput.output}`)]
+      : [{ type: "function_call", id: "fc_f", call_id: "call_f", name: "send_file", arguments: JSON.stringify({ path: userText.slice(3).trim() }) }];
   } else if (userText.startsWith("读图")) {
     output = toolOutput
       ? [textMessage("看到了")]
@@ -218,7 +222,15 @@ const { setWorkspaceFactory, driveName } = await import("../src/agent/sandbox.js
 
 /** Tool context for calling tools directly, outside a conversation. */
 const testChat = { key: "http:c0", scene: "私聊" as const, sender: "#USER01" };
-const noCtx = { sent: [] as string[], send: async () => {}, sendSticker: async () => {}, chat: testChat, images: [] };
+const noCtx = {
+  sent: [] as string[],
+  send: async () => {},
+  sendSticker: async () => {},
+  sendFile: async () => {},
+  deadline: Number.POSITIVE_INFINITY,
+  chat: testChat,
+  images: [],
+};
 
 // ── QQ signing helpers (independent of the implementation under test) ──
 function qqKeys(secret: string) {
@@ -791,6 +803,56 @@ await test("workspace: read_file shows an image to the model; the sandbox stops 
     // The image isn't kept in history.
     await httpCall("1+1", "c-img");
     assert.ok(llmRequests().at(-1)!.body.input.every((i: any) => typeof i.content === "string" || i.type));
+  } finally {
+    delete process.env.SANDBOX_ENABLED;
+  }
+});
+
+await test("workspace: bash time limit shrinks near the function's deadline, leaving 15s to reply", async () => {
+  process.env.SANDBOX_ENABLED = "1";
+  try {
+    fakeWorkspaces();
+    const at = (seconds: number) => ({ ...noCtx, images: [], deadline: Date.now() + seconds * 1000 });
+    assert.equal(await runTool("bash", '{"command":"ls"}', at(300)), "exit 0\nran: ls (limit 60s)");
+    assert.match(await runTool("bash", '{"command":"ls"}', at(40)), /\(limit 19s\)$|\(limit 20s\)$/); // 40 - 15 reply - 5 kill grace
+    assert.match(await runTool("bash", '{"command":"ls"}', at(20)), /^Error: no time left in this turn/);
+  } finally {
+    delete process.env.SANDBOX_ENABLED;
+  }
+});
+
+await test("send_file: QQ uploads the bytes (file_data) with the right file_type, then sends msg_type 7", async () => {
+  process.env.SANDBOX_ENABLED = "1";
+  try {
+    const ws = fakeWorkspaces();
+    ws.files.set("/workspace/report.pdf", Buffer.from("%PDF-1"));
+    ws.files.set("/workspace/out/plot.png", Buffer.from([0x89, 0x50]));
+    await handleWebhook(qqRequest({ op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "f1", content: "发文件 report.pdf", author: { user_openid: "FILEUSER" } } }), "qq");
+    await drain();
+    await handleWebhook(qqRequest({ op: 0, t: "C2C_MESSAGE_CREATE", d: { id: "f2", content: "发文件 out/plot.png", author: { user_openid: "FILEUSER" } } }), "qq");
+    await drain();
+    const uploads = calls.filter((c) => c.url.endsWith("/v2/users/FILEUSER/files"));
+    assert.deepEqual(uploads[0]!.body, { file_type: 4, file_name: "report.pdf", file_data: Buffer.from("%PDF-1").toString("base64"), srv_send_msg: false });
+    assert.equal(uploads[1]!.body.file_type, 1);
+    const sends = calls.filter((c) => c.url.endsWith("/v2/users/FILEUSER/messages"));
+    assert.deepEqual(sends[0]!.body, { msg_type: 7, media: { file_info: "FILEINFO" }, msg_id: "f1", msg_seq: 1 });
+    // send_file only delivers, so the turn ends there: one model call per message.
+    assert.equal(llmRequests().length, 2);
+  } finally {
+    delete process.env.SANDBOX_ENABLED;
+  }
+});
+
+await test("send_file: missing file, size limit, and channels that can't send files", async () => {
+  process.env.SANDBOX_ENABLED = "1";
+  try {
+    const ws = fakeWorkspaces();
+    ws.files.set("/workspace/big.bin", Buffer.alloc(5 * 1024 * 1024 + 1));
+    assert.match(await runTool("send_file", '{"path":"nope.txt"}', noCtx), /^Error: \/workspace\/nope.txt not found/);
+    assert.match(await runTool("send_file", '{"path":"big.bin"}', noCtx), /over the 5 MB limit/);
+    ws.files.set("/workspace/a.txt", Buffer.from("hi"));
+    const res = await httpCall("发文件 a.txt", "c-file");
+    assert.match(res.reply, /^结果：Error: the http channel can't send files/);
   } finally {
     delete process.env.SANDBOX_ENABLED;
   }

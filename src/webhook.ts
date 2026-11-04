@@ -8,7 +8,7 @@
 import { waitUntil } from "@vercel/functions";
 import { handleMessage } from "./agent/handle.js";
 import { channels } from "./channels/index.js";
-import { json, type ChannelAdapter, type InboundMessage } from "./channels/types.js";
+import { json, type ChannelAdapter, type InboundMessage, type OutgoingFile } from "./channels/types.js";
 
 async function process(adapter: ChannelAdapter, message: InboundMessage): Promise<void> {
   try {
@@ -24,10 +24,11 @@ async function process(adapter: ChannelAdapter, message: InboundMessage): Promis
           throw err;
         }
       };
-    const sendImage = adapter.sendImage;
+    const { sendImage, sendFile } = adapter;
     await handleMessage(adapter, message, {
       text: logged((text: string) => adapter.send!(message, text)),
       image: sendImage ? logged((url: string) => sendImage.call(adapter, message, url)) : undefined,
+      file: sendFile ? logged((file: OutgoingFile) => sendFile.call(adapter, message, file)) : undefined,
     });
   } catch (err) {
     console.error(`[webhook] ${adapter.name} processing failed`, err);

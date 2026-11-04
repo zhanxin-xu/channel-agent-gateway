@@ -87,15 +87,15 @@ async function createResponse(body: Record<string, unknown>): Promise<ResponsesR
   return data;
 }
 
-/** Tools that only talk. A step that calls nothing else ends the turn (saves one model call). */
-const TALK_TOOLS = new Set(["send_message", "send_sticker"]);
+/** Tools that only deliver to the chat. A step that calls nothing else ends the turn (saves one model call). */
+const TALK_TOOLS = new Set(["send_message", "send_sticker", "send_file"]);
 
 /** Time kept for the last step (one model call plus sending) before the function's deadline. */
 const LAST_STEP_RESERVE_MS = 90_000;
 
 function lastStepNote(reason: string, mustReply: boolean): string {
   return mustReply
-    ? `（系统提示）${reason}，这是最后一步：除了 send_message / send_sticker，这一步调用的其他工具都不会执行。` +
+    ? `（系统提示）${reason}，这是最后一步：除了 send_message / send_sticker / send_file，这一步调用的其他工具都不会执行。` +
         "现在用 send_message 给对方发一条消息：说出已经得到的结果；没做完就说做到哪了、卡在哪、接下来怎么办。"
     : `（系统提示）${reason}，这是最后一步：其他工具不会再执行了。要插话就现在用 send_message 说，不说就直接结束。`;
 }
@@ -110,8 +110,6 @@ export async function runAgent(opts: {
    */
   note?: string;
   maxSteps?: number;
-  /** When the function will be killed (epoch ms); the last step starts early enough to finish. */
-  deadline?: number;
   /** Someone is waiting for an answer (DM / @): the last-step note asks for a message. */
   mustReply?: boolean;
   ctx: ToolContext;
@@ -130,7 +128,8 @@ export async function runAgent(opts: {
 
   let reasoningTokens = 0;
   for (let step = 1; ; step++) {
-    const outOfTime = opts.deadline !== undefined && opts.deadline - Date.now() < LAST_STEP_RESERVE_MS;
+    // The last step starts early enough to finish before the function is killed (ctx.deadline).
+    const outOfTime = opts.ctx.deadline - Date.now() < LAST_STEP_RESERVE_MS;
     const lastStep = step >= maxSteps || outOfTime;
     if (lastStep) {
       input.push({ role: "developer", content: lastStepNote(outOfTime ? "时间快用完了" : "步数用完了", opts.mustReply ?? false) });
@@ -168,10 +167,12 @@ export async function runAgent(opts: {
 
     // Replay everything the model produced (reasoning, messages, calls) in order.
     input.push(...output);
+    let failed = false;
     for (const call of calls) {
       const result = await runTool(call.name, call.arguments, opts.ctx);
       console.log(`[agent] tool ${call.name}(${call.arguments}) -> ${result.slice(0, 200)}`);
       input.push({ type: "function_call_output", call_id: call.call_id, output: result });
+      failed ||= result.startsWith("Error:");
     }
     // Images a tool opened (read_file) go in as a user message after the outputs,
     // which every Responses API provider accepts; they're not stored in history.
@@ -180,8 +181,8 @@ export async function runAgent(opts: {
       input.push({ role: "user", content: [{ type: "input_text", text: "（系统提示）read_file 打开的图片：" }, ...images] });
     }
 
-    // Only talked this step: the turn is done, no need to ask the model again.
-    if (calls.every((c) => TALK_TOOLS.has(c.name))) {
+    // Only talked this step, successfully: the turn is done, no need to ask the model again.
+    if (!failed && calls.every((c) => TALK_TOOLS.has(c.name))) {
       return { text: "", steps: step, reasoningTokens };
     }
   }

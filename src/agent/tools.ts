@@ -3,9 +3,11 @@
  * definition the model sees, and a `run` function that returns a string.
  */
 import { llmKeyLimit, searchBalance } from "./account-tools.js";
+import type { OutgoingFile } from "../channels/types.js";
 import type { ImagePart } from "./images.js";
+import { MAX_MESSAGES_PER_TURN } from "./limits.js";
 import { forget, recall, remember } from "./memory.js";
-import { bash, readFile, writeFile } from "./sandbox.js";
+import { bash, readFile, sendFile, writeFile } from "./sandbox.js";
 import { isStickerName, STICKER_NAMES, STICKERS, type StickerName } from "./stickers.js";
 import { webFetch, webSearch } from "./web-tools.js";
 
@@ -17,6 +19,10 @@ export interface ToolContext {
   send(text: string): Promise<void>;
   /** Deliver one sticker now (and record it in `sent`). */
   sendSticker(name: StickerName): Promise<void>;
+  /** Deliver one file now (and record it in `sent`); throws when the channel can't send files. */
+  sendFile(file: OutgoingFile): Promise<void>;
+  /** When the function will be killed (epoch ms). Long-running tools stop early enough for a reply. */
+  deadline: number;
   /** The chat this run belongs to: memory metadata and the per-chat workspace. */
   chat: { key: string; scene: "群聊" | "私聊"; sender: string };
   /** Images a tool wants the model to see; the loop shows them after the step's tool outputs. */
@@ -32,8 +38,7 @@ export interface Tool {
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<string> | string;
 }
 
-/** QQ allows 5 replies per inbound message (bot-docs send.md); apply the same cap on every channel. */
-export const MAX_MESSAGES_PER_TURN = 5;
+export { MAX_MESSAGES_PER_TURN };
 
 const sendMessage: Tool = {
   name: "send_message",
@@ -127,6 +132,7 @@ const tools: Tool[] = [
   bash,
   readFile,
   writeFile,
+  sendFile,
 ];
 
 export function activeTools(): Tool[] {

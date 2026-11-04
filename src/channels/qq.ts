@@ -110,6 +110,14 @@ async function uploadImage(base: string, url: string): Promise<string> {
   return res.file_info;
 }
 
+/** QQ media types for /files: 1 image (png/jpg), 2 video (mp4), 3 voice (silk/mp3/wav), 4 any file. */
+function qqFileType(name: string): number {
+  if (/\.(png|jpe?g|gif)$/i.test(name)) return 1;
+  if (/\.mp4$/i.test(name)) return 2;
+  if (/\.(silk|mp3|wav)$/i.test(name)) return 3;
+  return 4;
+}
+
 /**
  * Claim the next passive-reply slot for this inbound message and return its
  * msg_seq. Fails fast (before calling QQ) when the reply window has passed or
@@ -345,6 +353,22 @@ export const qqAdapter: ChannelAdapter = {
         await qqApi(`/dms/${target}/messages`, { image: url, msg_id: msgId });
         break;
     }
+  },
+
+  // Uploads the bytes directly (file_data, base64, up to 5 MB), then sends msg_type 7.
+  async sendFile(message, file) {
+    const ctx = message.replyContext;
+    const { scope, target, msgId } = ctx;
+    if (scope !== "c2c" && scope !== "group") throw new Error("QQ guild channels can't receive files from bots");
+    const base = v2Base(scope, target!);
+    const res = await qqApi<{ file_info?: string }>(`${base}/files`, {
+      file_type: qqFileType(file.name),
+      file_name: file.name,
+      file_data: file.data.toString("base64"),
+      srv_send_msg: false,
+    });
+    if (!res.file_info) throw new Error(`QQ upload ${base}/files returned no file_info`);
+    await qqApi(`${base}/messages`, { msg_type: 7, media: { file_info: res.file_info }, msg_id: msgId, msg_seq: nextSeq(ctx) });
   },
 };
 
