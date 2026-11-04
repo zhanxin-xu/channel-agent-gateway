@@ -29,8 +29,8 @@ const historyKey = (m: InboundMessage) => `chat:${m.channel}:${m.conversationId}
 /** Guidance for an ambient run, appended after the history (see runAgent `note`). */
 const AMBIENT_NOTE =
   "（系统提示）这次没人 @ 你，你只是在旁边看群聊。默认不说话：不调用任何工具直接结束，就是不回复。" +
-  "这些时候要回：有人在接你刚说的话、回你、问你（比如你刚回过他，他接着问\"你没记住我吗\"），这跟 @ 你一样，必须回；" +
-  "有人在聊你、提到「大肥鱼」。这些时候可以插话：有个你能接得很妙的梗；有人发了张值得吐槽的图；有人问了个问题没人答而你确实知道。" +
+  "但如果这条明显是在跟你说话（接你的话、问你），就当成 @ 你，一定要回。" +
+  "其他时候，只在有人聊到你、有梗能接、有图值得吐槽、有问题没人答而你知道时插话。" +
   "插话要短，一两句或一张表情包。";
 
 const shortId = (m: InboundMessage) => `#${m.userId.slice(-6).toUpperCase() || "?"}`;
