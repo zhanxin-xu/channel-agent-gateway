@@ -132,10 +132,10 @@ function fakeResponses(body: any) {
       ? [textMessage("这句是收尾文字，不应该被发出去")]
       : [sendCall("call_a", "第一条"), sendCall("call_b", "第二条")];
   } else if (userText.startsWith("先挂")) {
-    // Hangs up first, then talks: everything in the step still runs, in order.
+    // Hangs up first, then talks and calculates: everything in the step still runs, in order.
     const end = { type: "function_call", id: "fc_e", call_id: "call_e", name: "end_turn", arguments: "{}" };
-    const search = { type: "function_call", id: "fc_w", call_id: "call_w", name: "web_search", arguments: '{"query":"x"}' };
-    output = [end, sendCall("call_1", "第一条"), search, sendCall("call_2", "第二条")];
+    const calc = { type: "function_call", id: "fc_c", call_id: "call_c", name: "calculate", arguments: '{"expression":"6*7"}' };
+    output = [end, sendCall("call_1", "第一条"), calc, sendCall("call_2", "第二条")];
   } else if (userText.startsWith("死循环")) {
     // Keeps calling tools until the last-step note shows up, then reports (and tries one more tool).
     const last = body.input.at(-1);
@@ -880,14 +880,25 @@ await test("end_turn: requests require a tool; talking alone doesn't end the tur
   assert.equal(llmRequests().length, 3);
 });
 
-await test("end_turn: position in the step doesn't matter; messages go out in order, other tools are skipped", async () => {
-  const res = await httpCall("先挂", "c-order");
-  assert.equal(res.reply, "第一条\n第二条");
+await test("end_turn: wherever it sits, every call in the step still runs, in order; then the turn ends", async () => {
+  const ran: string[] = [];
+  const log = console.log;
+  console.log = (...args: unknown[]) => {
+    const m = /^\[agent\] tool (\w+)/.exec(String(args[0]));
+    if (m) ran.push(m[1]!);
+    log(...args);
+  };
+  try {
+    const res = await httpCall("先挂", "c-order");
+    assert.equal(res.reply, "第一条\n第二条");
+  } finally {
+    console.log = log;
+  }
+  assert.deepEqual(ran, ["send_message", "calculate", "send_message"]);
   assert.equal(llmRequests().length, 1);
-  assert.ok(!calls.some((c) => c.url.endsWith("/v1/tools/search")), "web_search skipped when hanging up");
 });
 
-await test("step limit: the last step gets a wrap-up note; only talk tools run in it", async () => {
+await test("step limit: the last step gets a wrap-up note, then the turn ends", async () => {
   process.env.AGENT_MAX_STEPS = "3";
   try {
     const res = await httpCall("死循环", "c-steps");

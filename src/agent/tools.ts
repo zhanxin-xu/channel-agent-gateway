@@ -92,7 +92,7 @@ const endTurn: Tool = {
   description:
     "Hang up: end this turn. Call it once you've said everything, in the same step as your last " +
     "send_message so no extra round is needed. Don't call it while you still need to look something up " +
-    "or run something; other tools called in the same step are skipped.",
+    "or run something whose result you need to see: tools called in the same step still run, but you won't see their results.",
   parameters: { type: "object", properties: {} },
   run: () => "turn ended",
 };

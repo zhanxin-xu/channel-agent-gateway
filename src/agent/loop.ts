@@ -8,9 +8,10 @@
  * always acts through a tool. The loop ends when the model calls end_turn
  * (usually alongside its last message), or after the last step: when the step
  * budget runs out or the function is close to its time limit, a note asks the
- * model to wrap up with a message. In a step that ends the turn only the talk
- * tools run; if one of them fails (before the last step), the turn goes on so
- * the model can react.
+ * model to wrap up with a message. Every call in a step runs, in order, wherever
+ * end_turn sits among them (a remember or write_file next to the goodbye still
+ * happens); the turn ends after the step. If a message fails to send (before
+ * the last step), the turn goes on so the model can react.
  *
  * The request body is `{ model, ...OPENROUTER_EXTRA_BODY, instructions, input,
  * tools, tool_choice }`, so any provider-specific parameter (provider routing,
@@ -89,7 +90,7 @@ async function createResponse(body: Record<string, unknown>): Promise<ResponsesR
   return data;
 }
 
-/** Tools that deliver to the chat; the only ones still run in the step that ends the turn. */
+/** Tools that deliver to the chat; if one fails in the step that hangs up, the turn goes on. */
 const TALK_TOOLS = new Set(["send_message", "send_sticker", "send_file"]);
 
 /** Time kept for the last step (one model call plus sending) before the function's deadline. */
@@ -97,7 +98,7 @@ const LAST_STEP_RESERVE_MS = 90_000;
 
 function lastStepNote(reason: string, mustReply: boolean): string {
   return mustReply
-    ? `（系统提示）${reason}，这是最后一步：除了 send_message / send_sticker / send_file，这一步调用的其他工具都不会执行。` +
+    ? `（系统提示）${reason}，这是最后一步：这一步调用的工具还会执行，但你看不到结果了。` +
         "现在用 send_message 给对方发一条消息：说出已经得到的结果；没做完就说做到哪了、卡在哪、接下来怎么办。"
     : `（系统提示）${reason}，这是最后一步：其他工具不会再执行了。要插话就现在用 send_message 说，不说就直接结束。`;
 }
@@ -162,11 +163,6 @@ export async function runAgent(opts: {
     let sendFailed = false;
     for (const call of calls) {
       if (call.name === END_TURN) continue;
-      if (ending && !TALK_TOOLS.has(call.name)) {
-        console.log(`[agent] turn ending: skipped ${call.name}`);
-        results.set(call.call_id, "skipped: you were ending the turn");
-        continue;
-      }
       const result = await runTool(call.name, call.arguments, opts.ctx);
       console.log(`[agent] tool ${call.name}(${call.arguments}) -> ${result.slice(0, 200)}`);
       results.set(call.call_id, result);
