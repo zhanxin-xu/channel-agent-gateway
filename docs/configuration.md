@@ -76,3 +76,17 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 | `SANDBOX_COMMAND_TIMEOUT_SECONDS` | `60` | 单条 `bash` 命令的时间上限，临近函数时限时会自动缩短 |
 | `WORKER_SECRET` | 由其他密钥派生 | 接力请求 `/api/worker` 的签名密钥。不设置时用模型 Key 和渠道密钥派生；建议设成一个随机字符串 |
 | `STICKER_BASE_URL` | 梗鲸 CDN | 表情包图片的根地址，自托管时修改 |
+
+## 画图
+
+`generate_image` 调用 OpenRouter 的 Image API（`POST {IMAGE_BASE_URL}/images`）。配置了 `IMAGE_API_KEY` 并且沙盒可用时才启用（生成的图要存进工作区，再用 `send_file` 发出去）。变量名后半段和接口字段一致。
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `IMAGE_API_KEY` | 空 | 图像接口的 API Key，不设置时不启用画图。和模型 Key 是分开的，用同一个 OpenRouter Key 也可以 |
+| `IMAGE_BASE_URL` | `https://openrouter.ai/api/v1` | 请求发到 `{IMAGE_BASE_URL}/images` |
+| `IMAGE_MODEL` | `openai/gpt-image-2.5-sunburst` | 图像模型 |
+| `IMAGE_QUALITY` | `low` | 对应接口的 `quality`：`auto`、`low`、`medium`、`high`、`xhigh`、`max`。只能在这里设，模型不能自己调高，因为它决定价格 |
+| `IMAGE_RESOLUTION` | `1K` | 对应接口的 `resolution`：`512`、`768`、`1K`、`1.5K`、`2K`、`4K`。不管设成多少，结果都会再缩到 1920×1080 以内（横竖都算）再保存 |
+| `IMAGE_EXTRA_BODY` | 空 | JSON 对象，合并进请求体，例如 `{"provider":{"options":{"openai":{"moderation":"low"}}}}` |
+| `IMAGE_TIMEOUT_MS` | `180000` | 单次请求的超时时间（毫秒），临近函数时限时会自动缩短 |

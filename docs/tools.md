@@ -12,6 +12,7 @@
 | `web_search` / `web_fetch` | 联网搜索、抓取网页正文 | 配置了 `DEEPSEEK_API_KEY` |
 | `get_search_balance` | 查询 DeepSeek 余额 | 配置了 `DEEPSEEK_API_KEY` |
 | `get_llm_key_limit` | 查询模型 Key 的额度和用量（OpenRouter 专用） | 配置了 `OPENAI_RESPONSES_API_KEY` |
+| `generate_image` | 画图、按参考图改图 | 配置了 `IMAGE_API_KEY`，且沙盒可用 |
 | `remember` / `recall` / `forget` | 长期记忆 | 配置了 Upstash Vector |
 | `bash` / `read_file` / `write_file` / `send_file` / `save_attachment` | 沙盒工作区 | 部署在 Vercel 上，或本地有 `VERCEL_OIDC_TOKEN` |
 
@@ -39,6 +40,24 @@
 - **记录来源**：每条记忆都附带来源聊天、私聊还是群聊、谁说的、什么时候记的。`recall` 的结果会标出是否来自当前聊天，系统提示词要求模型不要把私聊里记下的事在群里说出来。
 - **不用自己接 embedding**：索引使用 Upstash 托管的 embedding 模型，服务直接发送原文（`/upsert-data`、`/query-data`）。
 - `/reset` 只清空聊天历史，不会清空记忆。
+
+## 画图
+
+`generate_image` 调用 OpenRouter 的 Image API（`POST /images`），默认模型 `openai/gpt-image-2.5-sunburst`，配置见[配置参考](configuration.md#画图)。实现见 [`src/tools/image.ts`](../src/tools/image.ts)。
+
+| 参数 | 说明 |
+|---|---|
+| `prompt` | 要画什么，或者要怎么改参考图 |
+| `input_references` | 参考图，最多 16 张。填**工作区里的路径**（相对路径在 `/workspace` 下，比如 `inbox/632-photo.jpg`），工具读出文件转成 data URL 再发给接口；也可以直接填 https 链接 |
+| `aspect_ratio` | `auto`、`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`16:9`、`9:16`、`21:9` |
+| `background` | `auto`、`transparent`、`opaque` |
+| `n` | 生成几张，1–10，默认 1 |
+
+`quality`（默认 `low`）和 `resolution`（默认 `1K`）只能在环境变量里设，模型不能改。
+
+- **结果**：存到 `/workspace/images/{时间}-{序号}.png`。超过 1920×1080（横竖都算）的会先缩小再保存。同时把一张 1024px 的预览给模型看，确认没问题后再用 `send_file` 发到聊天。
+- **修别人发的照片**：先用 `save_attachment` 把原图存进 `/workspace/inbox/`，再把这个路径填进 `input_references`。
+- **费用**：每次调用都按图收费，工具结果里会带上接口返回的 `cost`。和余额工具一样，群里任何人都能让机器人画图，介意的话不要配置 `IMAGE_API_KEY`。
 
 ## 沙盒工作区
 

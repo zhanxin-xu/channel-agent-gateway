@@ -32,6 +32,7 @@
 - **长期记忆**：基于 Upstash Vector 的语义检索，所有聊天共用一个记忆库，并记录每条记忆的来源。
 - **沙盒工作区**：在 Vercel Sandbox 里跑 bash、Python、Node，每个聊天有一块自己的持久盘，能读图、能把文件发回聊天。
 - **联网**：DeepSeek 搜索和网页抓取，另有余额和额度查询工具。
+- **画图、修图**：通过 OpenRouter 的 Image API 生成图片，可以把群友发来的照片当参考图来改，结果直接发回聊天。
 - **免费额度就能跑**：Vercel Hobby 加 Supabase、Upstash Vector 的免费版即可运行，资源消耗见[部署文档](docs/deployment.md#免费额度与资源消耗)。
 
 ## 工作原理

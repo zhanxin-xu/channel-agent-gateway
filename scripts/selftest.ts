@@ -186,6 +186,8 @@ function respond(body: any, output: unknown[]) {
 }
 
 let worker: ((request: Request) => Promise<Response>) | undefined;
+/** What the fake image API answers; set by the generate_image test. */
+let imageResponse: (() => Response) | undefined;
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const req = new Request(input, init);
@@ -199,6 +201,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   calls.push({ url, body, headers: req.headers });
 
   if (url === "https://gw.example.com/api/v1/responses") return fakeResponses(body);
+  if (url === "https://img.example.com/api/v1/images") return imageResponse!();
   if (url === "https://api.deepseek.com/v1/tools/search") {
     return Response.json({ results: [{ title: "DeepSeek V4", url: "https://example.com/v4", summary: "发布了", rerank_score: 2.1, authority: 3 }] });
   }
@@ -1210,6 +1213,55 @@ await test("save_attachment: downloads it itself when the sandbox can't; bad num
   } finally {
     delete process.env.SANDBOX_ENABLED;
   }
+});
+
+await test("generate_image: workspace references become data URLs; results capped at 1080p, saved and shown", async () => {
+  process.env.SANDBOX_ENABLED = "1";
+  process.env.IMAGE_API_KEY = "img-key";
+  process.env.IMAGE_BASE_URL = "https://img.example.com/api/v1";
+  const sharp = (await import("sharp")).default;
+  try {
+    const ws = fakeWorkspaces();
+    ws.files.set("/workspace/inbox/5-photo.jpg", await sharp({ create: { width: 40, height: 30, channels: 3, background: "#cc9966" } }).jpeg().toBuffer());
+    const big = await sharp({ create: { width: 2400, height: 1600, channels: 3, background: "#336699" } }).png().toBuffer();
+    imageResponse = () => Response.json({ created: 1, data: [{ b64_json: big.toString("base64"), media_type: "image/png" }], usage: { cost: 0.011 } });
+    assert.ok(activeTools().some((t) => t.name === "generate_image"));
+    const ctx = { ...noCtx, images: [] as import("../src/media/images.js").ImagePart[] };
+    const out = await runTool(
+      "generate_image",
+      JSON.stringify({ prompt: "暖金胶片氛围", input_references: ["inbox/5-photo.jpg", "https://example.com/style.png"], aspect_ratio: "3:2" }),
+      ctx,
+    );
+    const req = calls.find((c) => c.url === "https://img.example.com/api/v1/images")!;
+    assert.equal(req.headers.get("authorization"), "Bearer img-key");
+    assert.equal(req.body.model, "openai/gpt-image-2.5-sunburst");
+    assert.equal(req.body.quality, "low");
+    assert.equal(req.body.resolution, "1K");
+    assert.equal(req.body.aspect_ratio, "3:2");
+    assert.equal(req.body.n, undefined, "the API's default unless asked");
+    assert.equal(req.body.input_references[0].type, "image_url");
+    assert.match(req.body.input_references[0].image_url.url, /^data:image\/jpeg;base64,\/9j\//, "a workspace file sent as a data URL");
+    assert.deepEqual(req.body.input_references[1], { type: "image_url", image_url: { url: "https://example.com/style.png" } });
+    const saved = [...ws.files.keys()].find((k) => k.startsWith("/workspace/images/"))!;
+    assert.match(saved, /^\/workspace\/images\/\d{8}-\d{6}-1\.png$/);
+    const meta = await sharp(ws.files.get(saved)!).metadata();
+    assert.deepEqual([meta.width, meta.height], [1620, 1080], "2400x1600 scaled down to fit 1080p");
+    assert.match(out, /^generated 1 image\(s\), cost \$0\.011/);
+    assert.ok(out.includes(`${saved} (1620x1080, `), out);
+    assert.equal(ctx.images.length, 1, "shown to the model");
+    assert.match(ctx.images[0]!.image_url, /^data:image\/jpeg;base64,/);
+
+    assert.match(await runTool("generate_image", '{"prompt":"x","input_references":["nope.png"]}', ctx), /^Error: reference \/workspace\/nope.png not found/);
+    assert.match(await runTool("generate_image", '{"prompt":"x","n":11}', ctx), /^Error: n is 1 to 10/);
+    imageResponse = () => Response.json({ error: { message: "rejected by the safety system" } }, { status: 400 });
+    assert.match(await runTool("generate_image", '{"prompt":"x"}', ctx), /^Error: image API HTTP 400: .*safety system/);
+  } finally {
+    delete process.env.SANDBOX_ENABLED;
+    delete process.env.IMAGE_API_KEY;
+    delete process.env.IMAGE_BASE_URL;
+    imageResponse = undefined;
+  }
+  assert.ok(!activeTools().some((t) => t.name === "generate_image"), "off without IMAGE_API_KEY");
 });
 
 await test("send_file: missing file, size limit, and channels that can't send files", async () => {

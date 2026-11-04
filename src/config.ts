@@ -75,6 +75,37 @@ export const config = {
     },
   },
 
+  /**
+   * Image generation (generate_image): POST {baseUrl}/images, OpenRouter's Image API.
+   * Disabled when the key is empty. Names follow the API's fields.
+   */
+  image: {
+    get apiKey() {
+      return str("IMAGE_API_KEY");
+    },
+    get baseUrl() {
+      return str("IMAGE_BASE_URL", "https://openrouter.ai/api/v1").replace(/\/+$/, "");
+    },
+    get model() {
+      return str("IMAGE_MODEL", "openai/gpt-image-2.5-sunburst");
+    },
+    /** auto | low | medium | high | xhigh | max. Set here, not by the model: it drives the price. */
+    get quality() {
+      return str("IMAGE_QUALITY", "low");
+    },
+    /** 512 | 768 | 1K | 1.5K | 2K | 4K. Results are also scaled down to fit 1920×1080 (either way round). */
+    get resolution() {
+      return str("IMAGE_RESOLUTION", "1K");
+    },
+    /** Extra request body fields, e.g. {"provider":{"options":{"openai":{"moderation":"low"}}}}. */
+    get extraBody() {
+      return jsonObject("IMAGE_EXTRA_BODY");
+    },
+    get timeoutMs() {
+      return int("IMAGE_TIMEOUT_MS", 180_000);
+    },
+  },
+
   /** DeepSeek web search / fetch tools. Disabled when the key is empty. */
   deepseek: {
     get apiKey() {
