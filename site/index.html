@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Serverless Agent Gateway · 免服务器的多渠道 AI 机器人网关（QQ / Telegram / Vercel）</title>
+  <title>serverless-agent-gateway · 免服务器的多渠道 AI 机器人网关（QQ / Telegram / Vercel）</title>
   <meta name="description" content="不需要服务器的多渠道 AI 机器人网关：QQ、Telegram 或任意 HTTP 客户端通过 Webhook 把消息推进来，Vercel Functions 上的 agent loop 调用工具后从原渠道回复。只追加的事件流、一个聊天一个 agent，部署免费。">
-  <meta name="keywords" content="Serverless Agent Gateway, AI 机器人网关, QQ 机器人, QQ 群聊 AI, Telegram Bot, Vercel Functions, 免服务器 Agent, OpenRouter, Responses API, 大肥鱼, 开源 AI Agent">
+  <meta name="keywords" content="serverless-agent-gateway, Serverless Agent Gateway, AI 机器人网关, QQ 机器人, QQ 群聊 AI, Telegram Bot, Vercel Functions, 免服务器 Agent, OpenRouter, Responses API, 大肥鱼">
   <meta name="author" content="zhanxin-xu">
   <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
   <meta name="theme-color" content="#f3f6fb">
@@ -18,7 +18,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Serverless Agent Gateway">
   <meta property="og:locale" content="zh_CN">
-  <meta property="og:title" content="Serverless Agent Gateway · 免服务器的群聊全能 Agent 网关">
+  <meta property="og:title" content="serverless-agent-gateway · 免服务器的群聊全能 Agent 网关">
   <meta property="og:description" content="不需要服务器的多渠道 AI 机器人网关：QQ、Telegram、HTTP → 带工具调用的 agent loop → 回复。">
   <meta property="og:url" content="https://serverless-agent.cnday.cn/">
   <meta property="og:image" content="https://serverless-agent.cnday.cn/og.png">
@@ -29,12 +29,12 @@
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Serverless Agent Gateway · 免服务器的群聊全能 Agent 网关">
+  <meta name="twitter:title" content="serverless-agent-gateway · 免服务器的群聊全能 Agent 网关">
   <meta name="twitter:description" content="不需要服务器的多渠道 AI 机器人网关：QQ、Telegram、HTTP → 带工具调用的 agent loop → 回复。">
   <meta name="twitter:image" content="https://serverless-agent.cnday.cn/og.png">
   <meta name="twitter:image:alt" content="Serverless Agent Gateway - 免服务器的群聊全能 Agent 网关">
 
-  <link rel="stylesheet" href="styles.css?v=202611041850">
+  <link rel="stylesheet" href="styles.css?v=202611041855">
   <script>document.documentElement.classList.add("js")</script>
 
   <!-- Structured Data (JSON-LD) -->
@@ -79,129 +79,90 @@
   </script>
 </head>
 <body>
+  <div class="aurora" aria-hidden="true"></div>
+
   <header class="nav" id="nav">
-    <a class="brand" href="#top">
-      <img src="logo.png" alt="Serverless Agent Gateway" width="26" height="26" fetchpriority="high">
-      <span>Serverless Agent <em>Gateway</em></span>
-    </a>
+    <a class="brand" href="#top"><img src="logo.png" alt="Serverless Agent Gateway" width="26" height="26" fetchpriority="high"><span>Serverless Agent <em>Gateway</em></span></a>
     <nav aria-label="主导航">
-      <a href="#how">原理</a>
       <a href="#why">为什么</a>
       <a href="#features">特性</a>
       <a href="#start">开始</a>
-      <a href="https://github.com/zhanxin-xu/serverless-agent-gateway" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+      <a href="https://github.com/zhanxin-xu/serverless-agent-gateway">GitHub ↗</a>
     </nav>
   </header>
 
   <main id="top">
-    <!-- ───────── Hero + Live Stage ───────── -->
-    <section class="hero-section" aria-labelledby="h1">
-      <div class="hero-wrap">
-        <div class="hero-copy">
-          <p class="kicker rise" style="--i:0">开源 MIT · Vercel 零成本部署</p>
-          <h1 id="h1">
-            <span class="line"><span class="ln" style="--i:1">免服务器的群聊</span></span>
-            <span class="line"><span class="ln" style="--i:2">全能 Agent 网关</span></span>
-          </h1>
-          <p class="lead rise" style="--i:3">
+    <!-- ───────── The one take: hero → webhook → event log → tools → reply → statement ───────── -->
+    <section class="take" id="take" aria-label="工作原理">
+      <div class="stage" id="stage">
+
+        <!-- hero copy -->
+        <div class="hero" id="hero">
+          <p class="kicker split">开源 MIT · Vercel 零成本部署</p>
+          <h1 class="split" id="h1">免服务器的群聊<br>全能 Agent 网关</h1>
+          <p class="lead">
             跑在 Vercel Functions 上的多渠道 AI 机器人网关。接入 QQ、Telegram，基于只追加事件流驱动，
             自带联网搜索、跨群长期记忆、表情包斗图与 Linux 代码沙盒——有消息才运行，平时零开销。
           </p>
-          <div class="cta rise" style="--i:4">
+          <div class="cta">
             <a class="btn" href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fserverless-agent-gateway&amp;env=OPENROUTER_API_KEY&amp;envDescription=OpenRouter%20API%20key%20for%20the%20model">一键部署到 Vercel</a>
             <a class="link" href="https://github.com/zhanxin-xu/serverless-agent-gateway">查看源码 ↗</a>
           </div>
+          <div class="scroll-hint"><i></i>往下滚，看一条消息怎么走完全程</div>
         </div>
 
-        <!-- Choreographed visual stage (plays through 4 phases, no scroll-jacking) -->
-        <div class="stage" id="stage" data-phase="0" aria-label="一条群消息的处理过程演示">
-          <div class="orb" id="orb">
-            <img src="logo.png" alt="大肥鱼" width="148" height="148">
-            <i class="ring"></i>
-            <i class="ring r2"></i>
-          </div>
+        <!-- the persistent visual -->
+        <div class="orb" id="orb"><img src="logo.png" alt="大肥鱼" width="180" height="180" fetchpriority="high"><i class="ring"></i><i class="ring r2"></i></div>
 
-          <!-- Phase 0: Incoming webhook message -->
-          <div class="scene scene-0">
-            <div class="bubble in">
-              <span class="who">老王 · QQ 群聊</span>
-              <span class="at">@大肥鱼</span> 今天美元对人民币多少
-            </div>
-            <div class="ack-pill"><i></i>200 OK · Ed25519 验签通过 · 交由 waitUntil</div>
-          </div>
+        <div class="bubble in" id="b-in"><span class="who">老王</span><span class="at">@大肥鱼</span> 今天美元对人民币多少</div>
 
-          <!-- Phase 1: Append-only event stream -->
-          <div class="scene scene-1">
-            <ol class="log">
-              <li style="--k:0"><b>#40</b><em class="u">user/message</em><span>老王 @你：今天美元对人民币多少</span></li>
-              <li style="--k:1"><b>#41</b><em class="m">turn/start</em><span>第 12 轮 · 抢到会话租约锁</span></li>
-              <li style="--k:2"><b>#42</b><em class="s">developer/message</em><span>待处理：第 40 条（老王，@你）</span></li>
-              <li style="--k:3"><b>#43</b><em>assistant/message</em><span>思维链 ··· → web_search</span></li>
-              <li style="--k:4"><b>#44</b><em class="t">tool/call</em><span>web_search("美元 人民币 汇率")</span></li>
-              <li style="--k:5"><b>#45</b><em class="t">tool/result</em><span>1 USD ≈ 7.12 CNY</span></li>
-            </ol>
-          </div>
+        <ol class="log" id="log">
+          <li><b>#40</b><em class="u">user/message</em>老王 @你：今天美元对人民币多少</li>
+          <li><b>#41</b><em class="m">turn/start</em>第 12 轮 · 抢到锁</li>
+          <li><b>#42</b><em class="s">developer/message</em>待处理：第40条（老王，@你）</li>
+          <li><b>#43</b><em>assistant/message</em>思维链 ··· → web_search</li>
+          <li><b>#44</b><em class="t">tool/call</em>web_search("美元 人民币 汇率")</li>
+          <li><b>#45</b><em class="t">tool/result</em>1 USD ≈ 7.12 CNY</li>
+        </ol>
 
-          <!-- Phase 2: Tool-calling agent loop -->
-          <div class="scene scene-2">
-            <span class="tool t1">web_search("美元 人民币 汇率")</span>
-            <span class="tool t2">1 USD ≈ 7.12 CNY</span>
-            <span class="tool t3">send_message × 2</span>
-            <span class="tool t4">send_sticker · end_turn</span>
-          </div>
-
-          <!-- Phase 3: Multi-bubble & sticker replies -->
-          <div class="scene scene-3">
-            <div class="bubble out o1">7.12。这种东西自己不会搜吗</div>
-            <div class="bubble out o2">一次问完行不行</div>
-            <div class="bubble out sticker o3"><img src="logo.png" alt="大肥鱼表情包" width="68" height="68"></div>
-          </div>
+        <div class="tools" id="tools">
+          <span class="tool" style="--a:-90deg">web_search</span>
+          <span class="tool" style="--a:30deg">send_message</span>
+          <span class="tool" style="--a:150deg">end_turn</span>
         </div>
-      </div>
 
-      <!-- 4-step editorial timeline rail (clickable & synced with stage) -->
-      <div class="how-rail" id="how" data-reveal>
-        <button class="rail-step active" type="button" data-step="0">
-          <span class="rail-bar"><i></i></span>
-          <b>01</b>
-          <h3>Webhook 进来，立即回执</h3>
-          <p>验签、解析，马上返回 200。平台要求很快拿到回执，剩下的事交给 <code>waitUntil</code> 在后台继续。</p>
-        </button>
-        <button class="rail-step" type="button" data-step="1">
-          <span class="rail-bar"><i></i></span>
-          <b>02</b>
-          <h3>一切都写进事件流</h3>
-          <p>每个聊天一条只追加的事件流：消息、模型输出（含思维链）、工具调用和结果全部入库，模型输入从中推导。</p>
-        </button>
-        <button class="rail-step" type="button" data-step="2">
-          <span class="rail-bar"><i></i></span>
-          <b>03</b>
-          <h3>一个会用工具的 agent</h3>
-          <p>每一步：读事件流 → 调用模型 → 把输出和工具结果原样写回。同一个聊天同一时刻只有一个 agent 在跑。</p>
-        </button>
-        <button class="rail-step" type="button" data-step="3">
-          <span class="rail-bar"><i></i></span>
-          <b>04</b>
-          <h3>从原渠道回复，然后挂断</h3>
-          <p>分几条连发、回复指定消息、发表情包，说完调用 <code>end_turn</code>。回复过程中来的新消息，下一步就能看到。</p>
-        </button>
+        <div class="bubble out" id="b-out-1">7.12。这种东西自己不会搜吗</div>
+        <div class="bubble out" id="b-out-2">一次问完行不行</div>
+        <div class="bubble out sticker" id="b-out-3"><img src="logo.png" alt="表情包" width="72" height="72"></div>
+
+        <!-- captions -->
+        <div class="caps">
+          <div class="cap" id="cap-0"><b>01</b><h3>Webhook 进来，立即回执。</h3><p>验签、解析，马上返回 200。平台要求很快拿到回执，剩下的事交给 waitUntil 在后台继续。</p></div>
+          <div class="cap" id="cap-1"><b>02</b><h3>一切都写进事件流。</h3><p>每个聊天一条只追加的事件流：消息、模型输出（含思维链）、工具调用和结果全部入库，模型输入从中推导。</p></div>
+          <div class="cap" id="cap-2"><b>03</b><h3>一个会用工具的 agent。</h3><p>每一步：读事件流 → 调用模型 → 把输出和工具结果原样写回。同一个聊天同一时刻只有一个 agent 在跑。</p></div>
+          <div class="cap" id="cap-3"><b>04</b><h3>从原渠道回复，然后挂断。</h3><p>分几条连发、回复指定消息、发表情包，说完调用 end_turn。回复过程中来的新消息，下一步就能看到。</p></div>
+        </div>
+
+        <!-- closing statement of the take -->
+        <div class="statement" id="statement">
+          <h2>不需要服务器。</h2>
+          <p>部署在 Vercel Functions 上，有消息才运行，没人说话就不花钱。</p>
+        </div>
+
+        <!-- progress rail -->
+        <div class="rail" id="rail"><i></i><span>01</span><span>02</span><span>03</span><span>04</span><span>05</span></div>
       </div>
     </section>
 
     <!-- ───────── Why ───────── -->
-    <section class="why" id="why" aria-label="为什么不需要服务器">
-      <div class="statement-head" data-reveal>
-        <p class="kicker">WHY SERVERLESS</p>
-        <h2>不需要服务器。<br><span>有消息才运行，没人说话就不花钱。</span></h2>
-      </div>
-
+    <section class="why" id="why">
       <div class="cols">
         <div data-reveal>
-          <h3>按需唤醒与超时接力</h3>
-          <p>没有常驻进程。Webhook 触发一个函数，回执之后在后台跑 agent，临近 300 秒时限自动收尾或签名接力给新的函数实例，中途被杀也能从事件流恢复。</p>
+          <h3>有消息才运行</h3>
+          <p>没有常驻进程。Webhook 触发一个函数，回执之后在后台跑 agent，临近 300 秒时限自动收尾或接力给新的函数实例，中途被杀也能从事件流恢复。</p>
         </div>
         <div data-reveal style="--d:.1s">
-          <h3>部署与存储免费</h3>
+          <h3>部署免费</h3>
           <p>Vercel Hobby 加 Supabase 免费版就够：Supabase 不限 API 请求次数，Vercel Sandbox 超额只会暂停、不会扣费。不用买服务器，也不用维护。</p>
         </div>
         <div data-reveal style="--d:.2s">
@@ -209,18 +170,17 @@
           <p>免费的是部署和存储，模型调用按用量付给 OpenRouter 等供应商。事件流只追加、前缀稳定，线上一轮对话的缓存命中率在 97% 以上，这部分开销也压得很低。</p>
         </div>
       </div>
-
       <div class="figures" data-reveal>
         <div><b data-count="0">0</b><span>台需要维护的服务器</span></div>
-        <div><b data-count="300" data-suffix="s">300s</b><span>函数时限，到点自动接力</span></div>
-        <div><b data-count="97.8" data-suffix="%">97.8%</b><span>线上一轮对话的缓存命中率</span></div>
+        <div><b data-count="300" data-suffix="s">0</b><span>函数时限，到点自动接力</span></div>
+        <div><b data-count="97.8" data-suffix="%">0</b><span>线上一轮对话的缓存命中率</span></div>
         <div><b>¥0</b><span>部署与存储费用</span></div>
       </div>
     </section>
 
     <!-- ───────── Features ───────── -->
-    <section class="features" id="features" aria-labelledby="features-h2">
-      <h2 class="h2" id="features-h2" data-reveal>像一个真的群友，<br>而不是一个问答框。</h2>
+    <section class="features" id="features">
+      <h2 class="h2" data-reveal>像一个真的群友，<br>而不是一个问答框。</h2>
       <ol class="list">
         <li data-reveal><b>01</b><h3>多渠道接入</h3><p>QQ（单聊、群聊、频道，Ed25519 验签）、Telegram、通用 HTTP。所有渠道实现同一个适配器接口，新增渠道只需写一个对象。</p></li>
         <li data-reveal><b>02</b><h3>一个聊天一个 agent</h3><p>收消息和跑 agent 解耦。几个人同时发消息只会有一个 agent 回答；锁是会话行上的租约，每一次写库都要确认仍持有锁。</p></li>
@@ -235,45 +195,27 @@
     </section>
 
     <!-- ───────── Start ───────── -->
-    <section class="start" id="start" aria-labelledby="start-h2">
-      <h2 class="h2" id="start-h2" data-reveal>三步跑起来。</h2>
+    <section class="start" id="start">
+      <h2 class="h2" data-reveal>三步跑起来。</h2>
       <div class="steps">
-        <div data-reveal>
-          <b>01</b>
-          <h3>部署</h3>
-          <p>点击 Deploy 按钮，或者克隆仓库后在终端里：</p>
-          <pre><span>$</span> <code id="typed" data-text="npx vercel">npx vercel</code><button class="copy" type="button" data-copy="npx vercel">复制</button></pre>
-        </div>
-        <div data-reveal style="--d:.1s">
-          <b>02</b>
-          <h3>配置</h3>
-          <p>最少需要模型 Key、一个渠道的凭据，以及在 Vercel Marketplace 添加 Supabase 后执行一次 <code>schema.sql</code>。</p>
-          <pre><code>OPENROUTER_API_KEY
+        <div data-reveal><b>1</b><h3>部署</h3><p>点击 Deploy 按钮，或者克隆仓库后在终端里：</p><pre><span>$</span> <code id="typed" data-text="npx vercel">npx vercel</code><button class="copy" type="button" data-copy="npx vercel">复制</button></pre></div>
+        <div data-reveal style="--d:.1s"><b>2</b><h3>配置</h3><p>最少需要模型 Key、一个渠道的凭据，以及在 Vercel Marketplace 添加 Supabase 后执行一次 <code>schema.sql</code>。</p><pre><code>OPENROUTER_API_KEY
 QQ_APP_ID / QQ_APP_SECRET
-SUPABASE_URL / SUPABASE_SECRET_KEY</code></pre>
-        </div>
-        <div data-reveal style="--d:.2s">
-          <b>03</b>
-          <h3>检查与接入</h3>
-          <p>访问 <code>/api/health</code> 确认模型、渠道和工具都已就绪，再到平台后台填上回调地址。</p>
-          <pre><code>GET /api/health
-<i>{ "store": "supabase", "channels": { "qq": true } }</i></code></pre>
-        </div>
+SUPABASE_URL / SUPABASE_SECRET_KEY</code></pre></div>
+        <div data-reveal style="--d:.2s"><b>3</b><h3>检查与接入</h3><p>访问 <code>/api/health</code> 确认模型、渠道和工具都已就绪，再到平台后台填上回调地址。</p><pre><code>GET /api/health
+<i>{ "store": "supabase", "channels": { "qq": true } }</i></code></pre></div>
       </div>
       <p class="custom" data-reveal>想换成自己的机器人？人设在 <code>src/agent/system-prompt.ts</code>，工具在 <code>src/tools/</code>，渠道在 <code>src/channels/</code>。改一个文件就能换人设。</p>
     </section>
 
     <!-- ───────── Persona ───────── -->
-    <section class="persona" data-reveal aria-labelledby="persona-h2">
-      <div class="pin">
-        <img src="logo.png" alt="大肥鱼" width="140" height="140" loading="lazy" decoding="async">
-        <i></i>
-      </div>
+    <section class="persona" data-reveal>
+      <div class="pin"><img src="logo.png" alt="大肥鱼" width="140" height="140" loading="lazy" decoding="async"><i></i></div>
       <div>
         <p class="kicker">示例人设</p>
-        <h2 id="persona-h2">大肥鱼</h2>
+        <h2>大肥鱼</h2>
         <p>仓库自带的示例：一个嘴毒、爱抬杠的群友。会旁观、会插话、会发表情包，也会在该闭嘴的时候挂断。</p>
-        <p class="credit">表情包来自社区整理的 <a href="https://aigengtu.com" target="_blank" rel="noopener noreferrer">梗鲸 · 蓝色大肥鱼表情包档案馆</a>，仓库不包含任何图片文件。</p>
+        <p class="credit">表情包来自社区整理的 <a href="https://aigengtu.com">梗鲸 · 蓝色大肥鱼表情包档案馆</a>，仓库不包含任何图片文件。</p>
       </div>
     </section>
   </main>
@@ -290,6 +232,6 @@ SUPABASE_URL / SUPABASE_SECRET_KEY</code></pre>
     <p>MIT License · 只适用于代码，不适用于引用的表情包。</p>
   </footer>
 
-  <script src="main.js?v=202611041850" defer></script>
+  <script src="main.js?v=202611041855" defer></script>
 </body>
 </html>
