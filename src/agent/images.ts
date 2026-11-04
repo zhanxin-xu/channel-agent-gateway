@@ -1,14 +1,20 @@
 /**
- * Turn chat image attachments into Responses API `input_image` parts.
+ * Images in the event log. Each image is shrunk to what the model looks at
+ * (longest side 512px for chat images, `detail: "low"`; 1024px for files the
+ * agent opens) and stored once under its own key as a data URL; events hold
+ * only the keys. Every request then replays the exact same image, so the
+ * prompt cache stays valid, and the bot can still look at earlier pictures.
  *
- * Images are downloaded here and inlined as data URLs rather than passed by
- * URL: the model provider would have to fetch QQ's CDN from abroad, and QQ's
- * attachment links expire. `detail: "low"` keeps each image to a small, fixed
- * token cost, plenty for chat screenshots and memes.
+ * Images are downloaded here rather than passed to the model by URL: the
+ * provider would have to fetch QQ's CDN from abroad, and attachment links expire.
  */
+import sharp from "sharp";
+import type { Store } from "../store/index.js";
 
 const MAX_IMAGES = 4;
-const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
+/** Stored as-is when sharp can't decode it (still within one Redis value). */
+const MAX_RAW_BYTES = 1024 * 1024;
 const TIMEOUT_MS = 10_000;
 
 export interface ImagePart {
@@ -18,23 +24,62 @@ export interface ImagePart {
   detail: "low" | "auto";
 }
 
-export async function loadImageParts(images: Array<{ url: string; contentType: string }>): Promise<ImagePart[]> {
-  const parts = await Promise.all(
-    images.slice(0, MAX_IMAGES).map(async ({ url, contentType }): Promise<ImagePart | undefined> => {
+/** Shrink to a JPEG data URL (first frame of an animation); falls back to the original bytes. */
+export async function toDataUrl(bytes: Buffer, contentType: string, maxSide: number): Promise<string> {
+  try {
+    const jpeg = await sharp(bytes)
+      .rotate()
+      .resize(maxSide, maxSide, { fit: "inside", withoutEnlargement: true })
+      .flatten({ background: "#ffffff" })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+  } catch (err) {
+    if (bytes.byteLength > MAX_RAW_BYTES) throw err;
+    return `data:${contentType || "image/png"};base64,${bytes.toString("base64")}`;
+  }
+}
+
+/**
+ * Download a message's images and store them under `{prefix}:{i}`. Returns the
+ * keys of the ones stored and how many failed.
+ */
+export async function storeChatImages(
+  store: Store,
+  prefix: string,
+  images: Array<{ url: string; contentType: string }>,
+  ttlSeconds: number,
+): Promise<{ keys: string[]; failed: number }> {
+  const results = await Promise.all(
+    images.slice(0, MAX_IMAGES).map(async ({ url, contentType }, i) => {
       try {
         if (!url.startsWith("https://")) throw new Error("not https");
         const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const bytes = Buffer.from(await res.arrayBuffer());
-        if (bytes.byteLength > MAX_BYTES) throw new Error(`too large (${bytes.byteLength} bytes)`);
+        if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error(`too large (${bytes.byteLength} bytes)`);
         const header = res.headers.get("content-type")?.split(";")[0] ?? "";
-        const type = header.startsWith("image/") ? header : contentType;
-        return { type: "input_image", image_url: `data:${type};base64,${bytes.toString("base64")}`, detail: "low" };
+        const key = `${prefix}:${i}`;
+        await store.set(key, await toDataUrl(bytes, header.startsWith("image/") ? header : contentType, 512), ttlSeconds * 1000);
+        return key;
       } catch (err) {
         console.warn(`[images] could not load ${url.slice(0, 80)}: ${err instanceof Error ? err.message : String(err)}`);
         return undefined;
       }
     }),
   );
-  return parts.filter((p): p is ImagePart => Boolean(p));
+  const keys = results.filter((k): k is string => Boolean(k));
+  return { keys, failed: Math.min(images.length, MAX_IMAGES) - keys.length };
+}
+
+/** Store images a tool produced (data URLs) under `{prefix}:{i}`, shrunk to 1024px. */
+export async function storeToolImages(store: Store, prefix: string, parts: ImagePart[], ttlSeconds: number): Promise<string[]> {
+  return Promise.all(
+    parts.map(async (part, i) => {
+      const [, type = "image/png", data = ""] = /^data:([^;]+);base64,(.*)$/s.exec(part.image_url) ?? [];
+      const key = `${prefix}:${i}`;
+      await store.set(key, await toDataUrl(Buffer.from(data, "base64"), type, 1024), ttlSeconds * 1000);
+      return key;
+    }),
+  );
 }

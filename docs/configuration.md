@@ -33,13 +33,11 @@ OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"
 | `AGENT_TIMEZONE` | `Asia/Shanghai` | 消息头里时间使用的时区 |
 | `AGENT_MAX_STEPS` | `40` | 一轮最多调用模型的次数（旁观轮次也一样；不插话时只用 1 次） |
 | `AGENT_MAX_DURATION_SECONDS` | `300` | 函数的时间上限，要和 `vercel.json` 的 `maxDuration` 保持一致。剩余不到 90 秒时，下一步就是最后一步 |
-| `AGENT_HISTORY_LIMIT` | `100` | 每个私聊保留的消息条数 |
-| `AGENT_GROUP_HISTORY_LIMIT` | `200` | 每个群保留的消息条数（包括所有人的消息） |
-| `AGENT_HISTORY_TTL_DAYS` | `7` | 会话连续多少天没有新消息就整个删除 |
-| `AGENT_AMBIENT_INTERVAL_SECONDS` | `10` | 群里没 @ 的消息，每个群每隔多少秒最多触发一次模型；`0` 表示只记录、不触发 |
-| `AGENT_AMBIENT_CONTEXT` | `40` | 旁观时模型能看到的最近消息条数 |
+| `AGENT_CONTEXT_TOKENS` | `200000` | 上下文预算（token）。请求输入超过它的 80% 时，较早的对话会被压缩成摘要，见[上下文压缩](agent.md#上下文压缩) |
+| `AGENT_HISTORY_TTL_DAYS` | `7` | 会话连续多少天没有新消息，事件流和相关数据就整个删除 |
+| `AGENT_AMBIENT_INTERVAL_SECONDS` | `10` | 群里没 @ 的消息，每个群每隔多少秒最多唤起一次 agent；`0` 表示只记录、不唤起 |
 
-历史条数是防止资源耗尽的安全上限，不是给模型的上下文预算，详见 [Agent 与对话](agent.md#历史与缓存)。
+每次唤起，模型看到的都是这个聊天的完整事件流（超过预算的部分已压缩）。在很热闹的群里，旁观唤起的频率直接决定 Redis 命令数和模型费用，见[资源消耗](deployment.md#免费额度与资源消耗)。
 
 ## 渠道
 
@@ -73,4 +71,5 @@ Redis 未配置时退化为内存存储：单实例能用，但多实例之间�
 | `SANDBOX_ENABLED` | 自动 | 部署在 Vercel 上或本地有 `VERCEL_OIDC_TOKEN` 时自动启用；设为 `0` 关闭，设为 `1` 强制启用 |
 | `SANDBOX_REGION` | `iad1` | 沙盒和工作区盘所在的区域。盘建好以后区域不能再改，请在第一次使用前设置 |
 | `SANDBOX_COMMAND_TIMEOUT_SECONDS` | `60` | 单条 `bash` 命令的时间上限，临近函数时限时会自动缩短 |
+| `WORKER_SECRET` | 由其他密钥派生 | 接力请求 `/api/worker` 的签名密钥。不设置时用模型 Key 和渠道密钥派生，一般不用改 |
 | `STICKER_BASE_URL` | 梗鲸 CDN | 表情包图片的根地址，自托管时修改 |

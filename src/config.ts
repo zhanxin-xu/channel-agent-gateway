@@ -86,27 +86,19 @@ export const config = {
     },
     /**
      * The function's time limit; keep in sync with maxDuration in vercel.json.
-     * When less than 90s is left, the next step is the last (see runAgent).
+     * When less than 90s is left, the next step is the last (see runTurn).
      */
     get maxDurationSeconds() {
       return int("AGENT_MAX_DURATION_SECONDS", 300);
     },
     /**
-     * Messages kept per private conversation. A safety cap against unbounded
-     * growth, not a context budget: lists trim back to this once they pass it by 25%.
+     * The context budget in tokens. When a request's input passes 80% of it,
+     * the older part of the conversation is summarized (see compaction.ts).
      */
-    get historyLimit() {
-      return int("AGENT_HISTORY_LIMIT", 100);
+    get contextTokens() {
+      return int("AGENT_CONTEXT_TOKENS", 200_000);
     },
-    /** Messages kept per group (everyone's messages are recorded); what an @ run sees. */
-    get groupHistoryLimit() {
-      return int("AGENT_GROUP_HISTORY_LIMIT", 200);
-    },
-    /** How many recent messages an ambient run sees (they're frequent, so keep them cheap). */
-    get ambientContext() {
-      return int("AGENT_AMBIENT_CONTEXT", 40);
-    },
-    /** A conversation's history is deleted after this many days without messages. */
+    /** A conversation's event log is deleted after this many days without messages. */
     get historyTtlDays() {
       return int("AGENT_HISTORY_TTL_DAYS", 7);
     },
@@ -174,6 +166,14 @@ export const config = {
     get token() {
       return str("UPSTASH_VECTOR_REST_TOKEN");
     },
+  },
+
+  /**
+   * Signs the hand-off request a run sends to /api/worker when it runs out of
+   * time with messages still waiting. Derived from the other secrets when unset.
+   */
+  get workerSecret() {
+    return str("WORKER_SECRET") || str("OPENROUTER_API_KEY") + str("QQ_APP_SECRET") + str("TELEGRAM_BOT_TOKEN");
   },
 
   /**

@@ -2,34 +2,19 @@
  * Webhook entry shared by the Vercel function and the local dev server.
  *
  * Async channels (QQ, Telegram) must be ACKed quickly or the platform
- * retries, so the agent runs inside `waitUntil` after the ACK is returned.
- * Sync channels (no `send`) wait for the agent and return the reply.
+ * retries, so logging the message and running the agent happen inside
+ * `waitUntil` after the ACK is returned. Sync channels (no `send`) wait for
+ * the agent and return its replies.
  */
 import { waitUntil } from "@vercel/functions";
 import { handleMessage } from "./agent/handle.js";
 import { channels } from "./channels/index.js";
-import { json, type ChannelAdapter, type InboundMessage, type OutgoingFile } from "./channels/types.js";
+import { json, type ChannelAdapter, type InboundMessage } from "./channels/types.js";
 
-async function process(adapter: ChannelAdapter, message: InboundMessage): Promise<void> {
+async function process(adapter: ChannelAdapter, message: InboundMessage, origin: string): Promise<void> {
   try {
-    await adapter.typing?.(message).catch(() => {});
-    // Failures are logged and rethrown so the model sees them as a tool error.
-    const logged =
-      <A extends unknown[]>(fn: (...args: A) => Promise<void>) =>
-      async (...args: A) => {
-        try {
-          await fn(...args);
-        } catch (err) {
-          console.error(`[webhook] ${adapter.name} delivery failed`, err);
-          throw err;
-        }
-      };
-    const { sendImage, sendFile } = adapter;
-    await handleMessage(adapter, message, {
-      text: logged((text: string) => adapter.send!(message, text)),
-      image: sendImage ? logged((url: string) => sendImage.call(adapter, message, url)) : undefined,
-      file: sendFile ? logged((file: OutgoingFile) => sendFile.call(adapter, message, file)) : undefined,
-    });
+    if (message.mode !== "ambient") await adapter.typing?.(message).catch(() => {});
+    await handleMessage(adapter, message, { origin });
   } catch (err) {
     console.error(`[webhook] ${adapter.name} processing failed`, err);
   }
@@ -52,25 +37,22 @@ export async function handleWebhook(request: Request, channelName: string): Prom
   );
   const result = await adapter.receive(request, rawBody);
   if (result.kind === "respond") return result.response;
-  result.message.origin = publicOrigin(request);
+  const origin = publicOrigin(request);
 
   if (adapter.send) {
-    waitUntil(process(adapter, result.message));
+    waitUntil(process(adapter, result.message, origin));
     return result.ack ?? json({ ok: true });
   }
 
-  // Sync channel: collect the messages and return them in the response.
+  // Sync channel: collect the replies and return them in the response.
+  // "busy": another request is running this conversation; it will answer this message too.
   const messages: string[] = [];
-  const handled = await handleMessage(adapter, result.message, {
-    text: async (text) => {
-      messages.push(text);
-    },
-  });
-  return json({ reply: handled ? messages.join("\n") : null, messages });
+  const outcome = await handleMessage(adapter, result.message, { origin, collect: messages });
+  return json({ reply: outcome === "handled" ? messages.join("\n") : null, messages, ...(outcome === "busy" ? { queued: true } : {}) });
 }
 
 /** The origin the caller used to reach us (Vercel puts the public host in x-forwarded-host). */
-function publicOrigin(request: Request): string {
+export function publicOrigin(request: Request): string {
   const url = new URL(request.url);
   const host = request.headers.get("x-forwarded-host") ?? url.host;
   const proto = request.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "");

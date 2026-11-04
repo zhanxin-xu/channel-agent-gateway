@@ -5,22 +5,25 @@
 import { llmKeyLimit, searchBalance } from "./account-tools.js";
 import type { OutgoingFile } from "../channels/types.js";
 import type { ImagePart } from "./images.js";
-import { MAX_MESSAGES_PER_TURN } from "./limits.js";
+import { MAX_MESSAGES_PER_TURN, REPLY_TO, replyTo } from "./limits.js";
 import { forget, recall, remember } from "./memory.js";
 import { bash, readFile, sendFile, writeFile } from "./sandbox.js";
 import { isStickerName, STICKER_NAMES, STICKERS, type StickerName } from "./stickers.js";
 import { webFetch, webSearch } from "./web-tools.js";
 
-/** Per-message context handed to tools. */
+/** Per-run context handed to tools (one agent run may hold several turns). */
 export interface ToolContext {
-  /** Messages already delivered to the chat this turn (stickers as "[表情包：name]"). */
+  /** Messages delivered this turn (stickers as "[表情包：name]", files as "[文件：name]"). */
   sent: string[];
-  /** Deliver one chat message now (and record it in `sent`). */
-  send(text: string): Promise<void>;
-  /** Deliver one sticker now (and record it in `sent`). */
-  sendSticker(name: StickerName): Promise<void>;
-  /** Deliver one file now (and record it in `sent`); throws when the channel can't send files. */
-  sendFile(file: OutgoingFile): Promise<void>;
+  /**
+   * Deliver one message now as a reply to message `replyTo` (its 第N条 number;
+   * default: the turn's main message). Returns a status line for the model.
+   * Throws when that message can't take more replies (QQ: 5 each).
+   */
+  send(text: string, replyTo?: number): Promise<string>;
+  sendSticker(name: StickerName, replyTo?: number): Promise<string>;
+  /** Throws when the channel can't send files. */
+  sendFile(file: OutgoingFile, replyTo?: number): Promise<string>;
   /** When the function will be killed (epoch ms). Long-running tools stop early enough for a reply. */
   deadline: number;
   /** The chat this run belongs to: memory metadata and the per-chat workspace. */
@@ -44,43 +47,34 @@ const sendMessage: Tool = {
   name: "send_message",
   description:
     "Send one chat message right now. This is how your words reach the chat: each call is a separate message, " +
-    `so call it several times to send a few short messages in a row (max ${MAX_MESSAGES_PER_TURN} per turn). ` +
+    "so call it several times to send a few short messages in a row. " +
     "Sending doesn't end your turn: when you're done, call end_turn, ideally in the same step as your last message.",
   parameters: {
     type: "object",
-    properties: { text: { type: "string", description: "The message text (plain text)." } },
+    properties: { text: { type: "string", description: "The message text (plain text)." }, reply_to: REPLY_TO },
     required: ["text"],
   },
   async run(args, ctx) {
     const text = String(args.text ?? "").trim();
     if (!text) throw new Error("text is empty");
-    if (ctx.sent.length >= MAX_MESSAGES_PER_TURN) {
-      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; call end_turn now`);
-    }
-    await ctx.send(text);
-    return `sent (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, call end_turn (in the same step as your last message).`;
+    return `${await ctx.send(text, replyTo(args))}. If you're done, call end_turn (in the same step as your last message).`;
   },
 };
 
 const sendSticker: Tool = {
   name: "send_sticker",
   description:
-    "Send one 大肥鱼 sticker (an image) right now, as its own message. It counts toward the same " +
-    `${MAX_MESSAGES_PER_TURN}-messages-per-turn limit as send_message. Pick by mood:\n` +
+    "Send one 大肥鱼 sticker (an image) right now, as its own message (it counts as a reply like send_message). Pick by mood:\n" +
     STICKER_NAMES.map((n) => `- ${n}：${STICKERS[n].when}`).join("\n"),
   parameters: {
     type: "object",
-    properties: { name: { type: "string", enum: STICKER_NAMES, description: "Sticker name." } },
+    properties: { name: { type: "string", enum: STICKER_NAMES, description: "Sticker name." }, reply_to: REPLY_TO },
     required: ["name"],
   },
   async run(args, ctx) {
     const name = String(args.name ?? "");
     if (!isStickerName(name)) throw new Error(`unknown sticker "${name}"`);
-    if (ctx.sent.length >= MAX_MESSAGES_PER_TURN) {
-      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; call end_turn now`);
-    }
-    await ctx.sendSticker(name);
-    return `sticker sent (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, call end_turn (in the same step as your last message).`;
+    return `${await ctx.sendSticker(name, replyTo(args))}. If you're done, call end_turn (in the same step as your last message).`;
   },
 };
 

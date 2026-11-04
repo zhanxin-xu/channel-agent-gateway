@@ -8,8 +8,8 @@ export interface InboundMessage {
   chatType: "private" | "group";
   /**
    * "direct" (default): addressed to the bot (DM or @), always answered.
-   * "ambient": an ordinary group message; recorded in history, and only
-   * occasionally (sampled) shown to the agent, which may stay silent.
+   * "ambient": an ordinary group message; logged, and wakes the agent at most
+   * once per sampling interval (it may stay silent).
    */
   mode?: "direct" | "ambient";
   userId: string;
@@ -17,12 +17,14 @@ export interface InboundMessage {
   senderName?: string;
   /** Message text. Voice/video/file attachments appear here as "[语音] …", "[视频]", "[文件：…]". */
   text: string;
-  /** Images attached to the message (the agent sees them on direct runs). */
+  /** Images attached to the message (stored with it and shown to the model). */
   images?: Array<{ url: string; contentType: string }>;
-  /** Channel-specific data the adapter needs to reply (msg_id, chat_id, …). */
+  /**
+   * Channel-specific data the adapter needs to reply (msg_id, chat_id, …). Kept
+   * with the message in the event log; adapters may update it while replying
+   * (QQ's msg_seq) and the update is saved for the next reply.
+   */
   replyContext: Record<string, string>;
-  /** Public origin of this deployment (set by the webhook route), for URLs to our static files. */
-  origin?: string;
 }
 
 export type ReceiveResult =

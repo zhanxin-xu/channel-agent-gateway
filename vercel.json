@@ -1,6 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/webhook/[channel].ts": { "maxDuration": 300 }
+    "api/webhook/[channel].ts": {
+      "maxDuration": 300
+    },
+    "api/worker.ts": {
+      "maxDuration": 300
+    }
   }
 }

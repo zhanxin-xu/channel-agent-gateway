@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { config } from "../config.js";
 import type { ImagePart } from "./images.js";
-import { MAX_MESSAGES_PER_TURN } from "./limits.js";
+import { REPLY_TO, replyTo } from "./limits.js";
 import type { Tool, ToolContext } from "./tools.js";
 
 export const WORKDIR = "/workspace";
@@ -245,26 +245,23 @@ export const readFile: Tool = {
 export const sendFile: Tool = {
   name: "send_file",
   description:
-    "Send a file from your workspace to the chat, as its own message (counts toward the same " +
-    `${MAX_MESSAGES_PER_TURN}-messages-per-turn limit as send_message). png/jpg/gif show as pictures, mp4 as video, ` +
+    "Send a file from your workspace to the chat, as its own message (it counts as a reply like send_message). " +
+    "png/jpg/gif show as pictures, mp4 as video, " +
     "mp3/wav/silk as voice, anything else as a file attachment. At most 5 MB.",
   parameters: {
     type: "object",
-    properties: { path: { type: "string", description: `File path (relative paths are under ${WORKDIR}).` } },
+    properties: { path: { type: "string", description: `File path (relative paths are under ${WORKDIR}).` }, reply_to: REPLY_TO },
     required: ["path"],
   },
   enabled,
   async run(args, ctx) {
-    if (ctx.sent.length >= MAX_MESSAGES_PER_TURN) {
-      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; call end_turn now`);
-    }
     const file = resolvePath(String(args.path ?? ""));
     const data = await (await workspaceFor(ctx)).read(file);
     if (!data) throw new Error(`${file} not found`);
     if (data.byteLength > MAX_SEND_BYTES) {
       throw new Error(`${file} is ${data.byteLength} bytes, over the 5 MB limit; compress or split it`);
     }
-    await ctx.sendFile({ name: path.posix.basename(file), data });
-    return `sent ${file} (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, call end_turn (in the same step as your last message).`;
+    const status = await ctx.sendFile({ name: path.posix.basename(file), data }, replyTo(args));
+    return `${status}. If you're done, call end_turn (in the same step as your last message).`;
   },
 };

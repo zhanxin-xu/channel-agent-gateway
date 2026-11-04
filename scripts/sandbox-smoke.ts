@@ -13,9 +13,9 @@ process.env.SANDBOX_ENABLED = "1";
 const chat = { key: "smoke:test", scene: "私聊" as const, sender: "#SMOKE" };
 const newCtx = (): ToolContext => ({
   sent: [],
-  send: async () => {},
-  sendSticker: async () => {},
-  sendFile: async () => {},
+  send: async () => "sent",
+  sendSticker: async () => "sent",
+  sendFile: async () => "sent",
   deadline: Date.now() + 300_000,
   chat,
   images: [],
