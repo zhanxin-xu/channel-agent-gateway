@@ -19,21 +19,6 @@ for (const node of $$(".split")) {
   }));
 }
 
-/* ── loader: a short count, then the curtain lifts and the hero text rises ── */
-const loader = $("#loader");
-if (reduced) { loader.remove(); document.documentElement.classList.add("ready"); }
-else {
-  const n = $("#loader-n"), t0 = performance.now(), dur = 700;
-  const finish = () => { loader.classList.add("done"); document.documentElement.classList.add("ready"); setTimeout(() => loader.remove(), 1100); };
-  const tick = (t) => {
-    const p = easeOut(clamp((t - t0) / dur));
-    n.textContent = String(Math.round(p * 100)).padStart(3, "0");
-    if (p < 1) requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-  setTimeout(finish, dur + 60); // timer, not rAF: background tabs throttle rAF but must not keep the curtain down
-}
-
 /* ── smooth scroll ── */
 let lenis = null;
 if (window.Lenis && !reduced) {
@@ -104,7 +89,7 @@ const T = {               // timeline (fractions of the take)
 let mobile = false, R = 90, offIn = { x: 0, y: 0 }, offOuts = [], orbHero = { x: 0, y: 0 };
 
 function measure() {
-  mobile = innerWidth <= 760;
+  mobile = innerWidth <= 900;
   R = Math.round(clamp(innerWidth * 0.11, 56, 96));
   document.documentElement.style.setProperty("--R", R + "px");
   // Rest positions are laid out by CSS; the travel offsets are measured with transforms cleared.

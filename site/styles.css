@@ -36,11 +36,6 @@ code { font-family: var(--mono); font-size: 0.86em; background: var(--accent-sof
 .aurora i:nth-child(3) { width: 44vw; height: 44vw; left: 28vw; bottom: -30vw; background: #dedcff; opacity: 0.6; animation-delay: -20s; animation-duration: 40s; }
 @keyframes aurora { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(7vw, 5vw, 0) scale(1.12); } }
 
-/* ───────── loader ───────── */
-.loader { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-items: end start; padding: 28px 32px; font-family: var(--mono); font-size: clamp(48px, 9vw, 120px); letter-spacing: -0.04em; color: var(--fg); transition: transform 1s var(--ease), opacity 0.6s; }
-.loader.done { transform: translateY(-100%); }
-html:not(.js) .loader { display: none; }
-
 /* ───────── nav ───────── */
 .nav { position: fixed; inset: 0 0 auto; z-index: 20; display: flex; align-items: center; justify-content: space-between; padding: 18px clamp(16px, 3vw, 32px); mix-blend-mode: multiply; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500; letter-spacing: -0.01em; }
@@ -70,9 +65,9 @@ html:not(.js) .loader { display: none; }
 .scroll-hint i::after { content: ""; position: absolute; inset: 0; background: var(--fg); transform: translateX(-100%); animation: hint 2.4s var(--ease) infinite; }
 @keyframes hint { 40% { transform: translateX(0); } 100% { transform: translateX(100%); } }
 
-/* split text: each line rises out of its own clip (pure CSS, timed to follow the loader) */
+/* split text: each line rises out of its own clip */
 .split .line { display: block; overflow: hidden; padding-bottom: 0.08em; margin-bottom: -0.08em; }
-html.js .split .ln { display: block; animation: rise 1.1s var(--ease) both; animation-delay: calc(var(--i) * 110ms + 0.85s); }
+html.js .split .ln { display: block; animation: rise 1.1s var(--ease) both; animation-delay: calc(var(--i) * 110ms + 0.15s); }
 @keyframes rise { from { transform: translateY(110%); } to { transform: none; } }
 
 /* orb */
@@ -122,7 +117,7 @@ html.js .split .ln { display: block; animation: rise 1.1s var(--ease) both; anim
 .rail i::after { content: ""; position: absolute; left: -2px; top: calc(var(--p, 0) * 100%); width: 5px; height: 5px; border-radius: 50%; background: var(--fg); transform: translateY(-50%); }
 .rail span { transition: color 0.3s; } .rail span.on { color: var(--fg); }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .hero { left: 20px; right: 20px; top: 20%; transform: none; max-width: none; }
   .hero h1 { font-size: clamp(32px, 9vw, 44px); }
   .cta { gap: 16px; margin-bottom: 0; }
@@ -200,7 +195,6 @@ footer { width: min(1180px, 100% - 40px); margin: 0 auto; padding: 28px 0 56px; 
 /* ───────── reduced motion: the take becomes a plain stack ───────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
-  .loader { display: none; }
   .take { height: auto; }
   .stage { position: static; height: auto; overflow: visible; padding: 140px 20px 40px; display: flex; flex-direction: column; gap: 40px; width: min(1180px, 100%); margin: 0 auto; }
   .stage > * { position: static; transform: none !important; opacity: 1 !important; margin: 0; }
