@@ -45,7 +45,7 @@ const sendMessage: Tool = {
   description:
     "Send one chat message right now. This is how your words reach the chat: each call is a separate message, " +
     `so call it several times to send a few short messages in a row (max ${MAX_MESSAGES_PER_TURN} per turn). ` +
-    "When you're done talking, end your turn without writing any other text.",
+    "Sending doesn't end your turn: when you're done, call end_turn, ideally in the same step as your last message.",
   parameters: {
     type: "object",
     properties: { text: { type: "string", description: "The message text (plain text)." } },
@@ -55,10 +55,10 @@ const sendMessage: Tool = {
     const text = String(args.text ?? "").trim();
     if (!text) throw new Error("text is empty");
     if (ctx.sent.length >= MAX_MESSAGES_PER_TURN) {
-      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; end your turn now`);
+      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; call end_turn now`);
     }
     await ctx.send(text);
-    return `sent (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, end your turn without writing any text.`;
+    return `sent (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, call end_turn (in the same step as your last message).`;
   },
 };
 
@@ -77,11 +77,24 @@ const sendSticker: Tool = {
     const name = String(args.name ?? "");
     if (!isStickerName(name)) throw new Error(`unknown sticker "${name}"`);
     if (ctx.sent.length >= MAX_MESSAGES_PER_TURN) {
-      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; end your turn now`);
+      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; call end_turn now`);
     }
     await ctx.sendSticker(name);
-    return `sticker sent (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, end your turn without writing any text.`;
+    return `sticker sent (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, call end_turn (in the same step as your last message).`;
   },
+};
+
+/** The model's way to hang up; the loop ends the turn when it sees this call (see runAgent). */
+export const END_TURN = "end_turn";
+
+const endTurn: Tool = {
+  name: END_TURN,
+  description:
+    "Hang up: end this turn. Call it once you've said everything, in the same step as your last " +
+    "send_message so no extra round is needed. Don't call it while you still need to look something up " +
+    "or run something; other tools called in the same step are skipped.",
+  parameters: { type: "object", properties: {} },
+  run: () => "turn ended",
 };
 
 const getCurrentTime: Tool = {
@@ -120,6 +133,7 @@ const calculate: Tool = {
 const tools: Tool[] = [
   sendMessage,
   sendSticker,
+  endTurn,
   getCurrentTime,
   calculate,
   webSearch,

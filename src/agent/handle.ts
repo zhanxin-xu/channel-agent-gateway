@@ -28,7 +28,7 @@ const historyKey = (m: InboundMessage) => `chat:${m.channel}:${m.conversationId}
 
 /** Guidance for an ambient run, appended after the history (see runAgent `note`). */
 const AMBIENT_NOTE =
-  "（系统提示）这次没人 @ 你，你只是在旁边看群聊。默认不说话：不调用任何工具直接结束，就是不回复。" +
+  "（系统提示）这次没人 @ 你，你只是在旁边看群聊。默认不说话：只调用 end_turn，就是不回复。" +
   "但如果这条明显是在跟你说话（接你的话、问你），就当成 @ 你，一定要回。" +
   "其他时候，只在有人聊到你、有梗能接、有图值得吐槽、有问题没人答而你知道时插话。" +
   "插话要短，一两句或一张表情包。";

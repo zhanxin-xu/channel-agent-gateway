@@ -240,7 +240,7 @@ export const sendFile: Tool = {
   enabled,
   async run(args, ctx) {
     if (ctx.sent.length >= MAX_MESSAGES_PER_TURN) {
-      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; end your turn now`);
+      throw new Error(`already sent ${MAX_MESSAGES_PER_TURN} messages this turn, the limit; call end_turn now`);
     }
     const file = resolvePath(String(args.path ?? ""));
     const data = await (await workspaceFor(ctx)).read(file);
@@ -249,6 +249,6 @@ export const sendFile: Tool = {
       throw new Error(`${file} is ${data.byteLength} bytes, over the 5 MB limit; compress or split it`);
     }
     await ctx.sendFile({ name: path.posix.basename(file), data });
-    return `sent ${file} (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, end your turn without writing any text.`;
+    return `sent ${file} (${ctx.sent.length}/${MAX_MESSAGES_PER_TURN}). If you're done, call end_turn (in the same step as your last message).`;
   },
 };

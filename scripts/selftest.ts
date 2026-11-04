@@ -154,6 +154,10 @@ function fakeResponses(body: any) {
         : { type: "function_call", id: "fc_1", call_id: "call_1", name: "calculate", arguments: '{"expression":"(2+3)*4"}' },
     ];
   }
+  const TALK = ["send_message", "send_sticker", "send_file"];
+  if (output.length && output.every((o: any) => o.type === "function_call" && TALK.includes(o.name))) {
+    output = [...output, { type: "function_call", id: "fc_end", call_id: `call_end${llmCalls}`, name: "end_turn", arguments: "{}" }];
+  }
   return Response.json({
     id: "resp_1",
     object: "response",
@@ -297,12 +301,12 @@ await test("config: extra body / base url parsing", () => {
 await test("DeepSeek-backed tools only enabled with DEEPSEEK_API_KEY", () => {
   assert.deepEqual(
     activeTools().map((t) => t.name),
-    ["send_message", "send_sticker", "get_current_time", "calculate", "web_search", "web_fetch", "get_search_balance", "get_llm_key_limit"],
+    ["send_message", "send_sticker", "end_turn", "get_current_time", "calculate", "web_search", "web_fetch", "get_search_balance", "get_llm_key_limit"],
   );
   process.env.DEEPSEEK_API_KEY = "";
   assert.deepEqual(
     activeTools().map((t) => t.name),
-    ["send_message", "send_sticker", "get_current_time", "calculate", "get_llm_key_limit"],
+    ["send_message", "send_sticker", "end_turn", "get_current_time", "calculate", "get_llm_key_limit"],
   );
   process.env.DEEPSEEK_API_KEY = "ds-key";
 });
@@ -851,11 +855,24 @@ await test("send_file: missing file, size limit, and channels that can't send fi
     assert.match(await runTool("send_file", '{"path":"nope.txt"}', noCtx), /^Error: \/workspace\/nope.txt not found/);
     assert.match(await runTool("send_file", '{"path":"big.bin"}', noCtx), /over the 5 MB limit/);
     ws.files.set("/workspace/a.txt", Buffer.from("hi"));
+    // The send fails in the step that hangs up, so the turn goes on and the model sees the error.
     const res = await httpCall("发文件 a.txt", "c-file");
-    assert.match(res.reply, /^结果：Error: the http channel can't send files/);
+    assert.match(res.reply, /^结果：not ended: a message failed to send/);
+    const outputs = llmRequests()[1]!.body.input.filter((i: any) => i.type === "function_call_output");
+    assert.match(outputs.find((o: any) => o.call_id === "call_f").output, /^Error: the http channel can't send files/);
   } finally {
     delete process.env.SANDBOX_ENABLED;
   }
+});
+
+await test("end_turn: requests require a tool; talking alone doesn't end the turn, end_turn does", async () => {
+  // "搜索" makes the fake model call web_search, then answer: without end_turn the loop keeps going.
+  const res = await httpCall("搜索 天气", "c-end");
+  assert.match(res.reply, /^答案是 /);
+  assert.ok(llmRequests().every((r) => r.body.tool_choice === "required"));
+  // "连发" sends two messages and hangs up in the same step: one model call.
+  await httpCall("连发", "c-end2");
+  assert.equal(llmRequests().length, 3);
 });
 
 await test("step limit: the last step gets a wrap-up note; only talk tools run in it", async () => {
@@ -866,7 +883,7 @@ await test("step limit: the last step gets a wrap-up note; only talk tools run i
     const reqs = llmRequests();
     assert.equal(reqs.length, 3);
     const last = reqs[2]!.body;
-    assert.equal(last.tool_choice, "auto", "the request itself is unchanged");
+    assert.equal(last.tool_choice, reqs[0]!.body.tool_choice, "the request itself is unchanged");
     assert.equal(last.tools.length, reqs[0]!.body.tools.length);
     assert.match(last.input.at(-1).content, /^（系统提示）步数用完了，这是最后一步.*send_message/);
     assert.equal(last.input.filter((i: any) => i.type === "function_call_output").length, 2);
