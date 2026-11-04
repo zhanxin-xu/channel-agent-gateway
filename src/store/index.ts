@@ -13,8 +13,6 @@ import { config } from "../config.js";
 export interface Store {
   /** Append to a list and refresh its TTL (skipped when `ttlSeconds` <= 0). Returns the new length. */
   rpush(key: string, values: string[], ttlSeconds: number): Promise<number>;
-  /** Put items at the front of a list, keeping their order (one-time history migration). */
-  lpushOrdered(key: string, values: string[], ttlSeconds: number): Promise<void>;
   /** Items `start`..`stop` (inclusive, negative counts from the end). */
   lrange(key: string, start: number, stop: number): Promise<string[]>;
   /** Drop the first `count` items of a list. */
@@ -52,9 +50,6 @@ export class MemoryStore implements Store {
     return value.length;
   }
 
-  async lpushOrdered(key: string, values: string[], ttlSeconds: number) {
-    this.data.set(key, { value: [...values, ...this.list(key)], expiresAt: Date.now() + ttlSeconds * 1000 });
-  }
 
   async lrange(key: string, start: number, stop: number) {
     const list = this.list(key);
@@ -132,10 +127,6 @@ export class UpstashStore implements Store {
     return Number(length);
   }
 
-  async lpushOrdered(key: string, values: string[], ttlSeconds: number) {
-    // LPUSH puts each value in front of the previous one, so push them in reverse.
-    if (values.length) await this.pipeline(["LPUSH", key, ...[...values].reverse()], ["EXPIRE", key, ttlSeconds]);
-  }
 
   async lrange(key: string, start: number, stop: number) {
     return ((await this.command("LRANGE", key, start, stop)) as string[] | null) ?? [];

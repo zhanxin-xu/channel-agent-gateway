@@ -25,7 +25,7 @@ import { storeChatImages } from "./images.js";
 import { MAX_MESSAGES_PER_TURN } from "./limits.js";
 import { LAST_STEP_RESERVE_MS, runTurn } from "./loop.js";
 import { closeWorkspace } from "./sandbox.js";
-import { chatKeys, migrateLegacyHistory, RunLock, Session, ttlSeconds } from "./session.js";
+import { chatKeys, RunLock, Session, ttlSeconds } from "./session.js";
 import { DEFAULT_STICKER_BASE_URL, stickerUrl } from "./stickers.js";
 import { SYSTEM_PROMPT } from "./system-prompt.js";
 import type { ToolContext } from "./tools.js";
@@ -196,7 +196,6 @@ async function drain(
   const keys = chatKeys(chatKey);
   const deadline = opts.deadline;
   const session = await Session.open(store, chatKey);
-  await migrateLegacyHistory(store, session);
 
   // A run that was killed left its turn open: close it the way dsh does.
   const fixes = recoverOpenTurn(session.events);

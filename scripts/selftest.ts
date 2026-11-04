@@ -575,16 +575,15 @@ await test("message header: time, scene, sender, @你 (the 第N条 number is add
   assert.match(messageHeader({ ...base, chatType: "private", userId: "7", senderName: "Alice" }, now), /｜私聊｜发送人 Alice #7$/);
 });
 
-await test("upstash store: lists, ordered front insert, set NX/PX, incrby, claim, del", async () => {
+await test("upstash store: lists, set NX/PX, incrby, claim, del", async () => {
   const { UpstashStore } = await import("../src/store/index.js");
   const store = new UpstashStore("https://redis.example.com/", "rd-token");
   assert.equal(await store.claim("evt:x", 60), true);
   assert.equal(await store.claim("evt:x", 60), false, "second claim (webhook retry) is rejected");
-  assert.equal(await store.rpush("l", ["c", "d"], 600), 2);
-  await store.lpushOrdered("l", ["a", "b"], 600);
-  assert.deepEqual(await store.lrange("l", 0, -1), ["a", "b", "c", "d"]);
+  assert.equal(await store.rpush("l", ["a", "b", "c", "d"], 600), 4);
+  assert.equal(await store.rpush("l", ["e"], 0), 5, "no TTL refresh: a bare RPUSH");
   await store.lpop("l", 1);
-  assert.deepEqual(await store.lrange("l", 1, -1), ["c", "d"]);
+  assert.deepEqual(await store.lrange("l", 1, -1), ["c", "d", "e"]);
   assert.equal(await store.set("lock", "me", 60_000, { nx: true }), true);
   assert.equal(await store.set("lock", "you", 60_000, { nx: true }), false);
   assert.equal(await store.get("lock"), "me");
@@ -729,12 +728,11 @@ await test("cost: a silent ambient wake (model only hangs up) stays around 20 Re
   const weights: Record<string, (...args: any[]) => number> = {
     rpush: (_k, _v, ttl) => (ttl > 0 ? 2 : 1),
     incrby: () => 2,
-    lpushOrdered: () => 2,
   };
   let commands = 0;
   let depth = 0; // MemoryStore methods call each other; count only the outermost call
   const originals: Record<string, any> = {};
-  for (const name of ["rpush", "lrange", "lpop", "get", "set", "incrby", "del", "claim", "lpushOrdered"]) {
+  for (const name of ["rpush", "lrange", "lpop", "get", "set", "incrby", "del", "claim"]) {
     originals[name] = store[name];
     store[name] = async (...args: any[]) => {
       if (depth === 0) commands += weights[name]?.(...args) ?? 1;
@@ -754,7 +752,7 @@ await test("cost: a silent ambient wake (model only hangs up) stays around 20 Re
   }
   assert.equal(llmCalls, 1);
   console.log(`  silent ambient wake: ${commands} Redis commands`);
-  assert.ok(commands <= 24, `${commands} commands`);
+  assert.ok(commands <= 21, `${commands} commands`);
 });
 
 await test("qq group: one message as both full and @ events → logged once, answered once", async () => {
@@ -837,7 +835,7 @@ await test("qq voice/video/file: voice uses QQ's transcript, others become place
   assert.match(llmRequests()[0]!.body.input[0].content, /\n\[语音\] 你好呀\n\[视频\]\n\[文件：报告\.pdf\]$/);
 });
 
-// ── Compaction, recovery, migration, hand-off ──
+// ── Compaction, recovery, hand-off ──
 await test("compaction: past 80% of the context, older events become a summary (cache-friendly call), then deleted", async () => {
   await httpCall("first", "cmp");
   await httpCall("second", "cmp");
@@ -888,25 +886,6 @@ await test("recovery: a turn cut off mid-tool is closed with interrupted results
   );
   const input = llmRequests()[0]!.body.input;
   assert.ok(input.some((i: any) => i.type === "function_call_output" && i.call_id === "call_long"), "the request stays valid");
-});
-
-await test("migration: old history moves to the front of the event log and isn't answered again", async () => {
-  const store = getStore();
-  await store.rpush(
-    "chat:http:legacy",
-    [
-      JSON.stringify({ role: "user", content: "[2026/11/03周二 20:43 Asia/Shanghai｜私聊｜发送人 #OLD001]\n旧消息\n[图片]" }),
-      JSON.stringify({ role: "assistant", content: "旧回复" }),
-    ],
-    3600,
-  );
-  await httpCall("新消息", "legacy");
-  const input = llmRequests()[0]!.body.input;
-  assert.equal(input[0].content, "[第0条｜2026/11/03周二 20:43 Asia/Shanghai｜私聊｜发送人 #OLD001]\n旧消息");
-  assert.deepEqual(input[1], { type: "message", role: "assistant", content: [{ type: "output_text", text: "旧回复" }] });
-  assert.match(input[2].content, /^\[第2条｜.*\]\n新消息$/);
-  assert.match(input[3].content, /待处理的消息：第2条（/, "old messages aren't pending");
-  assert.deepEqual(await store.lrange("chat:http:legacy", 0, -1), [], "old key removed");
 });
 
 await test("hand-off: out of time with work left → signed call to /api/worker, which carries on", async () => {

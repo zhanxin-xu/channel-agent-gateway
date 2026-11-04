@@ -30,8 +30,6 @@ export function chatKeys(chatKey: string) {
     turn: `ev:turn:${chatKey}`,
     lock: `ev:lock:${chatKey}`,
     meta: `ev:meta:${chatKey}`,
-    migrated: `ev:migrated:${chatKey}`,
-    legacy: `chat:${chatKey}`,
     reply: (eventId: string) => `ev:reply:${chatKey}:${eventId}`,
     images: (eventId: string) => `ev:img:${chatKey}:${eventId}`,
     sample: `sample:${chatKey}`,
@@ -186,58 +184,4 @@ export class RunLock {
     this.timer = undefined;
     if ((await this.store.get(this.key)) === this.owner) await this.store.del(this.key);
   }
-}
-
-/**
- * One-time move of a chat's old history (a list of {role, content} under
- * `chat:{chat}`) to the front of its event log. Old user lines become
- * user/message events (header and body split back apart), the bot's lines
- * assistant output messages; there was no reasoning or tool data to keep. The
- * cursor moves past them so they aren't answered again. Runs under the lock,
- * before anything has read seqs from the log.
- */
-const migrationChecked = new Set<string>();
-
-export async function migrateLegacyHistory(store: Store, session: Session): Promise<number> {
-  const keys = chatKeys(session.chatKey);
-  if (migrationChecked.has(session.chatKey)) return 0;
-  migrationChecked.add(session.chatKey);
-  if (session.base !== 0 || !(await store.claim(keys.migrated, ttlSeconds()))) return 0;
-  const legacy = await store.lrange(keys.legacy, 0, -1);
-  if (!legacy.length) return 0;
-
-  const time = Date.now();
-  const events = legacy.map((raw, i): Omit<SessionEvent, "seq"> => {
-    const { role, content } = JSON.parse(raw) as { role: string; content: string };
-    if (role === "assistant") {
-      return {
-        type: "assistant/message",
-        time,
-        data: { turn: 0, step: 0, output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: content }] }] },
-      };
-    }
-    const m = /^\[([^\]]*)\]\n?([\s\S]*)$/.exec(content);
-    const header = m?.[1] ?? "";
-    return {
-      type: "user/message",
-      time,
-      data: {
-        eventId: `legacy-${i}`,
-        header,
-        text: (m?.[2] ?? content).replace(/\n?\[图片\]/g, "").trim(),
-        sender: /发送人 ([^｜]+)/.exec(header)?.[1] ?? "?",
-        mentioned: header.includes("@你") || header.includes("私聊"),
-        reply: {},
-      },
-    };
-  });
-  await store.lpushOrdered(session.log.key, events.map((e) => JSON.stringify(e)), ttlSeconds());
-  await store.del(keys.legacy);
-  // Everything already read shifted by events.length; re-read from scratch.
-  session.events = [];
-  await session.refresh();
-  const cursor = await session.cursor();
-  if (cursor < events.length - 1) await session.setCursor(events.length - 1);
-  console.log(`[session] ${session.chatKey}: migrated ${events.length} history entries`);
-  return events.length;
 }

@@ -103,7 +103,7 @@ src/
     handle.ts            入口（去重、写入、唤起）与运行者（锁、轮次、回复目标、接力）
     loop.ts              一轮 agent loop（Responses API）
     events.ts            事件格式、推导模型输入、崩溃恢复
-    session.ts           持锁期间的事件视图、运行锁、旧历史迁移
+    session.ts           持锁期间的事件视图、运行锁
     compaction.ts        上下文压缩
     system-prompt.ts     人设
     tools.ts             工具注册
