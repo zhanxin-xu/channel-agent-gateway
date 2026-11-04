@@ -243,6 +243,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (url.startsWith("https://vector.example.com/")) return fakeVector(url, req.method, body);
   if (url.startsWith("https://multimedia.nt.qq.com.cn/")) {
     if (url.includes("missing")) return new Response("gone", { status: 404 });
+    if (url.includes("flaky") && calls.filter((c) => c.url === url).length === 1) return new Response("busy", { status: 503 });
     return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "content-type": "image/png" } });
   }
   if (url === "https://bots.qq.com/app/getAppAccessToken") return Response.json({ access_token: "qq-token", expires_in: "7200" });
@@ -930,6 +931,16 @@ await test("qq image: download failure tells the model instead of failing the tu
   const msg = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "user");
   assert.match(textOf(msg), /看看\n（有图片没加载出来）$/);
   assert.equal(sentTo("/v2/users/IMGUSER/messages").length, 1, "still replies");
+  assert.equal(calls.filter((c) => c.url.endsWith("/missing.png")).length, 1, "a 404 is not retried: the link is gone");
+});
+
+await test("qq image: a slow or failing CDN gets one more try", async () => {
+  await handleWebhook(c2cWith("i4", "再看", [{ content_type: "image/png", url: "https://multimedia.nt.qq.com.cn/flaky.png" }]), "qq");
+  await drain();
+  assert.equal(calls.filter((c) => c.url.endsWith("/flaky.png")).length, 2, "503, then OK");
+  const msg = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "user");
+  assert.doesNotMatch(textOf(msg), /没加载出来/);
+  assert.ok(msg.content.some((p: any) => p.type === "input_image"), "the image reaches the model");
 });
 
 await test("qq voice/video/file: voice uses QQ's transcript, others become placeholders", async () => {

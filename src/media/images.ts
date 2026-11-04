@@ -15,7 +15,23 @@ const MAX_IMAGES = 4;
 const MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
 /** Stored as-is when sharp can't decode it (kept small enough for one stored value). */
 const MAX_RAW_BYTES = 1024 * 1024;
-const TIMEOUT_MS = 10_000;
+/** Per attempt. QQ's CDN is sometimes slow from abroad; this runs after the webhook is acknowledged. */
+const TIMEOUT_MS = 15_000;
+const ATTEMPTS = 2;
+
+/** Download an image, trying again once after a timeout, a network error or a 5xx (not after a 4xx: the link is gone). */
+async function fetchImage(url: string): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (res.ok) return res;
+      if (res.status < 500 || attempt >= ATTEMPTS) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      if ((err instanceof Error && /^HTTP 4/.test(err.message)) || attempt >= ATTEMPTS) throw err;
+    }
+    console.warn(`[images] retrying ${url.slice(0, 80)} (attempt ${attempt} failed)`);
+  }
+}
 
 export interface ImagePart {
   type: "input_image";
@@ -57,8 +73,7 @@ export async function storeChatImages(
     images.slice(0, MAX_IMAGES).map(async ({ url, contentType }, i) => {
       try {
         if (!url.startsWith("https://")) throw new Error("not https");
-        const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const res = await fetchImage(url);
         const bytes = Buffer.from(await res.arrayBuffer());
         if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error(`too large (${bytes.byteLength} bytes)`);
         const header = res.headers.get("content-type")?.split(";")[0] ?? "";

@@ -185,6 +185,8 @@ export const saveAttachment: Tool = {
     "Save the original of an image or file someone sent (a picture in their message, or [文件：…] / [视频] / [语音]) " +
     `into your workspace, under ${INBOX}/. Use it whenever you need the actual file: to edit a photo, read a document, ` +
     "convert or analyze it. The pictures you see in the chat are small previews; this gets the full original, any size. " +
+    "It also works when a picture didn't load for you (（有图片没加载出来）): save it, then look at it with read_file, " +
+    "instead of asking them to send it again. " +
     "Then work on it with bash (python3, Pillow, ffmpeg via pip, …), look at images with read_file, and send results with send_file. " +
     "Platform links expire after a while, so for an old message it may fail: then ask them to send it again.",
   parameters: {
