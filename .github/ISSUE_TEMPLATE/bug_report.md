@@ -15,7 +15,7 @@ labels: bug
 1.
 2.
 
-**日志**：Vercel 日志里 `[webhook]`、`[handle]`、`[agent]` 开头的相关行。贴出来之前请去掉 Token、AppSecret 等敏感信息。
+**日志**：Vercel 日志里 `[webhook]`、`[ingress]`、`[runner]`、`[turn]`、`[agent]` 开头的相关行。贴出来之前请去掉 Token、AppSecret 等敏感信息。
 
 ```
 ```

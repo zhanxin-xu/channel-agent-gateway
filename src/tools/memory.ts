@@ -8,7 +8,7 @@
  */
 import crypto from "node:crypto";
 import { config } from "../config.js";
-import type { Tool } from "./tools.js";
+import type { Tool } from "./types.js";
 
 const MAX_CHARS = 500;
 const TIMEOUT_MS = 15_000;

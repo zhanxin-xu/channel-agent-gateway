@@ -1,11 +1,12 @@
 /**
  * Hand-off endpoint (`POST /api/worker`): a run that is about to hit the
  * function's time limit with messages still waiting asks a fresh function to
- * carry on. The request is signed with WORKER_SECRET (see handle.ts).
+ * carry on. The request is signed with WORKER_SECRET (see runtime/handoff.ts).
  */
 import crypto from "node:crypto";
 import { waitUntil } from "@vercel/functions";
-import { runChat, workerSignature, type ChatMeta } from "./agent/handle.js";
+import { workerSignature } from "./runtime/handoff.js";
+import { runChat, type ChatMeta } from "./runtime/runner.js";
 import { channels } from "./channels/index.js";
 import { json } from "./channels/types.js";
 import { getStore } from "./store/index.js";

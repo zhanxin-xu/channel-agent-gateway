@@ -7,7 +7,7 @@
  * for whatever model the agent uses. Enabled only when DEEPSEEK_API_KEY is set.
  */
 import { config } from "../config.js";
-import type { Tool } from "./tools.js";
+import type { Tool } from "./types.js";
 
 const MAX_FETCH_CHARS = 12_000;
 const MAX_RESULT_CHARS = 1_500;

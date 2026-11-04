@@ -1,6 +1,6 @@
 # 工具
 
-工具在 [`src/agent/tools.ts`](../src/agent/tools.ts) 注册。依赖外部服务的工具只在对应的服务配置好后才启用，`/api/health` 的 `tools` 字段会列出当前启用的工具。
+工具在 [`src/tools/`](../src/tools/) 里，每个模块一类工具，在 [`registry.ts`](../src/tools/registry.ts) 注册。依赖外部服务的工具只在对应的服务配置好后才启用，`/api/health` 的 `tools` 字段会列出当前启用的工具。
 
 | 工具 | 作用 | 启用条件 |
 |---|---|---|
@@ -26,11 +26,11 @@
 - `get_search_balance`：调用 DeepSeek 的 `GET /user/balance`，区分赠送余额和充值余额，并估算还能搜索多少次。
 - `get_llm_key_limit`：调用 `GET {OPENROUTER_BASE_URL}/key`，返回限额、剩余额度、重置周期，以及今日、本周、本月和累计用量。
 
-这两个工具返回的是账户信息，机器人进群后任何人都能问到。介意的话，在 `tools.ts` 里把它们移除。
+这两个工具返回的是账户信息，机器人进群后任何人都能问到。介意的话，在 `registry.ts` 里把它们移除。
 
 ## 长期记忆
 
-实现见 [`src/agent/memory.ts`](../src/agent/memory.ts)，开通方法见[部署文档](deployment.md#upstash-vector长期记忆可选)。
+实现见 [`src/tools/memory.ts`](../src/tools/memory.ts)，开通方法见[部署文档](deployment.md#upstash-vector长期记忆可选)。
 
 - **所有聊天共用一个记忆库**。每条记忆是一句能独立看懂的话，比如"#3B6834 叫老王，是前端程序员"，由模型自己判断什么值得记。
 - `remember` 写入一条记忆；`recall` 按语义相似度返回最接近的几条；`forget` 按 ID 删除。
@@ -40,7 +40,7 @@
 
 ## 沙盒工作区
 
-实现见 [`src/agent/sandbox.ts`](../src/agent/sandbox.ts)。
+实现见 [`src/tools/sandbox/`](../src/tools/sandbox/)：`workspace.ts` 是工作区接口和生命周期（每次运行一个），`vercel.ts` 是 Vercel Sandbox 的实现，`tools.ts` 是四个工具。
 
 | 工具 | 作用 |
 |---|---|
@@ -70,7 +70,7 @@ npx tsx scripts/sandbox-smoke.ts
 
 ## 表情包
 
-`send_sticker` 的 `name` 是一个枚举，可选的表情和各自的使用场景定义在 [`src/agent/stickers.ts`](../src/agent/stickers.ts)：
+`send_sticker` 的 `name` 是一个枚举，可选的表情和各自的使用场景定义在 [`src/tools/stickers.ts`](../src/tools/stickers.ts)：
 
 - **情绪类**：28 张 Q 版动态 GIF，比如笑死、红温了、已老实、你礼貌吗、退退退、吃瓜、贴贴、晚安。
 - **梗图类**：10 张经典梗图，比如得加钱、摆烂、蹭饭、用户别走、无可奉告。
@@ -92,10 +92,12 @@ npx tsx scripts/sandbox-smoke.ts
 
 ## 新增工具
 
-在 `tools.ts` 的 `tools` 数组里追加一个对象：
+在 `src/tools/` 下新建一个模块，导出一个 `Tool`，再加进 [`registry.ts`](../src/tools/registry.ts) 的 `tools` 数组：
 
 ```ts
-const myTool: Tool = {
+import type { Tool } from "./types.js";
+
+export const myTool: Tool = {
   name: "my_tool",
   description: "告诉模型这个工具做什么、什么时候用",
   parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },

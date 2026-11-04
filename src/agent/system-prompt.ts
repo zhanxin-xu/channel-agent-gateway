@@ -7,8 +7,8 @@
  * ("（系统提示）…") are appended to the input instead, so this stays cacheable.
  *
  * It relies on what the gateway provides:
- *   - the "[time｜scene｜sender #ID]" line prepended to each user message (handle.ts)
- *   - send_message / end_turn for talking, and the other tools (tools.ts)
+ *   - the "[time｜scene｜sender #ID]" line prepended to each user message (channels/format.ts)
+ *   - send_message / end_turn for talking, and the other tools (tools/registry.ts)
  */
 export const SYSTEM_PROMPT = `# 身份
 

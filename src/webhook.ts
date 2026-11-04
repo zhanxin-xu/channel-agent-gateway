@@ -7,7 +7,7 @@
  * the agent and return its replies.
  */
 import { waitUntil } from "@vercel/functions";
-import { handleMessage } from "./agent/handle.js";
+import { handleMessage } from "./runtime/ingress.js";
 import { channels } from "./channels/index.js";
 import { json, type ChannelAdapter, type InboundMessage } from "./channels/types.js";
 

@@ -1,4 +1,4 @@
-import { activeTools } from "../src/agent/tools.js";
+import { activeTools } from "../src/tools/registry.js";
 import { channels } from "../src/channels/index.js";
 import { config } from "../src/config.js";
 import { storeBackend } from "../src/store/index.js";

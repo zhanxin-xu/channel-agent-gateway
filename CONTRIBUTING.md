@@ -4,7 +4,7 @@
 
 ## 提 Issue
 
-- **Bug**：说明你用的渠道、复现步骤、期望结果和实际结果。Vercel 日志里 `[webhook]`、`[handle]`、`[agent]` 开头的几行最有帮助，贴出来之前请去掉 Token、AppSecret 等敏感信息。
+- **Bug**：说明你用的渠道、复现步骤、期望结果和实际结果。Vercel 日志里 `[webhook]`、`[ingress]`、`[runner]`、`[turn]`、`[agent]` 开头的几行最有帮助，贴出来之前请去掉 Token、AppSecret 等敏感信息。
 - **功能建议**：说明使用场景，以及现有功能为什么满足不了。
 - **安全问题**：不要公开提 Issue，请按[安全策略](SECURITY.md)私下报告。
 

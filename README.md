@@ -77,9 +77,9 @@
 | 想改什么 | 改哪里 |
 |---|---|
 | 人设和说话风格 | [`src/agent/system-prompt.ts`](src/agent/system-prompt.ts) |
-| 工具 | [`src/agent/tools.ts`](src/agent/tools.ts)，见[新增工具](docs/tools.md#新增工具) |
+| 工具 | [`src/tools/`](src/tools/)，见[新增工具](docs/tools.md#新增工具) |
 | 渠道 | [`src/channels/`](src/channels/)，见[新增渠道](docs/channels.md#新增渠道) |
-| 表情包 | [`src/agent/stickers.ts`](src/agent/stickers.ts) |
+| 表情包 | [`src/tools/stickers.ts`](src/tools/stickers.ts) |
 
 ## 本地开发
 
@@ -104,24 +104,41 @@ api/
   health.ts              GET /api/health：配置自检
 src/
   webhook.ts             路由：选择适配器 → 验签解析 → 回执 → 后台处理
-  channels/              渠道适配器（qq / telegram / http）
-  agent/
-    handle.ts            入口（去重、写入、唤起）与运行者（锁、轮次、回复目标、接力）
-    loop.ts              一轮 agent loop（Responses API）
-    events.ts            事件格式、推导模型输入、崩溃恢复
-    session.ts           持锁期间的事件视图、运行锁
+  worker.ts              接力请求的验签与处理
+  config.ts              环境变量
+  channels/              消息通道
+    types.ts             适配器接口
+    qq.ts / telegram.ts / http.ts
+    format.ts            消息头：模型看到的"第N条｜时间｜场景｜发送人"
+  runtime/               运行时：谁、什么时候跑 agent
+    ingress.ts           入口：去重、写入、按需抢锁（一个事务）
+    sampler.ts           采样器：@ 必唤起，普通群消息每个窗口最多一次
+    runner.ts            运行者：一轮接一轮处理待办、选默认回复目标
+    lock.ts              运行锁（会话行上的租约）
+    outbox.ts            按消息回复，5 次上限，QQ 的 msg_seq
+    context.ts           工具上下文：工具怎么发消息、表情包、文件
+    handoff.ts           时间不够时接力给 /api/worker
+  conversation/          事件流
+    events.ts            事件格式、可见窗口
+    derive.ts            从事件流推导模型输入
+    recovery.ts          崩溃恢复：补完被打断的一轮
+    session.ts           持锁期间的内存视图
+  agent/                 模型这一侧
+    loop.ts              一轮 agent loop
+    model.ts             Responses API 请求
     compaction.ts        上下文压缩
     system-prompt.ts     人设
-    tools.ts             工具注册
+  tools/                 工具
+    types.ts / registry.ts   工具接口、注册表
+    chat.ts              说话与挂断：send_message、send_sticker、end_turn
+    web.ts               联网搜索与抓取
     memory.ts            长期记忆（Upstash Vector）
-    sandbox.ts           沙盒工作区（Vercel Sandbox + Drive）
-    web-tools.ts         联网搜索与抓取
-    account-tools.ts     余额与额度查询
+    account.ts           余额与额度查询
+    utility.ts           时间、计算器
     stickers.ts          表情包清单
-    images.ts            图片下载、缩小、入库
-  store/                 存储：Supabase（Postgres 函数，走 HTTP），未配置时退化为内存
-  config.ts              环境变量
-  worker.ts              接力请求的验签与处理
+    sandbox/             沙盒：workspace.ts 接口与生命周期，vercel.ts 实现，tools.ts 四个工具
+  media/images.ts        图片下载、缩小、入库
+  store/                 存储：types.ts 接口，postgres.ts（Supabase），memory.ts（本地与测试）
 supabase/
   schema.sql             表和函数（会话、事件流、回复状态、图片、去重）
 scripts/

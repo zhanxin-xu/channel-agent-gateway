@@ -5,12 +5,9 @@
  * read. Webhooks may append at any time; only the lock holder reads,
  * recovers, compacts and trims.
  */
-import crypto from "node:crypto";
 import type { ChatStore, SessionState } from "../store/index.js";
-import { deriveInput, isEvent, visibleWindow, type NewEvent, type SessionEvent } from "./events.js";
-
-export const LOCK_TTL_MS = 60_000;
-const LOCK_RENEW_MS = 20_000;
+import { deriveInput } from "./derive.js";
+import { isEvent, visibleWindow, type NewEvent, type SessionEvent } from "./events.js";
 
 /** Warm instances keep each chat's events, so a new run only reads what was appended since. */
 const cache = new Map<string, { createdAt: number; events: SessionEvent[] }>();
@@ -132,43 +129,5 @@ export class Session {
   async nextTurn(): Promise<number> {
     this.state.turn = await this.store.beginTurn(this.chatKey);
     return this.state.turn;
-  }
-}
-
-/** A chat's run lock: a lease that expires unless renewed, so a killed run can't hold it forever. */
-export class RunLock {
-  private timer?: ReturnType<typeof setInterval>;
-
-  constructor(
-    private store: ChatStore,
-    private chat: string,
-    readonly owner: string = crypto.randomUUID(),
-  ) {}
-
-  async acquire(): Promise<boolean> {
-    const ok = await this.store.lock(this.chat, this.owner, LOCK_TTL_MS, "acquire");
-    if (ok) this.hold();
-    return ok;
-  }
-
-  /** Start renewing a lock this owner already holds (the webhook took it during ingest). */
-  hold() {
-    clearInterval(this.timer);
-    this.timer = setInterval(() => void this.renew(), LOCK_RENEW_MS);
-    this.timer.unref?.();
-  }
-
-  private async renew() {
-    try {
-      if (!(await this.store.lock(this.chat, this.owner, LOCK_TTL_MS, "renew"))) console.warn(`[lock] lost ${this.chat}`);
-    } catch (err) {
-      console.warn(`[lock] renew failed for ${this.chat}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  async release(): Promise<void> {
-    clearInterval(this.timer);
-    this.timer = undefined;
-    await this.store.lock(this.chat, this.owner, LOCK_TTL_MS, "release");
   }
 }

@@ -248,12 +248,14 @@ function safeJson(text: string) {
 const { handleWebhook } = await import("../src/webhook.js");
 const { handleWorker } = await import("../src/worker.js");
 worker = handleWorker;
-const { evaluate, activeTools, runTool } = await import("../src/agent/tools.js");
-const { messageHeader } = await import("../src/agent/handle.js");
+const { activeTools, runTool } = await import("../src/tools/registry.js");
+const { evaluate } = await import("../src/tools/utility.js");
+const { messageHeader } = await import("../src/channels/format.js");
 const { getStore, resetStore, storeBackend } = await import("../src/store/index.js");
 const qqHint = (await import("../src/channels/qq.js")).qqAdapter.promptHint!;
 const { config } = await import("../src/config.js");
-const { setWorkspaceFactory, driveName } = await import("../src/agent/sandbox.js");
+const { setWorkspaceFactory } = await import("../src/tools/sandbox/workspace.js");
+const { driveName } = await import("../src/tools/sandbox/vercel.js");
 
 /** Tool context for calling tools directly, outside a conversation. */
 const testChat = { key: "http:c0", scene: "私聊" as const, sender: "#USER01" };
@@ -483,7 +485,7 @@ await test("reply cap: 5 replies per message, the 6th is refused and the model s
 });
 
 await test("stickers: CDN hotlink by default, STICKER_BASE_URL override", async () => {
-  const { STICKERS, stickerUrl, DEFAULT_STICKER_BASE_URL } = await import("../src/agent/stickers.js");
+  const { STICKERS, stickerUrl, DEFAULT_STICKER_BASE_URL } = await import("../src/tools/stickers.js");
   assert.ok(Object.keys(STICKERS).length >= 30);
   assert.ok(Object.values(STICKERS).every((s) => /^(meme\/\d+\.gif|0_preview\/meme\/\d+\.webp)$/.test(s.file)));
   assert.equal(stickerUrl(DEFAULT_STICKER_BASE_URL, "红温了"), "https://img.aigengtu.com/meme/3153.gif");

@@ -6,7 +6,7 @@
 --                     turn counter, run lock, ambient sampling window).
 --   gateway.events    the append-only log: (chat, seq) with seq contiguous per
 --                     chat, the event type, time and its JSON data. The model's
---                     input is derived from it (src/agent/events.ts).
+--                     input is derived from it (src/conversation/derive.ts).
 --   gateway.replies   per-message reply state (QQ msg_seq, reply count).
 --   gateway.images    images referenced by events, as data URLs.
 --   gateway.inbound   platform deliveries already seen (webhook retries).

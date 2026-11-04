@@ -1,6 +1,6 @@
 /**
  * One turn of the agent loop on the Responses API (`POST {baseURL}/responses`),
- * driven by the chat's event log (see events.ts):
+ * driven by the chat's event log (see conversation/events.ts):
  *
  *   each step: read the log's new events → derive the input → call the model
  *   → append its output verbatim (reasoning included) → append a tool/call
@@ -24,55 +24,16 @@
  */
 import { config } from "../config.js";
 import { compactIfNeeded } from "./compaction.js";
-import { messageLabel, type NewEvent, type OutputItem, type SessionEvent, type TurnEndReason, type Usage } from "./events.js";
-import { imagePrefix, storeToolImages } from "./images.js";
-import type { Session } from "./session.js";
-import { activeTools, END_TURN, runTool, type ToolContext } from "./tools.js";
-
-interface ResponsesResult {
-  id?: string;
-  status?: string;
-  output?: OutputItem[];
-  error?: { message?: string; code?: string } | null;
-  incomplete_details?: { reason?: string } | null;
-  usage?: Usage;
-}
+import { messageLabel, type NewEvent, type OutputItem, type SessionEvent, type TurnEndReason } from "../conversation/events.js";
+import type { Session } from "../conversation/session.js";
+import { imagePrefix, storeToolImages } from "../media/images.js";
+import { END_TURN } from "../tools/chat.js";
+import { activeTools, runTool } from "../tools/registry.js";
+import type { ToolContext } from "../tools/types.js";
+import { createResponse, outputText, type ResponsesResult } from "./model.js";
 
 type FunctionCall = Extract<OutputItem, { type: "function_call" }>;
 const isFunctionCall = (item: OutputItem): item is FunctionCall => item.type === "function_call";
-
-export function outputText(output: OutputItem[]): string {
-  return output
-    .filter((item) => item.type === "message")
-    .flatMap((item) => (item as Extract<OutputItem, { type: "message" }>).content ?? [])
-    .filter((part) => part.type === "output_text" && part.text)
-    .map((part) => part.text)
-    .join("")
-    .trim();
-}
-
-export async function createResponse(body: Record<string, unknown>): Promise<ResponsesResult> {
-  const { apiKey, baseUrl, extraHeaders, timeoutMs } = config.openrouter;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
-
-  const res = await fetch(`${baseUrl}/responses`, {
-    method: "POST",
-    headers: { ...extraHeaders, authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const text = await res.text();
-  let data: ResponsesResult;
-  try {
-    data = JSON.parse(text) as ResponsesResult;
-  } catch {
-    throw new Error(`Responses API HTTP ${res.status}: ${text.slice(0, 300)}`);
-  }
-  if (!res.ok || data.error) {
-    throw new Error(`Responses API HTTP ${res.status}: ${JSON.stringify(data.error ?? data).slice(0, 300)}`);
-  }
-  return data;
-}
 
 export function toolDefinitions() {
   return activeTools().map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters }));

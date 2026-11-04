@@ -13,9 +13,9 @@
  *     events it replaces are then deleted from the store.
  */
 import { config } from "../config.js";
-import { isEvent, visibleWindow, type SessionEvent } from "./events.js";
-import { createResponse, outputText } from "./loop.js";
-import type { Session } from "./session.js";
+import { isEvent, visibleWindow, type SessionEvent } from "../conversation/events.js";
+import { createResponse, outputText } from "./model.js";
+import type { Session } from "../conversation/session.js";
 
 const TRIGGER_RATIO = 0.8;
 const KEEP_RATIO = 0.16;

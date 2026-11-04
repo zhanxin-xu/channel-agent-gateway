@@ -5,8 +5,10 @@
  * deletes, the drive for the chat key "smoke:test".
  */
 import { existsSync } from "node:fs";
-import { runTool, type ToolContext } from "../src/agent/tools.js";
-import { closeWorkspace, driveName } from "../src/agent/sandbox.js";
+import { runTool } from "../src/tools/registry.js";
+import type { ToolContext } from "../src/tools/types.js";
+import { driveName } from "../src/tools/sandbox/vercel.js";
+import { closeWorkspace } from "../src/tools/sandbox/workspace.js";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 process.env.SANDBOX_ENABLED = "1";

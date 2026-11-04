@@ -15,7 +15,7 @@
 
 锁是会话行上的一个会过期的租约（持有者和到期时间，60 秒，运行中每 20 秒续期），函数被杀后最多 60 秒自动释放。入口的**去重、写库、抢锁在同一个事务里**完成；运行者**先释放锁、再检查一次**有没有新消息。两边按这个顺序，消息就不会卡在交接的空隙里被漏掉。
 
-实现见 [`src/agent/handle.ts`](../src/agent/handle.ts)。
+实现见 [`src/runtime/`](../src/runtime/)：入口 `ingress.ts`、采样器 `sampler.ts`、运行者 `runner.ts`、锁 `lock.ts`。
 
 ## 一轮对话
 
@@ -60,11 +60,11 @@
 
 **图片**：入库时下载，缩到模型实际看到的大小（聊天图片最长边 512px，`read_file` 的图片 1024px），转成 JPEG，单独存在 `gateway.images` 表里，事件里只记图片的键名。每次重放的都是同一份数据，所以以前的图片模型也能再看到。
 
-实现见 [`src/agent/events.ts`](../src/agent/events.ts) 和 [`src/agent/session.ts`](../src/agent/session.ts)。
+实现见 [`src/conversation/`](../src/conversation/)：格式 `events.ts`、推导 `derive.ts`、恢复 `recovery.ts`、内存视图 `session.ts`。
 
 ## 请求
 
-[`loop.ts`](../src/agent/loop.ts) 直接 `fetch` 调用 `POST {OPENROUTER_BASE_URL}/responses`，不依赖 SDK，这样自定义参数可以原样透传。请求体为：
+[`model.ts`](../src/agent/model.ts) 直接 `fetch` 调用 `POST {OPENROUTER_BASE_URL}/responses`，不依赖 SDK，这样自定义参数可以原样透传。请求体为：
 
 ```
 { model, ...OPENROUTER_EXTRA_BODY, instructions, input, tools, tool_choice }
@@ -142,7 +142,7 @@ OpenRouter 的 Responses API 是无状态的，`input` 就是从事件流推导�
 | `images` | 图片（data URL），键名形如 `ev:img:{聊天}:{消息}:{n}` |
 | `inbound` | 已经收到过的平台事件 ID，用来识别平台重推，保留 1 小时 |
 
-`events`、`replies` 对 `sessions` 有外键并级联删除，删掉一个会话就删掉它的全部数据。代码通过 `public` 里的函数访问这些表（[`src/store`](../src/store/index.ts)），每个操作一次请求：
+`events`、`replies` 对 `sessions` 有外键并级联删除，删掉一个会话就删掉它的全部数据。代码通过 `public` 里的函数访问这些表（[`src/store/postgres.ts`](../src/store/postgres.ts)），每个操作一次请求：
 
 | 函数 | 作用 |
 |---|---|

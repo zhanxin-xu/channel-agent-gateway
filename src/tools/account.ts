@@ -4,7 +4,7 @@
  *   get_llm_key_limit   → GET {OPENROUTER_BASE_URL}/key          (current model API key)
  */
 import { config } from "../config.js";
-import type { Tool } from "./tools.js";
+import type { Tool } from "./types.js";
 
 /** DeepSeek tool API price: ¥5 per 1,000 successful search/fetch calls. */
 const CNY_PER_SEARCH = 5 / 1000;
