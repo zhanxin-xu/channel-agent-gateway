@@ -50,13 +50,6 @@ export const config = {
     get extraBody() {
       return jsonObject("OPENROUTER_EXTRA_BODY");
     },
-    /**
-     * Sent as `reasoning.effort` (none / low / medium / high …), merged over
-     * any `reasoning` in OPENROUTER_EXTRA_BODY. Empty = the provider's default.
-     */
-    get reasoningEffort() {
-      return str("OPENROUTER_REASONING_EFFORT");
-    },
     /** Extra request headers, e.g. {"HTTP-Referer":"https://example.com","X-Title":"my-bot"}. */
     get extraHeaders() {
       return jsonObject("OPENROUTER_EXTRA_HEADERS") as Record<string, string>;

@@ -114,10 +114,7 @@ export async function runAgent(opts: {
   mustReply?: boolean;
   ctx: ToolContext;
 }): Promise<AgentResult> {
-  const { model, extraBody, reasoningEffort } = config.openrouter;
-  if (reasoningEffort) {
-    extraBody.reasoning = { ...(extraBody.reasoning as Record<string, unknown> | undefined), effort: reasoningEffort };
-  }
+  const { model, extraBody } = config.openrouter;
   const maxSteps = opts.maxSteps ?? config.agent.maxSteps;
 
   const input: unknown[] = [...opts.input];
