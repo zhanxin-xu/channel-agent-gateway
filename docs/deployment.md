@@ -17,7 +17,8 @@
    | 字段 | 含义 |
    |---|---|
    | `apiKey` | 是否配置了模型 API Key |
-   | `extraBody` | `OPENROUTER_EXTRA_BODY` 的解析结果 |
+   | `extraBody` | `OPENAI_RESPONSES_EXTRA_BODY` 的解析结果 |
+   | `legacyEnv` | 只在还用着旧的 `OPENROUTER_*` 变量名时出现，列出需要改名的变量，见[配置参考](configuration.md#模型) |
    | `tools` | 当前启用的工具 |
    | `store` | `supabase` 或 `memory` |
    | `memory` / `sandbox` | 长期记忆和沙盒是否启用 |
@@ -25,7 +26,7 @@
 
 **修改环境变量后要重新部署。** 已经在运行的部署不会读到新值。可以在 Deployments 页面对最新一次部署点 Redeploy，或者再运行一次 `npx vercel --prod`。
 
-**敏感变量读不出来。** 标记为 Sensitive 的变量保存后无法再查看原值，修改时只能整段重写。像 `OPENROUTER_EXTRA_BODY` 这种不含密钥的配置，建议存成普通变量（CLI 加 `--no-sensitive`），方便以后查看和修改。
+**敏感变量读不出来。** 标记为 Sensitive 的变量保存后无法再查看原值，修改时只能整段重写。像 `OPENAI_RESPONSES_EXTRA_BODY` 这种不含密钥的配置，建议存成普通变量（CLI 加 `--no-sensitive`），方便以后查看和修改。
 
 ## 函数时长
 

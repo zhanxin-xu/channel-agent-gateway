@@ -1,7 +1,7 @@
 /**
  * Account tools: let the agent report what's left to spend.
  *   get_search_balance  → GET {DEEPSEEK_BASE_URL}/user/balance   (funds web_search / web_fetch)
- *   get_llm_key_limit   → GET {OPENROUTER_BASE_URL}/key          (current model API key)
+ *   get_llm_key_limit   → GET {OPENAI_RESPONSES_BASE_URL}/key    (current model API key; OpenRouter only)
  */
 import { config } from "../config.js";
 import type { Tool } from "./types.js";
@@ -77,9 +77,9 @@ export const llmKeyLimit: Tool = {
   description:
     "Check the model API key's spending limit, remaining credit and usage (today / this week / this month / all time), in USD.",
   parameters: { type: "object", properties: {} },
-  enabled: () => Boolean(config.openrouter.apiKey),
+  enabled: () => Boolean(config.llm.apiKey),
   async run() {
-    const { baseUrl, apiKey, extraHeaders } = config.openrouter;
+    const { baseUrl, apiKey, extraHeaders } = config.llm;
     const { data } = await getJson<KeyInfo>(`${baseUrl}/key`, apiKey, extraHeaders);
     const budget = data.effective_budget;
     return JSON.stringify({

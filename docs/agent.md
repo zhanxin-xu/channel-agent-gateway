@@ -64,13 +64,13 @@
 
 ## 请求
 
-[`model.ts`](../src/agent/model.ts) 直接 `fetch` 调用 `POST {OPENROUTER_BASE_URL}/responses`，不依赖 SDK，这样自定义参数可以原样透传。请求体为：
+[`model.ts`](../src/agent/model.ts) 直接 `fetch` 调用 `POST {OPENAI_RESPONSES_BASE_URL}/responses`，不依赖 SDK，这样自定义参数可以原样透传。任何兼容 OpenAI Responses API 的服务都能用，默认是 OpenRouter。请求体为：
 
 ```
-{ model, ...OPENROUTER_EXTRA_BODY, instructions, input, tools, tool_choice }
+{ model, ...OPENAI_RESPONSES_EXTRA_BODY, instructions, input, tools, tool_choice }
 ```
 
-OpenRouter 的 Responses API 是无状态的，`input` 就是从事件流推导出来的完整对话。思维链要原样回传，OpenRouter 会自动请求加密的思维链内容。如果希望模型参考之前轮次的思维链，在 `OPENROUTER_EXTRA_BODY` 里加上 `"reasoning":{"context":"all_turns"}`。
+网关按无状态的方式调用（不用 `previous_response_id`），`input` 就是从事件流推导出来的完整对话。思维链要原样回传，OpenRouter 会自动请求加密的思维链内容。用 OpenRouter 时，如果希望模型参考之前轮次的思维链，在 `OPENAI_RESPONSES_EXTRA_BODY` 里加上 `"reasoning":{"context":"all_turns"}`。
 
 ## 说话与挂断
 

@@ -6,25 +6,29 @@
 
 ## 模型
 
+网关调用的是 OpenAI 的 Responses API 协议（`POST {BASE_URL}/responses`），任何兼容这个协议的服务都能用：OpenRouter、OpenAI 官方、自建网关等。默认地址是 OpenRouter。
+
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `OPENROUTER_API_KEY` | （必填） | 模型的 API Key |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | 任何兼容 Responses API 的地址，请求发到 `{BASE_URL}/responses` |
-| `OPENROUTER_MODEL` | `openai/gpt-6-luna` | 模型 ID |
-| `OPENROUTER_EXTRA_BODY` | 空 | JSON 对象，原样合并进每次请求的请求体，见下文 |
-| `OPENROUTER_EXTRA_HEADERS` | 空 | JSON 对象，作为额外的请求头，例如 `{"X-Title":"my-bot"}` |
-| `OPENROUTER_TIMEOUT_MS` | `120000` | 单次模型请求的超时时间（毫秒） |
+| `OPENAI_RESPONSES_API_KEY` | （必填） | 模型的 API Key |
+| `OPENAI_RESPONSES_BASE_URL` | `https://openrouter.ai/api/v1` | 任何兼容 Responses API 的地址，请求发到 `{BASE_URL}/responses`。用 OpenAI 官方时填 `https://api.openai.com/v1` |
+| `OPENAI_RESPONSES_MODEL` | `openai/gpt-6-luna` | 模型 ID，格式以服务商为准（OpenRouter 是 `厂商/模型`） |
+| `OPENAI_RESPONSES_EXTRA_BODY` | 空 | JSON 对象，原样合并进每次请求的请求体，见下文 |
+| `OPENAI_RESPONSES_EXTRA_HEADERS` | 空 | JSON 对象，作为额外的请求头，例如 `{"X-Title":"my-bot"}` |
+| `OPENAI_RESPONSES_TIMEOUT_MS` | `120000` | 单次模型请求的超时时间（毫秒） |
 
-`OPENROUTER_EXTRA_BODY` 的常见写法：
+`OPENAI_RESPONSES_EXTRA_BODY` 的常见写法（`provider` 是 OpenRouter 特有的参数）：
 
 ```bash
 # 锁定供应商、禁止回退
-OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false}}'
+OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false}}'
 # 再加上推理强度
-OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"reasoning":{"effort":"high"}}'
+OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"reasoning":{"effort":"high"}}'
 ```
 
 它可以覆盖 `model`，但不能覆盖 `instructions`、`input`、`tools`、`tool_choice`，这几项由 agent loop 控制。JSON 写错时请求会直接报错，`/api/health` 的 `extraBody` 字段会显示解析结果。
+
+**旧变量名**：早期版本用的是 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL` 等 `OPENROUTER_` 开头的名字，现在仍然能读。新旧名字同时存在时以新名字为准。还在用旧名字时，`/api/health` 会多出一个 `legacyEnv` 字段列出它们，按上表改名后重新部署即可。
 
 ## Agent
 

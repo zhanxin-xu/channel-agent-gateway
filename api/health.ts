@@ -5,7 +5,7 @@ import { storeBackend } from "../src/store/index.js";
 
 function extraBodyStatus(): string {
   try {
-    const keys = Object.keys(config.openrouter.extraBody);
+    const keys = Object.keys(config.llm.extraBody);
     return keys.length ? `ok (${keys.join(", ")})` : "none";
   } catch (err) {
     return `error: ${err instanceof Error ? err.message : String(err)}`;
@@ -17,10 +17,12 @@ export default {
   fetch() {
     return Response.json({
       ok: true,
-      model: config.openrouter.model,
-      baseUrl: config.openrouter.baseUrl,
-      apiKey: Boolean(config.openrouter.apiKey),
+      model: config.llm.model,
+      baseUrl: config.llm.baseUrl,
+      apiKey: Boolean(config.llm.apiKey),
       extraBody: extraBodyStatus(),
+      // Old OPENROUTER_* variables still in use; rename them to OPENAI_RESPONSES_*.
+      ...(config.llm.legacyEnv.length ? { legacyEnv: config.llm.legacyEnv } : {}),
       tools: activeTools().map((t) => t.name),
       store: storeBackend(),
       memory: Boolean(config.memory.url && config.memory.token),

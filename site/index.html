@@ -105,7 +105,7 @@
             自带联网搜索、跨群长期记忆、表情包斗图与 Linux 代码沙盒——有消息才运行，平时零开销。
           </p>
           <div class="cta">
-            <a class="btn" href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fserverless-agent-gateway&amp;env=OPENROUTER_API_KEY&amp;envDescription=OpenRouter%20API%20key%20for%20the%20model">一键部署到 Vercel</a>
+            <a class="btn" href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fserverless-agent-gateway&amp;env=OPENAI_RESPONSES_API_KEY&amp;envDescription=API%20key%20for%20an%20OpenAI%20Responses%20API%20server%20(OpenRouter%20by%20default)">一键部署到 Vercel</a>
             <a class="link" href="https://github.com/zhanxin-xu/serverless-agent-gateway">查看源码 ↗</a>
           </div>
           <div class="scroll-hint"><i></i>往下滚，看一条消息怎么走完全程</div>
@@ -199,7 +199,7 @@
       <h2 class="h2" data-reveal>三步跑起来。</h2>
       <div class="steps">
         <div data-reveal><b>1</b><h3>部署</h3><p>点击 Deploy 按钮，或者克隆仓库后在终端里：</p><pre><span>$</span> <code id="typed" data-text="npx vercel">npx vercel</code><button class="copy" type="button" data-copy="npx vercel">复制</button></pre></div>
-        <div data-reveal style="--d:.1s"><b>2</b><h3>配置</h3><p>最少需要模型 Key、一个渠道的凭据，以及在 Vercel Marketplace 添加 Supabase 后执行一次 <code>schema.sql</code>。</p><pre><code>OPENROUTER_API_KEY
+        <div data-reveal style="--d:.1s"><b>2</b><h3>配置</h3><p>最少需要模型 Key、一个渠道的凭据，以及在 Vercel Marketplace 添加 Supabase 后执行一次 <code>schema.sql</code>。</p><pre><code>OPENAI_RESPONSES_API_KEY
 QQ_APP_ID / QQ_APP_SECRET
 SUPABASE_URL / SUPABASE_SECRET_KEY</code></pre></div>
         <div data-reveal style="--d:.2s"><b>3</b><h3>检查与接入</h3><p>访问 <code>/api/health</code> 确认模型、渠道和工具都已就绪，再到平台后台填上回调地址。</p><pre><code>GET /api/health

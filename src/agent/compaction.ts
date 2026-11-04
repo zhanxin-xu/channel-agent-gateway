@@ -76,8 +76,8 @@ export async function compactIfNeeded(
   const head = session.events.filter((e) => e.seq < cut || e === previous);
   const started = Date.now();
   const response = await createResponse({
-    model: config.openrouter.model,
-    ...config.openrouter.extraBody,
+    model: config.llm.model,
+    ...config.llm.extraBody,
     instructions: o.systemPrompt,
     input: [...(await session.input(head)), { role: "user", content: COMPACTION_INSTRUCTION }],
     tools: o.tools,

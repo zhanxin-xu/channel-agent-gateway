@@ -8,11 +8,11 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
-process.env.OPENROUTER_API_KEY = "test-key";
-process.env.OPENROUTER_BASE_URL = "https://gw.example.com/api/v1/";
-process.env.OPENROUTER_MODEL = "openai/gpt-6-luna";
-process.env.OPENROUTER_EXTRA_BODY = '{"provider":{"only":["openai"],"allow_fallbacks":false},"max_output_tokens":2000}';
-process.env.OPENROUTER_EXTRA_HEADERS = '{"X-Title":"selftest"}';
+process.env.OPENAI_RESPONSES_API_KEY = "test-key";
+process.env.OPENAI_RESPONSES_BASE_URL = "https://gw.example.com/api/v1/";
+process.env.OPENAI_RESPONSES_MODEL = "openai/gpt-6-luna";
+process.env.OPENAI_RESPONSES_EXTRA_BODY = '{"provider":{"only":["openai"],"allow_fallbacks":false},"max_output_tokens":2000}';
+process.env.OPENAI_RESPONSES_EXTRA_HEADERS = '{"X-Title":"selftest"}';
 process.env.DEEPSEEK_API_KEY = "ds-key";
 process.env.QQ_APP_ID = "102000000";
 process.env.QQ_APP_SECRET = "naOC0ocQE3shWLAfffVLB1rhYPG7";
@@ -331,13 +331,35 @@ await test("calculator", () => {
 });
 
 await test("config: extra body / base url parsing", () => {
-  assert.equal(config.openrouter.baseUrl, "https://gw.example.com/api/v1");
-  const saved = process.env.OPENROUTER_EXTRA_BODY;
-  process.env.OPENROUTER_EXTRA_BODY = "{bad";
-  assert.throws(() => config.openrouter.extraBody, /OPENROUTER_EXTRA_BODY is not valid JSON/);
-  process.env.OPENROUTER_EXTRA_BODY = "[1]";
-  assert.throws(() => config.openrouter.extraBody, /must be a JSON object/);
-  process.env.OPENROUTER_EXTRA_BODY = saved;
+  assert.equal(config.llm.baseUrl, "https://gw.example.com/api/v1");
+  const saved = process.env.OPENAI_RESPONSES_EXTRA_BODY;
+  process.env.OPENAI_RESPONSES_EXTRA_BODY = "{bad";
+  assert.throws(() => config.llm.extraBody, /OPENAI_RESPONSES_EXTRA_BODY is not valid JSON/);
+  process.env.OPENAI_RESPONSES_EXTRA_BODY = "[1]";
+  assert.throws(() => config.llm.extraBody, /must be a JSON object/);
+  process.env.OPENAI_RESPONSES_EXTRA_BODY = saved;
+});
+
+await test("config: old OPENROUTER_* names still work; the new names win", () => {
+  const saved = { ...process.env };
+  try {
+    for (const k of Object.keys(process.env)) if (k.startsWith("OPENAI_RESPONSES_")) delete process.env[k];
+    process.env.OPENROUTER_API_KEY = "old-key";
+    process.env.OPENROUTER_MODEL = "old/model";
+    process.env.OPENROUTER_EXTRA_BODY = "{bad";
+    assert.equal(config.llm.apiKey, "old-key");
+    assert.equal(config.llm.model, "old/model");
+    assert.equal(config.llm.baseUrl, "https://openrouter.ai/api/v1", "unset everywhere: the default");
+    assert.throws(() => config.llm.extraBody, /OPENROUTER_EXTRA_BODY is not valid JSON/, "errors name the variable actually read");
+    assert.deepEqual(config.llm.legacyEnv, ["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_EXTRA_BODY"]);
+    process.env.OPENAI_RESPONSES_API_KEY = "new-key";
+    assert.equal(config.llm.apiKey, "new-key");
+    assert.deepEqual(config.llm.legacyEnv, ["OPENROUTER_MODEL", "OPENROUTER_EXTRA_BODY"]);
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+  assert.deepEqual(config.llm.legacyEnv, []);
 });
 
 await test("DeepSeek-backed tools only enabled with DEEPSEEK_API_KEY", () => {

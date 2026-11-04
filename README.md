@@ -18,7 +18,7 @@
 
 官网：[serverless-agent.cnday.cn](https://serverless-agent.cnday.cn)（源码在 [`site/`](site/)，作为独立的 Vercel 项目部署）。
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fserverless-agent-gateway&env=OPENROUTER_API_KEY&envDescription=OpenRouter%20API%20key%20for%20the%20model)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fserverless-agent-gateway&env=OPENAI_RESPONSES_API_KEY&envDescription=API%20key%20for%20an%20OpenAI%20Responses%20API%20server%20(OpenRouter%20by%20default))
 
 ## 特性
 
@@ -58,7 +58,7 @@
 
    | 变量 | 说明 |
    |---|---|
-   | `OPENROUTER_API_KEY` | 模型的 API Key |
+   | `OPENAI_RESPONSES_API_KEY` | 模型的 API Key。任何兼容 OpenAI Responses API 的服务都行，默认走 OpenRouter，换服务商时再设 `OPENAI_RESPONSES_BASE_URL` |
    | `QQ_APP_ID` / `QQ_APP_SECRET` | QQ 机器人凭据（或者配置 Telegram、HTTP 渠道的凭据） |
    | `SUPABASE_URL` / `SUPABASE_SECRET_KEY` | 在 Vercel Marketplace 添加 Supabase 后自动注入，再执行一次 [`supabase/schema.sql`](supabase/schema.sql)。会话、事件流和锁都在这里，生产环境必需 |
 

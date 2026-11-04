@@ -29,33 +29,49 @@ function jsonObject(name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Model settings: OPENAI_RESPONSES_<SUFFIX>, falling back to the old OPENROUTER_<SUFFIX> names. */
+const LLM_SUFFIXES = ["API_KEY", "BASE_URL", "MODEL", "EXTRA_BODY", "EXTRA_HEADERS", "TIMEOUT_MS"] as const;
+type LlmSuffix = (typeof LLM_SUFFIXES)[number];
+
+/** The variable to read for a model setting: the new name, unless only the old one is set. */
+function llmEnv(suffix: LlmSuffix): string {
+  const name = `OPENAI_RESPONSES_${suffix}`;
+  const legacy = `OPENROUTER_${suffix}`;
+  return !str(name) && str(legacy) ? legacy : name;
+}
+
 export const config = {
-  openrouter: {
+  /** Any server that speaks the OpenAI Responses API (POST {baseUrl}/responses). Defaults to OpenRouter. */
+  llm: {
     get apiKey() {
-      return str("OPENROUTER_API_KEY");
+      return str(llmEnv("API_KEY"));
     },
     /** Any Responses-API-compatible base URL; `/responses` is appended. */
     get baseUrl() {
-      return str("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").replace(/\/+$/, "");
+      return str(llmEnv("BASE_URL"), "https://openrouter.ai/api/v1").replace(/\/+$/, "");
     },
     get model() {
-      return str("OPENROUTER_MODEL", "openai/gpt-6-luna");
+      return str(llmEnv("MODEL"), "openai/gpt-6-luna");
     },
     /**
      * Extra fields merged into every Responses API request body (snake_case,
-     * sent as-is), e.g. provider locking:
+     * sent as-is), e.g. OpenRouter provider locking:
      *   {"provider":{"only":["openai"],"allow_fallbacks":false}}
      * Cannot override instructions / input / tools / tool_choice.
      */
     get extraBody() {
-      return jsonObject("OPENROUTER_EXTRA_BODY");
+      return jsonObject(llmEnv("EXTRA_BODY"));
     },
     /** Extra request headers, e.g. {"HTTP-Referer":"https://example.com","X-Title":"my-bot"}. */
     get extraHeaders() {
-      return jsonObject("OPENROUTER_EXTRA_HEADERS") as Record<string, string>;
+      return jsonObject(llmEnv("EXTRA_HEADERS")) as Record<string, string>;
     },
     get timeoutMs() {
-      return int("OPENROUTER_TIMEOUT_MS", 120_000);
+      return int(llmEnv("TIMEOUT_MS"), 120_000);
+    },
+    /** Old OPENROUTER_* names still in use (shown by /api/health so they can be renamed). */
+    get legacyEnv(): string[] {
+      return LLM_SUFFIXES.map(llmEnv).filter((name) => name.startsWith("OPENROUTER_"));
     },
   },
 
@@ -170,7 +186,7 @@ export const config = {
    * time with messages still waiting. Derived from the other secrets when unset.
    */
   get workerSecret() {
-    return str("WORKER_SECRET") || str("OPENROUTER_API_KEY") + str("QQ_APP_SECRET") + str("TELEGRAM_BOT_TOKEN");
+    return str("WORKER_SECRET") || config.llm.apiKey + str("QQ_APP_SECRET") + str("TELEGRAM_BOT_TOKEN");
   },
 
   /**

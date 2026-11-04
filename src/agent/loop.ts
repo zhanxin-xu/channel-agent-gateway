@@ -18,7 +18,7 @@
  * wherever end_turn sits among them; the turn ends after the step, unless a
  * message failed to send (before the last step), so the model can react.
  *
- * The request body is `{ model, ...OPENROUTER_EXTRA_BODY, instructions, input,
+ * The request body is `{ model, ...OPENAI_RESPONSES_EXTRA_BODY, instructions, input,
  * tools, tool_choice }`, so any provider-specific parameter (provider routing,
  * reasoning, max_output_tokens, …) can be set from config without code changes.
  */
@@ -79,7 +79,7 @@ export interface TurnResult {
 
 export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   const { session, ctx, turn } = o;
-  const { model, extraBody } = config.openrouter;
+  const { model, extraBody } = config.llm;
   const tools = toolDefinitions();
   // Tools are told apart by role (tools/types.ts), never by name.
   const say = sayTool();

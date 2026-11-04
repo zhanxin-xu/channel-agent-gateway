@@ -22,8 +22,8 @@ export function outputText(output: OutputItem[]): string {
 }
 
 export async function createResponse(body: Record<string, unknown>): Promise<ResponsesResult> {
-  const { apiKey, baseUrl, extraHeaders, timeoutMs } = config.openrouter;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
+  const { apiKey, baseUrl, extraHeaders, timeoutMs } = config.llm;
+  if (!apiKey) throw new Error("OPENAI_RESPONSES_API_KEY is not set");
 
   const res = await fetch(`${baseUrl}/responses`, {
     method: "POST",

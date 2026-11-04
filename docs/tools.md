@@ -11,7 +11,7 @@
 | `calculate` | 四则运算、取模、乘方 | 始终启用 |
 | `web_search` / `web_fetch` | 联网搜索、抓取网页正文 | 配置了 `DEEPSEEK_API_KEY` |
 | `get_search_balance` | 查询 DeepSeek 余额 | 配置了 `DEEPSEEK_API_KEY` |
-| `get_llm_key_limit` | 查询模型 Key 的额度和用量 | 配置了 `OPENROUTER_API_KEY` |
+| `get_llm_key_limit` | 查询模型 Key 的额度和用量（OpenRouter 专用） | 配置了 `OPENAI_RESPONSES_API_KEY` |
 | `remember` / `recall` / `forget` | 长期记忆 | 配置了 Upstash Vector |
 | `bash` / `read_file` / `write_file` / `send_file` | 沙盒工作区 | 部署在 Vercel 上，或本地有 `VERCEL_OIDC_TOKEN` |
 
@@ -24,7 +24,7 @@
 ## 余额与额度
 
 - `get_search_balance`：调用 DeepSeek 的 `GET /user/balance`，区分赠送余额和充值余额，并估算还能搜索多少次。
-- `get_llm_key_limit`：调用 `GET {OPENROUTER_BASE_URL}/key`，返回限额、剩余额度、重置周期，以及今日、本周、本月和累计用量。
+- `get_llm_key_limit`：调用 `GET {OPENAI_RESPONSES_BASE_URL}/key`，返回限额、剩余额度、重置周期，以及今日、本周、本月和累计用量。这是 OpenRouter 特有的接口，换成其他服务商时这个工具会返回错误，可以在 `registry.ts` 里移除。
 
 这两个工具返回的是账户信息，机器人进群后任何人都能问到。介意的话，在 `registry.ts` 里把它们移除。
 
