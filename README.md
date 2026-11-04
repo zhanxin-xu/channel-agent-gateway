@@ -144,7 +144,9 @@ OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false}}'
 OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"reasoning":{"effort":"high"},"max_output_tokens":4000}'
 ```
 
-如果 JSON 写错，会在请求时直接报错。`GET /api/health` 的 `extraBody` 字段可以看到解析结果。另外，`OPENROUTER_EXTRA_HEADERS` 可以添加额外的请求头。
+如果 JSON 写错，会在请求时直接报错。`GET /api/health` 的 `extraBody` 字段可以看到解析结果。
+
+**单独设置推理强度**：`OPENROUTER_REASONING_EFFORT`（`none` / `low` / `medium` / `high`）会作为 `reasoning.effort` 合入请求体，覆盖 `OPENROUTER_EXTRA_BODY` 里的同名字段。这样调推理强度时不用改那段 JSON；那段 JSON 在 Vercel 上如果设成了敏感变量，是读不出来的。另外，`OPENROUTER_EXTRA_HEADERS` 可以添加额外的请求头。
 
 **agent loop 的流程**：OpenRouter 的 Responses API 是无状态的，不支持 `previous_response_id`，所以每一轮都要重放完整记录：
 

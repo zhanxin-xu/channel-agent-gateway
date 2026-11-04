@@ -20,6 +20,7 @@ export default {
       baseUrl: config.openrouter.baseUrl,
       apiKey: Boolean(config.openrouter.apiKey),
       extraBody: extraBodyStatus(),
+      reasoningEffort: config.openrouter.reasoningEffort || "default",
       tools: activeTools().map((t) => t.name),
       store: config.store.url ? "upstash" : "memory",
       memory: Boolean(config.memory.url && config.memory.token),

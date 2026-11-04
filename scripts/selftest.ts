@@ -888,6 +888,18 @@ await test("time limit: close to the function's deadline, the next step is the l
   }
 });
 
+await test("OPENROUTER_REASONING_EFFORT is merged into the request as reasoning.effort", async () => {
+  process.env.OPENROUTER_REASONING_EFFORT = "high";
+  try {
+    await httpCall("1+1", "c-effort");
+    const body = llmRequests()[0]!.body;
+    assert.deepEqual(body.reasoning, { effort: "high" });
+    assert.deepEqual(body.provider, { only: ["openai"], allow_fallbacks: false }, "extra body kept");
+  } finally {
+    delete process.env.OPENROUTER_REASONING_EFFORT;
+  }
+});
+
 await test("unknown channel → 404", async () => {
   assert.equal((await handleWebhook(new Request("http://x/api/webhook/nope", { method: "POST" }), "nope")).status, 404);
 });
