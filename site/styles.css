@@ -51,7 +51,7 @@ code { font-family: var(--mono); font-size: 0.86em; background: var(--accent-sof
 @media (max-width: 640px) { .brand span { display: none; } }
 
 /* ───────── the take ───────── */
-.take { position: relative; height: 440vh; }
+.take { position: relative; height: 740vh; }
 .stage { position: sticky; top: 0; height: 100vh; height: 100svh; overflow: hidden; }
 .stage > * { position: absolute; pointer-events: none; }
 .stage > .hero { pointer-events: auto; }

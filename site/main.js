@@ -76,16 +76,16 @@ const tools = $("#tools"), toolEls = $$(".tool", tools), outs = [$("#b-out-1"), 
 const caps = [0, 1, 2, 3].map((i) => $(`#cap-${i}`)), statement = $("#statement"), rail = $("#rail"), railDots = $$("span", rail);
 
 const T = {               // timeline (fractions of the take)
-  hero: [0, 0.1],         // hero copy fades, orb slides to centre
-  inb: [0.07, 0.2],       // user message travels into the orb
-  cap0: [0.08, 0.26],
-  log: [0.24, 0.42],      // event lines appear one after another
-  cap1: [0.26, 0.46],
-  tools: [0.44, 0.62],    // tool chips orbit
-  cap2: [0.46, 0.66],
-  outs: [0.64, 0.84],     // replies fly out
-  cap3: [0.66, 0.86],
-  end: [0.86, 1],         // orb rises, statement appears
+  hero: [0, 0.13],        // hero copy fades, orb slides to centre
+  inb: [0.09, 0.23],      // user message travels into the orb
+  cap0: [0.10, 0.28],
+  log: [0.25, 0.43],      // event lines appear one after another
+  cap1: [0.27, 0.47],
+  tools: [0.45, 0.63],    // tool chips orbit
+  cap2: [0.47, 0.67],
+  outs: [0.65, 0.85],     // replies fly out
+  cap3: [0.67, 0.87],
+  end: [0.87, 1],         // orb rises, statement appears
 };
 
 let mobile = false, R = 90, offIn = { x: 0, y: 0 }, offOuts = [], orbHero = { x: 0, y: 0 }, toolAngles = [];
@@ -148,7 +148,7 @@ function render(p) {
     const op = s * tv;
     show(el, op);
     if (op > 0.002) {
-      const a = (toolAngles[k] + t * 300) * Math.PI / 180;
+      const a = (toolAngles[k] + t * 110) * Math.PI / 180;
       const tx = Math.cos(a) * rad;
       const ty = Math.sin(a) * rad * (mobile ? 0.75 : 0.62);
       el.style.transform = `translate(-50%, -50%) translate3d(${tx}px, ${ty}px, 0) scale(${0.6 + 0.4 * s})`;
@@ -189,20 +189,26 @@ function render(p) {
 }
 
 if (!reduced) {
-  let targetP = 0, curP = 0, rafId = 0;
+  let targetP = 0, curP = 0, rafId = 0, lastT = 0;
 
   const getTargetP = () => clamp((scrollY - takeTop) / takeRange);
 
-  const tick = () => {
+  const tick = (now) => {
+    const dt = lastT ? Math.min(32, now - lastT) : 16.67;
+    lastT = now;
+    const scale = dt / 16.67;
     const diff = targetP - curP;
-    if (Math.abs(diff) > 0.0004) {
-      curP += diff * 0.22;
+    if (Math.abs(diff) > 0.00025) {
+      // Time-normalized gentle damping + velocity cap so 120Hz screens or fast wheel flicks never whip too fast
+      const step = clamp(diff * 0.075 * scale, -0.0075 * scale, 0.0075 * scale);
+      curP += step;
       render(curP);
       rafId = requestAnimationFrame(tick);
     } else {
       curP = targetP;
       render(curP);
       rafId = 0;
+      lastT = 0;
     }
   };
 
@@ -210,7 +216,10 @@ if (!reduced) {
     const next = getTargetP();
     if (next === targetP && rafId === 0) return;
     targetP = next;
-    if (!rafId) rafId = requestAnimationFrame(tick);
+    if (!rafId) {
+      lastT = 0;
+      rafId = requestAnimationFrame(tick);
+    }
   };
 
   measure();
