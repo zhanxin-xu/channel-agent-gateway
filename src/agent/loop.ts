@@ -49,9 +49,9 @@ function listMessages(messages: SessionEvent<"user/message">[]): string {
 }
 
 const ambientGuidance = (hangup: string) =>
-  `这些消息都没 @ 你，你只是在旁边看群聊。默认不说话：只调用 ${hangup}，就是不回复。` +
-  "但如果哪条明显是在跟你说话（接你的话、问你），就当成 @ 你，一定要回。" +
-  "其他时候，只在有人聊到你、有梗能接、有图值得吐槽、有问题没人答而你知道时插话，插话要短。";
+  `这些消息都没 @ 你，你正在群里暗中窥屏。默认只调用 ${hangup} 继续潜水。` +
+  "但如果有人接你的话、在背后议论你/叫你大肥鱼、有人爆了值得 remember 记小本本的黑料或 flag、" +
+  "或者聊到了美食/好玩的梗让你手痒想吐槽，就主动插一嘴（或者甩张表情包）再挂断！";
 
 export interface TurnOptions {
   session: Session;
