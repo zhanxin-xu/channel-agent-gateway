@@ -27,6 +27,10 @@ for (const name of [
   "VERCEL_OIDC_TOKEN",
   "SANDBOX_ENABLED",
   "WORKER_SECRET",
+  "SUPABASE_URL",
+  "SUPABASE_SECRET_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "STORE_BACKEND",
 ]) {
   delete process.env[name];
 }
@@ -109,6 +113,12 @@ function runRedis([cmd, key, ...args]: string[]): unknown {
     }
     case "EXPIRE":
       return 1;
+    case "SCAN":
+      return ["0", [...redis.keys()]];
+    case "TYPE":
+      return redis.has(key!) ? (Array.isArray(redis.get(key!)) ? "list" : "string") : "none";
+    case "PTTL":
+      return redis.has(key!) ? -1 : -2;
     case "DEL":
       return [key!, ...args].filter((k) => redis.delete(k)).length;
     default:
@@ -118,6 +128,51 @@ function runRedis([cmd, key, ...args]: string[]): unknown {
 function fakeUpstash(url: string, body: any) {
   if (new URL(url).pathname === "/pipeline") return Response.json(body.map((c: string[]) => ({ result: runRedis(c) })));
   return Response.json({ result: runRedis(body) });
+}
+
+/** Minimal Supabase Data API emulator: the functions of supabase/schema.sql, in memory. */
+const pg = { kv: new Map<string, { value: string; expiresAt: number }>(), lists: new Map<string, string[]>() };
+function fakeSupabase(url: string, headers: Headers, body: any) {
+  if (headers.get("apikey") !== "sb_secret_test") return Response.json({ message: "Invalid API key" }, { status: 401 });
+  const fn = new URL(url).pathname.replace("/rest/v1/rpc/", "");
+  const live = (k: string) => {
+    const hit = pg.kv.get(k);
+    return hit && hit.expiresAt > Date.now() ? hit : undefined;
+  };
+  const list = (k: string) => pg.lists.get(k) ?? [];
+  const at = (i: number, len: number) => (i < 0 ? Math.max(len + i, 0) : i);
+  switch (fn) {
+    case "kv_get":
+      return Response.json(live(body.p_key)?.value ?? null);
+    case "kv_set":
+      if (body.p_nx && live(body.p_key)) return Response.json(false);
+      pg.kv.set(body.p_key, { value: body.p_value, expiresAt: Date.now() + body.p_ttl_ms });
+      return Response.json(true);
+    case "kv_incrby": {
+      const next = Number(live(body.p_key)?.value ?? 0) + body.p_by;
+      pg.kv.set(body.p_key, { value: String(next), expiresAt: Date.now() + body.p_ttl_s * 1000 });
+      return Response.json(next);
+    }
+    case "store_del":
+      for (const k of body.p_keys) {
+        pg.kv.delete(k);
+        pg.lists.delete(k);
+      }
+      return new Response(null, { status: 204 });
+    case "list_rpush":
+      pg.lists.set(body.p_key, [...list(body.p_key), ...body.p_values]);
+      return Response.json(list(body.p_key).length);
+    case "list_range": {
+      const l = list(body.p_key);
+      const stop = body.p_stop < 0 ? l.length + body.p_stop : Math.min(body.p_stop, l.length - 1);
+      return Response.json(l.slice(at(body.p_start, l.length), stop + 1));
+    }
+    case "list_lpop":
+      pg.lists.set(body.p_key, list(body.p_key).slice(body.p_count));
+      return new Response(null, { status: 204 });
+    default:
+      return Response.json({ message: `no function ${fn}` }, { status: 404 });
+  }
 }
 
 /** Minimal Upstash Vector emulator: "similarity" is just shared characters with the query. */
@@ -257,6 +312,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     });
   }
   if (url.startsWith("https://redis.example.com")) return fakeUpstash(url, body);
+  if (url.startsWith("https://db.example.supabase.co/rest/v1/rpc/")) return fakeSupabase(url, req.headers, body);
   if (url.startsWith("https://vector.example.com/")) return fakeVector(url, req.method, body);
   if (url.startsWith("https://multimedia.nt.qq.com.cn/")) {
     if (url.includes("missing")) return new Response("gone", { status: 404 });
@@ -284,7 +340,7 @@ const { handleWorker } = await import("../src/worker.js");
 worker = handleWorker;
 const { evaluate, activeTools, runTool } = await import("../src/agent/tools.js");
 const { messageHeader } = await import("../src/agent/handle.js");
-const { getStore } = await import("../src/store/index.js");
+const { getStore, resetStore, storeBackend } = await import("../src/store/index.js");
 const { EventLog } = await import("../src/agent/events.js");
 const qqHint = (await import("../src/channels/qq.js")).qqAdapter.promptHint!;
 const { config } = await import("../src/config.js");
@@ -594,6 +650,74 @@ await test("upstash store: lists, set NX/PX, incrby, claim, del", async () => {
   await store.del("l", "lock");
   assert.deepEqual(await store.lrange("l", 0, -1), []);
   assert.equal(calls.find((c) => c.url.startsWith("https://redis.example.com"))!.headers.get("authorization"), "Bearer rd-token");
+});
+
+await test("supabase store: Redis-shaped operations over /rest/v1/rpc with the secret key", async () => {
+  const { SupabaseStore } = await import("../src/store/index.js");
+  const store = new SupabaseStore("https://db.example.supabase.co/", "sb_secret_test");
+  assert.equal(await store.claim("evt:x", 60), true);
+  assert.equal(await store.claim("evt:x", 60), false);
+  assert.equal(await store.rpush("l", ["a", "b", "c"], 600), 3);
+  assert.deepEqual(await store.lrange("l", 1, -1), ["b", "c"]);
+  await store.lpop("l", 1);
+  assert.deepEqual(await store.lrange("l", 0, -1), ["b", "c"]);
+  assert.equal(await store.incrby("n", 2, 60), 2);
+  assert.equal(await store.get("missing"), null);
+  await store.del("l");
+  assert.deepEqual(await store.lrange("l", 0, -1), []);
+  const call = calls.find((c) => c.url === "https://db.example.supabase.co/rest/v1/rpc/kv_set")!;
+  assert.equal(call.headers.get("apikey"), "sb_secret_test");
+  assert.equal(call.headers.get("authorization"), null, "a sb_secret_ key is not a bearer token");
+  assert.deepEqual(call.body, { p_key: "evt:x", p_value: "1", p_ttl_ms: 60000, p_nx: true });
+});
+
+await test("supabase store: picked when configured; a whole conversation runs on it", async () => {
+  const memory = getStore();
+  process.env.SUPABASE_URL = "https://db.example.supabase.co";
+  process.env.SUPABASE_SECRET_KEY = "sb_secret_test";
+  resetStore();
+  try {
+    assert.equal(storeBackend(), "supabase");
+    assert.equal((await httpCall("first", "pgchat")).reply, "答案是 20");
+    await httpCall("second", "pgchat");
+    const stored = pg.lists.get("ev:http:pgchat")!.map((e) => JSON.parse(e).type);
+    assert.equal(stored.filter((t) => t === "turn/end").length, 2);
+    assert.equal(pg.kv.get("ev:cursor:http:pgchat")!.value, String(stored.lastIndexOf("user/message")));
+    process.env.STORE_BACKEND = "upstash";
+    process.env.KV_REST_API_URL = "https://redis.example.com";
+    process.env.KV_REST_API_TOKEN = "rd-token";
+    assert.equal(storeBackend(), "upstash", "STORE_BACKEND overrides");
+  } finally {
+    for (const k of ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "STORE_BACKEND", "KV_REST_API_URL", "KV_REST_API_TOKEN"]) delete process.env[k];
+    resetStore(memory);
+  }
+});
+
+await test("migrate: copies Upstash strings and lists to Supabase, skips locks; signed", async () => {
+  const { handleMigrate } = await import("../src/migrate.js");
+  const { workerSignature } = await import("../src/agent/handle.js");
+  process.env.SUPABASE_URL = "https://db.example.supabase.co";
+  process.env.SUPABASE_SECRET_KEY = "sb_secret_test";
+  process.env.KV_REST_API_URL = "https://redis.example.com";
+  process.env.KV_REST_API_TOKEN = "rd-token";
+  redis.clear();
+  redis.set("ev:qq:group:G", ['{"type":"user/message"}', '{"type":"turn/start"}']);
+  redis.set("ev:cursor:qq:group:G", "0");
+  redis.set("ev:lock:qq:group:G", "someone");
+  pg.lists.set("ev:qq:group:G", ["stale"]);
+  try {
+    const body = "{}";
+    const bad = await handleMigrate(new Request("https://x/api/migrate", { method: "POST", body, headers: { "x-worker-signature": "00" } }));
+    assert.equal(bad.status, 401);
+    const res = await handleMigrate(new Request("https://x/api/migrate", { method: "POST", body, headers: { "x-worker-signature": workerSignature(body) } }));
+    const out = (await res.json()) as any;
+    assert.deepEqual({ ...out, errors: out.errors.length }, { keys: 3, strings: 1, lists: 1, listItems: 2, skipped: 1, errors: 0 });
+    assert.deepEqual(pg.lists.get("ev:qq:group:G"), ['{"type":"user/message"}', '{"type":"turn/start"}'], "replaced, in order");
+    assert.equal(pg.kv.get("ev:cursor:qq:group:G")!.value, "0");
+    assert.equal(pg.kv.has("ev:lock:qq:group:G"), false);
+  } finally {
+    for (const k of ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "KV_REST_API_URL", "KV_REST_API_TOKEN"]) delete process.env[k];
+  }
 });
 
 await test("qq: retried event is de-duplicated", async () => {

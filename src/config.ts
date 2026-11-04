@@ -144,6 +144,21 @@ export const config = {
   },
 
   store: {
+    /**
+     * "supabase", "upstash" or "memory". Empty: Supabase when configured,
+     * else Upstash when configured, else memory.
+     */
+    get backend() {
+      return str("STORE_BACKEND").toLowerCase();
+    },
+    // Supabase (Postgres, see supabase/schema.sql). The Vercel Marketplace
+    // integration injects SUPABASE_URL and the server keys.
+    get supabaseUrl() {
+      return str("SUPABASE_URL").replace(/\/+$/, "");
+    },
+    get supabaseKey() {
+      return str("SUPABASE_SECRET_KEY") || str("SUPABASE_SERVICE_ROLE_KEY");
+    },
     // Upstash Redis REST credentials. The Vercel Marketplace integration
     // injects KV_REST_API_*; a direct Upstash setup uses UPSTASH_REDIS_REST_*.
     get url() {

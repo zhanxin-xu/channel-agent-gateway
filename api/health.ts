@@ -1,6 +1,7 @@
 import { activeTools } from "../src/agent/tools.js";
 import { channels } from "../src/channels/index.js";
 import { config } from "../src/config.js";
+import { storeBackend } from "../src/store/index.js";
 
 function extraBodyStatus(): string {
   try {
@@ -21,7 +22,7 @@ export default {
       apiKey: Boolean(config.openrouter.apiKey),
       extraBody: extraBodyStatus(),
       tools: activeTools().map((t) => t.name),
-      store: config.store.url ? "upstash" : "memory",
+      store: storeBackend(),
       memory: Boolean(config.memory.url && config.memory.token),
       sandbox: config.sandbox.enabled,
       channels: Object.fromEntries([...channels.values()].map((c) => [c.name, c.isConfigured()])),

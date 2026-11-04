@@ -1,12 +1,16 @@
 /**
  * A small key-value store: the per-chat event logs, locks, cursors and
- * de-duplication keys all live here.
+ * de-duplication keys all live here. The interface is Redis-shaped (strings
+ * with TTLs, and lists).
  *
  * Serverless instances are ephemeral and run in parallel (and a deploy swaps
- * them out), so production needs a shared store: Upstash Redis over its REST
- * API (no SDK, just fetch). Without credentials it falls back to per-instance
- * memory, which is fine for local development and tests but shares nothing
- * between instances.
+ * them out), so production needs a shared store, reached over HTTP with
+ * plain fetch (no SDK):
+ *   - Supabase: Postgres tables plus functions called over the Data API
+ *     (supabase/schema.sql). No per-request quota on the free plan.
+ *   - Upstash Redis over its REST API (every command counts toward the quota).
+ * Without either it falls back to per-instance memory, which is fine for
+ * local development and tests but shares nothing between instances.
  */
 import { config } from "../config.js";
 
@@ -159,11 +163,86 @@ export class UpstashStore implements Store {
   }
 }
 
+/**
+ * Supabase: each operation is one call to a function from supabase/schema.sql
+ * (POST /rest/v1/rpc/<name>) with the server key. New secret keys (sb_secret_…)
+ * go in the `apikey` header; a legacy service-role JWT also as the bearer token.
+ */
+export class SupabaseStore implements Store {
+  constructor(
+    private url: string,
+    private key: string,
+  ) {}
+
+  private async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+    const headers: Record<string, string> = { apikey: this.key, "content-type": "application/json" };
+    if (this.key.startsWith("eyJ")) headers.authorization = `Bearer ${this.key}`;
+    const res = await fetch(`${this.url.replace(/\/+$/, "")}/rest/v1/rpc/${fn}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(args),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Supabase ${fn} HTTP ${res.status}: ${text.slice(0, 200)}`);
+    return (text ? JSON.parse(text) : null) as T;
+  }
+
+  async rpush(key: string, values: string[], ttlSeconds: number) {
+    return Number(await this.rpc("list_rpush", { p_key: key, p_values: values, p_ttl_s: ttlSeconds }));
+  }
+
+  async lrange(key: string, start: number, stop: number) {
+    return (await this.rpc<string[] | null>("list_range", { p_key: key, p_start: start, p_stop: stop })) ?? [];
+  }
+
+  async lpop(key: string, count: number) {
+    if (count > 0) await this.rpc("list_lpop", { p_key: key, p_count: count });
+  }
+
+  async get(key: string) {
+    return (await this.rpc<string | null>("kv_get", { p_key: key })) ?? null;
+  }
+
+  async set(key: string, value: string, ttlMs: number, opts: { nx?: boolean } = {}) {
+    return Boolean(
+      await this.rpc("kv_set", { p_key: key, p_value: value, p_ttl_ms: Math.max(1, Math.round(ttlMs)), p_nx: Boolean(opts.nx) }),
+    );
+  }
+
+  async incrby(key: string, by: number, ttlSeconds: number) {
+    return Number(await this.rpc("kv_incrby", { p_key: key, p_by: by, p_ttl_s: ttlSeconds }));
+  }
+
+  async del(...keys: string[]) {
+    if (keys.length) await this.rpc("store_del", { p_keys: keys });
+  }
+
+  async claim(key: string, ttlSeconds: number) {
+    return this.set(key, "1", ttlSeconds * 1000, { nx: true });
+  }
+}
+
 let instance: Store | undefined;
 
+/** Which backend getStore() uses (see config.store.backend). */
+export function storeBackend(): "supabase" | "upstash" | "memory" {
+  const { backend, supabaseUrl, supabaseKey, url, token } = config.store;
+  if (backend === "supabase" || backend === "upstash" || backend === "memory") return backend;
+  if (supabaseUrl && supabaseKey) return "supabase";
+  if (url && token) return "upstash";
+  return "memory";
+}
+
 export function getStore(): Store {
-  instance ??=
-    config.store.url && config.store.token ? new UpstashStore(config.store.url, config.store.token) : new MemoryStore();
+  if (!instance) {
+    const backend = storeBackend();
+    instance =
+      backend === "supabase"
+        ? new SupabaseStore(config.store.supabaseUrl, config.store.supabaseKey)
+        : backend === "upstash"
+          ? new UpstashStore(config.store.url, config.store.token)
+          : new MemoryStore();
+  }
   return instance;
 }
 

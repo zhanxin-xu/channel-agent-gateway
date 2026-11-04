@@ -6,6 +6,9 @@
     },
     "api/worker.ts": {
       "maxDuration": 300
+    },
+    "api/migrate.ts": {
+      "maxDuration": 300
     }
   }
 }
