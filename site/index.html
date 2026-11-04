@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>serverless-agent-gateway · 部署在 Vercel 上的多渠道 AI 机器人网关</title>
-  <meta name="description" content="QQ、Telegram 或任意 HTTP 客户端通过 Webhook 把消息推进来，网关跑一个带工具调用的 agent loop，再从原渠道把回复发回去。只追加的事件流、一个聊天一个 agent、免费额度就能跑。">
-  <meta name="theme-color" content="#06090f">
+  <meta name="description" content="不需要服务器的多渠道 AI 机器人网关：QQ、Telegram 或任意 HTTP 客户端通过 Webhook 把消息推进来，Vercel Functions 上的 agent loop 调用工具后从原渠道回复。只追加的事件流、一个聊天一个 agent，部署免费。">
+  <meta name="theme-color" content="#f5f7fb">
   <meta property="og:title" content="serverless-agent-gateway">
   <meta property="og:description" content="部署在 Vercel Functions 上的多渠道 AI 机器人网关：QQ、Telegram、HTTP → 带工具调用的 agent loop → 回复。">
   <meta property="og:type" content="website">
@@ -41,7 +41,7 @@
     <section class="hero">
       <div class="hero-copy">
         <a class="pill" href="https://github.com/zhanxin-xu/serverless-agent-gateway" data-reveal>
-          <span class="pulse"></span>开源 · MIT · 免费额度就能跑
+          <span class="pulse"></span>开源 · MIT · 不需要服务器
         </a>
         <h1 class="lines">
           <span class="line"><span>把群里的消息，</span></span>
@@ -49,8 +49,8 @@
           <span class="line"><span>的 agent。</span></span>
         </h1>
         <p class="lead" data-reveal style="--d:.5s">
-          一个部署在 Vercel Functions 上的多渠道 AI 机器人网关。QQ、Telegram 或任意 HTTP 客户端通过 Webhook
-          把消息推进来，网关跑一个带工具调用的 agent loop，再从原渠道把回复发回去。
+          一个<strong>不需要服务器</strong>的多渠道 AI 机器人网关：部署在 Vercel Functions 上，有消息才运行。
+          QQ、Telegram 或任意 HTTP 客户端通过 Webhook 把消息推进来，网关跑一个带工具调用的 agent loop，再从原渠道把回复发回去。
         </p>
         <div class="cta" data-reveal style="--d:.62s">
           <a class="btn primary magnetic" href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fserverless-agent-gateway&amp;env=OPENROUTER_API_KEY&amp;envDescription=OpenRouter%20API%20key%20for%20the%20model">
@@ -59,9 +59,10 @@
           <a class="btn ghost magnetic" href="https://github.com/zhanxin-xu/serverless-agent-gateway"><span>查看源码 →</span></a>
         </div>
         <dl class="hero-meta" data-reveal style="--d:.74s">
+          <div><dt>服务器</dt><dd>不需要 · 按需运行</dd></div>
           <div><dt>渠道</dt><dd>QQ · Telegram · HTTP</dd></div>
           <div><dt>模型</dt><dd>任意 Responses API</dd></div>
-          <div><dt>存储</dt><dd>Supabase · 只追加事件流</dd></div>
+          <div><dt>部署</dt><dd>免费 · 一键到 Vercel</dd></div>
         </dl>
       </div>
 
@@ -233,12 +234,13 @@
       <div class="num-grid">
         <div><b data-count="300" data-suffix="s">0</b><span>函数时限，到点自动接力</span></div>
         <div><b data-count="97.8" data-suffix="%">0</b><span>线上一轮对话的缓存命中率</span></div>
-        <div><b data-count="1">0</b><span>个聊天同一时刻只有 1 个 agent</span></div>
-        <div><b>¥0</b><span>Vercel Hobby + Supabase 免费版即可运行</span></div>
+        <div><b data-count="0">0</b><span>台需要维护的服务器</span></div>
+        <div><b>¥0</b><span>部署与存储费用：Vercel Hobby + Supabase 免费版</span></div>
       </div>
       <ul class="stack">
         <li>Vercel Functions</li><li>Supabase</li><li>OpenRouter</li><li>Upstash Vector</li><li>Vercel Sandbox</li>
       </ul>
+      <p class="fine">免费的是部署和存储：不用买服务器，没人说话就不运行。模型调用按用量付给 OpenRouter 等供应商，事件流只追加、缓存持续命中，这部分开销也压得很低。</p>
     </section>
 
     <!-- ───────────── Quick start ───────────── -->
