@@ -1097,6 +1097,18 @@ await test("memory: remember / recall / forget on Upstash Vector, shared across 
     assert.equal(JSON.parse(await runTool("recall", '{"query":"老王"}', groupCtx))[0].same_chat, true);
     assert.equal(await runTool("forget", JSON.stringify({ ids: [id] }), noCtx), "deleted 1");
     assert.match(await runTool("remember", JSON.stringify({ content: "x".repeat(501) }), noCtx), /^Error: too long/);
+    assert.match(
+      await runTool("remember", JSON.stringify({ content: "他今年考不上研就倒立洗头" }), groupCtx),
+      /^Error: memory is missing a clear subject\/#ID/,
+    );
+    assert.match(
+      await runTool("remember", JSON.stringify({ content: "喜欢吃香菜" }), groupCtx),
+      /^Error: memory is missing a clear subject\/#ID/,
+    );
+    assert.match(
+      await runTool("remember", JSON.stringify({ content: "老王 #3B6834 对这件事很生气" }), groupCtx),
+      /^Error: memory is missing a clear subject\/#ID/,
+    );
   } finally {
     delete process.env.UPSTASH_VECTOR_REST_URL;
     delete process.env.UPSTASH_VECTOR_REST_TOKEN;
