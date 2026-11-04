@@ -131,6 +131,11 @@ function fakeResponses(body: any) {
     output = toolOutput
       ? [textMessage("这句是收尾文字，不应该被发出去")]
       : [sendCall("call_a", "第一条"), sendCall("call_b", "第二条")];
+  } else if (userText.startsWith("先挂")) {
+    // Hangs up first, then talks: everything in the step still runs, in order.
+    const end = { type: "function_call", id: "fc_e", call_id: "call_e", name: "end_turn", arguments: "{}" };
+    const search = { type: "function_call", id: "fc_w", call_id: "call_w", name: "web_search", arguments: '{"query":"x"}' };
+    output = [end, sendCall("call_1", "第一条"), search, sendCall("call_2", "第二条")];
   } else if (userText.startsWith("死循环")) {
     // Keeps calling tools until the last-step note shows up, then reports (and tries one more tool).
     const last = body.input.at(-1);
@@ -873,6 +878,13 @@ await test("end_turn: requests require a tool; talking alone doesn't end the tur
   // "连发" sends two messages and hangs up in the same step: one model call.
   await httpCall("连发", "c-end2");
   assert.equal(llmRequests().length, 3);
+});
+
+await test("end_turn: position in the step doesn't matter; messages go out in order, other tools are skipped", async () => {
+  const res = await httpCall("先挂", "c-order");
+  assert.equal(res.reply, "第一条\n第二条");
+  assert.equal(llmRequests().length, 1);
+  assert.ok(!calls.some((c) => c.url.endsWith("/v1/tools/search")), "web_search skipped when hanging up");
 });
 
 await test("step limit: the last step gets a wrap-up note; only talk tools run in it", async () => {
