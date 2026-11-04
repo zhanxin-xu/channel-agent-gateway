@@ -1,9 +1,15 @@
-# channel-agent-gateway
+<p align="center">
+  <img src=".github/logo.png" alt="大肥鱼" width="160" height="160">
+</p>
 
-[![CI](https://github.com/zhanxin-xu/channel-agent-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/zhanxin-xu/channel-agent-gateway/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Node.js 24](https://img.shields.io/badge/node-24.x-339933?logo=node.js&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)
+<h1 align="center">channel-agent-gateway</h1>
+
+<p align="center">
+  <a href="https://github.com/zhanxin-xu/channel-agent-gateway/actions/workflows/ci.yml"><img src="https://github.com/zhanxin-xu/channel-agent-gateway/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/node-24.x-339933?logo=node.js&amp;logoColor=white" alt="Node.js 24">
+  <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&amp;logoColor=white" alt="TypeScript">
+</p>
 
 一个部署在 Vercel Functions 上的多渠道 AI 机器人网关。QQ、Telegram 或任意 HTTP 客户端通过 Webhook 把消息推进来，网关跑一个带工具调用的 agent loop，再从原渠道把回复发回去。
 
