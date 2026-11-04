@@ -113,12 +113,6 @@ function runRedis([cmd, key, ...args]: string[]): unknown {
     }
     case "EXPIRE":
       return 1;
-    case "SCAN":
-      return ["0", [...redis.keys()]];
-    case "TYPE":
-      return redis.has(key!) ? (Array.isArray(redis.get(key!)) ? "list" : "string") : "none";
-    case "PTTL":
-      return redis.has(key!) ? -1 : -2;
     case "DEL":
       return [key!, ...args].filter((k) => redis.delete(k)).length;
     default:
@@ -690,33 +684,6 @@ await test("supabase store: picked when configured; a whole conversation runs on
   } finally {
     for (const k of ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "STORE_BACKEND", "KV_REST_API_URL", "KV_REST_API_TOKEN"]) delete process.env[k];
     resetStore(memory);
-  }
-});
-
-await test("migrate: copies Upstash strings and lists to Supabase, skips locks; signed", async () => {
-  const { handleMigrate } = await import("../src/migrate.js");
-  const { workerSignature } = await import("../src/agent/handle.js");
-  process.env.SUPABASE_URL = "https://db.example.supabase.co";
-  process.env.SUPABASE_SECRET_KEY = "sb_secret_test";
-  process.env.KV_REST_API_URL = "https://redis.example.com";
-  process.env.KV_REST_API_TOKEN = "rd-token";
-  redis.clear();
-  redis.set("ev:qq:group:G", ['{"type":"user/message"}', '{"type":"turn/start"}']);
-  redis.set("ev:cursor:qq:group:G", "0");
-  redis.set("ev:lock:qq:group:G", "someone");
-  pg.lists.set("ev:qq:group:G", ["stale"]);
-  try {
-    const body = "{}";
-    const bad = await handleMigrate(new Request("https://x/api/migrate", { method: "POST", body, headers: { "x-worker-signature": "00" } }));
-    assert.equal(bad.status, 401);
-    const res = await handleMigrate(new Request("https://x/api/migrate", { method: "POST", body, headers: { "x-worker-signature": workerSignature(body) } }));
-    const out = (await res.json()) as any;
-    assert.deepEqual({ ...out, errors: out.errors.length }, { keys: 3, strings: 1, lists: 1, listItems: 2, skipped: 1, errors: 0 });
-    assert.deepEqual(pg.lists.get("ev:qq:group:G"), ['{"type":"user/message"}', '{"type":"turn/start"}'], "replaced, in order");
-    assert.equal(pg.kv.get("ev:cursor:qq:group:G")!.value, "0");
-    assert.equal(pg.kv.has("ev:lock:qq:group:G"), false);
-  } finally {
-    for (const k of ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "KV_REST_API_URL", "KV_REST_API_TOKEN"]) delete process.env[k];
   }
 });
 

@@ -35,11 +35,23 @@
 
 ## 存储
 
-### Upstash Redis（事件流，必需）
+存储保存每个聊天的事件流、图片、运行锁、去重记录和采样锁，生产环境必需。不配置时退化为内存存储，只适合本地开发：Serverless 会同时启动多个实例，内存在实例之间不共享，锁也就失效了，表现为"机器人记不住上下文"和重复回复。
 
-在项目的 **Storage** 页面添加 Upstash Redis（Upstash for Redis），连接项目后会自动注入 `KV_REST_API_URL` 和 `KV_REST_API_TOKEN`。
+支持两种存储，接口完全一样，用 `STORE_BACKEND` 选择（不设置时优先 Supabase）：
 
-Redis 保存每个聊天的事件流、图片、运行锁、去重记录和采样锁。不配置时退化为内存存储，只适合本地开发：Serverless 会同时启动多个实例，内存在实例之间不共享，锁也就失效了，表现为"机器人记不住上下文"和重复回复。
+### Supabase（推荐）
+
+免费版 API 请求不限次数，只按数据量和流量限制，适合消息多的群。
+
+1. 在项目的 **Storage** 页面添加 Supabase：Free 套餐，区域选 Singapore（和函数所在的 `sin1` 同区）。连接项目后会自动注入 `SUPABASE_URL`、`SUPABASE_SECRET_KEY` 等变量。
+2. 打开 Supabase 控制台的 **SQL Editor**，执行 [`supabase/schema.sql`](../supabase/schema.sql)。它会在私有 schema `gateway` 里建表（开启 RLS），在 `public` 里建一组只有服务端密钥能调用的函数，并用 pg_cron 每天清理过期数据。重复执行是安全的。
+3. 重新部署，`/api/health` 的 `store` 应显示 `supabase`。
+
+每个存储操作是一次函数调用（`POST /rest/v1/rpc/<函数名>`）。免费项目一周没有数据库活动会被暂停，在控制台点 **Resume project** 即可恢复；机器人每天有人聊天就不会暂停。
+
+### Upstash Redis
+
+在 **Storage** 页面添加 Upstash Redis，会自动注入 `KV_REST_API_URL` 和 `KV_REST_API_TOKEN`。免费版每月 50 万条命令，每条命令都计数，热闹的群容易用完。
 
 ### Upstash Vector（长期记忆，可选）
 
@@ -75,20 +87,23 @@ Redis 保存每个聊天的事件流、图片、运行锁、去重记录和采�
 
 | 服务 | 免费额度 | 超出后 |
 |---|---|---|
-| Upstash Redis | 每月 50 万次命令，256 MB 数据 | 需升级套餐 |
+| Supabase | API 请求不限次数，500 MB 数据库，每月 5 GB 出站流量；一周无活动会暂停 | 需升级套餐 |
+| Upstash Redis（如果用它做存储） | 每月 50 万次命令，256 MB 数据 | 需升级套餐 |
 | Upstash Vector | 每天 1 万次查询或写入，1 GB 数据 | 需升级套餐 |
 | Vercel Sandbox（Hobby） | 每月 5 个 CPU 小时、420 GB·小时内存、5000 次创建；盘的存储总共 15 GB，不按月重置 | 创建暂停到下个周期，**不会扣费** |
 
 每条消息的大致消耗：
 
-| 消息类型 | Vercel 函数调用 | Redis 命令 | 模型调用 |
+| 消息类型 | Vercel 函数调用 | 存储操作 | 模型调用 |
 |---|---|---|---|
 | 群里没 @ 的消息，只写入 | 1 | 约 5 | 0 |
 | 旁观唤起，模型不插话 | 1 | 约 20 | 1 |
 | 私聊 / 被 @，一步回复 | 1 | 约 22 | 1 |
 | 每多一步（查资料、跑代码） | — | 约 4 | 1 |
 
-旁观唤起的数字由测试实测（`npm test` 里的 cost 用例），其余为估算。按 Upstash 免费版每月 50 万次命令估算，大约每天能支撑 700 次唤起。很热闹的群每 10 秒就可能唤起一次，可以把 `AGENT_AMBIENT_INTERVAL_SECONDS` 调大。
+旁观唤起的数字由测试实测（`npm test` 里的 cost 用例），其余为估算。用 Supabase 时存储操作不限次数；用 Upstash 时每个操作算一条命令，按免费版每月 50 万条估算，大约每天能支撑 700 次唤起。
+
+**流量**：每次运行开始时，会把这轮要用的事件和图片从存储读出来（同一个函数实例会缓存读过的事件）。图片多的聊天要留意 Supabase 每月 5 GB 的出站流量。
 
 **模型费用**：每次唤起，模型看到的都是完整的事件流，最多到 `AGENT_CONTEXT_TOKENS` 的 80% 才压缩。事件流只追加，所以绝大部分输入都能命中提示词缓存（日志里 `[turn]` 行的 `cached=` 就是命中的 token 数），但旁观唤起越频繁，费用越高。
 
