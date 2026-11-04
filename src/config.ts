@@ -161,8 +161,8 @@ export const config = {
 
   /**
    * Long-term memory (remember / recall / forget), shared by every chat.
-   * An Upstash Vector index created with a built-in embedding model (e.g. BGE-M3
-   * for Chinese), so the gateway sends raw text. Disabled when empty.
+   * An Upstash Vector index created with a hosted embedding model
+   * (text-embedding-3-small), so the gateway sends raw text. Disabled when empty.
    */
   memory: {
     get url() {

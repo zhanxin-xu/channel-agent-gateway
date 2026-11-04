@@ -277,9 +277,9 @@ DeepSeek 的这两个接口是普通 HTTP API，所以由本服务作为函数�
 
 记忆库只有一个，**所有群和私聊共用**。每条记忆是一句完整的话（比如"#3B6834 叫老王，是前端程序员"），由模型自己决定什么值得记。检索按语义相似度，返回最接近的几条。
 
-- **不用自己接 embedding**：索引创建时选一个 Upstash 自带的 embedding 模型，服务直接发原文（`/upsert-data`、`/query-data`）。中文推荐 **BGE-M3**。
+- **不用自己接 embedding**：索引创建时选一个 Upstash 自带的 embedding 模型，服务直接发原文（`/upsert-data`、`/query-data`）。Upstash 现在只为新索引提供 `text-embedding-3-small`（1536 维，正好是免费版的上限，支持多语言），BGE 系列已经不能再选了。
 - **记录来源**：每条记忆的 metadata 里有来源聊天、私聊还是群聊、谁说的、什么时候记的。检索结果会标出是否来自当前聊天。提示词要求模型不要把私聊里记下的事在群里说出来。
-- **开通**：在 Upstash 控制台新建一个 Vector 索引，embedding 模型选 BGE-M3，然后把 `UPSTASH_VECTOR_REST_URL` 和 `UPSTASH_VECTOR_REST_TOKEN` 填到 Vercel 环境变量里。
+- **开通**：在 Vercel 项目的 Storage 里新建 Upstash Vector：Free 套餐，DENSE 类型，embedding 选 `TEXT_EMBEDDING_3_SMALL`，相似度选 COSINE。连接项目时把环境变量前缀设成 `UPSTASH_VECTOR_REST`，就会注入 `UPSTASH_VECTOR_REST_URL` 和 `UPSTASH_VECTOR_REST_TOKEN`。
 - **免费额度**：每天 1 万次查询或写入，总数据 1 GB。和 Redis 的额度分开计算。
 
 ### 沙盒工作区（Vercel Sandbox + Drive）
