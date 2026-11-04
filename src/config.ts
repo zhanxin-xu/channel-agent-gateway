@@ -147,7 +147,7 @@ export const config = {
       return str("SUPABASE_URL").replace(/\/+$/, "");
     },
     get supabaseKey() {
-      return str("SUPABASE_SECRET_KEY") || str("SUPABASE_SERVICE_ROLE_KEY");
+      return str("SUPABASE_SECRET_KEY");
     },
   },
 

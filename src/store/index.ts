@@ -94,10 +94,7 @@ export interface ChatStore {
   getImages(keys: string[]): Promise<Record<string, string>>;
 }
 
-/**
- * Supabase: new secret keys (sb_secret_…) go in the `apikey` header; a legacy
- * service-role JWT also as the bearer token. Every function returns JSON.
- */
+/** Supabase, with a secret key (sb_secret_…) in the `apikey` header. Every function returns JSON. */
 export class PostgresStore implements ChatStore {
   constructor(
     private url: string,
@@ -105,11 +102,9 @@ export class PostgresStore implements ChatStore {
   ) {}
 
   private async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
-    const headers: Record<string, string> = { apikey: this.key, "content-type": "application/json" };
-    if (this.key.startsWith("eyJ")) headers.authorization = `Bearer ${this.key}`;
     const res = await fetch(`${this.url.replace(/\/+$/, "")}/rest/v1/rpc/${fn}`, {
       method: "POST",
-      headers,
+      headers: { apikey: this.key, "content-type": "application/json" },
       body: JSON.stringify(args),
     });
     const text = await res.text();

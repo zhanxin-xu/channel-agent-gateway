@@ -56,7 +56,7 @@ OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `SUPABASE_URL` | 空 | Supabase 项目地址，Vercel Marketplace 集成会自动注入 |
-| `SUPABASE_SECRET_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | 空 | 服务端密钥，优先用新版的 `sb_secret_…` 密钥，集成会自动注入 |
+| `SUPABASE_SECRET_KEY` | 空 | 服务端密钥（`sb_secret_…`），集成会自动注入 |
 | `UPSTASH_VECTOR_REST_URL` / `UPSTASH_VECTOR_REST_TOKEN` | 空 | Upstash Vector，用于长期记忆；为空时记忆工具不启用 |
 
 没配置 Supabase 时退化为内存存储：单实例能用，但多实例之间历史不共享，锁、去重和采样也会失效。Supabase 需要先执行 [`supabase/schema.sql`](../supabase/schema.sql)，见[部署文档](deployment.md#存储supabase)。聊天数据保留多久见[数据保留](deployment.md#存储supabase)。

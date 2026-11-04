@@ -28,7 +28,6 @@ for (const name of [
   "WORKER_SECRET",
   "SUPABASE_URL",
   "SUPABASE_SECRET_KEY",
-  "SUPABASE_SERVICE_ROLE_KEY",
 ]) {
   delete process.env[name];
 }
@@ -580,9 +579,6 @@ await test("postgres store: one function call per operation over /rest/v1/rpc wi
     p_lock_ttl_ms: 60000,
   });
   assert.equal(calls.length, 4);
-  const legacy = new PostgresStore("https://db.example.supabase.co", "eyJhbGciOi.legacy");
-  await legacy.getImages(["x"]).catch(() => {});
-  assert.equal(calls.at(-1)!.headers.get("authorization"), "Bearer eyJhbGciOi.legacy", "a legacy JWT key is also the bearer token");
 });
 
 await test("supabase store: picked when configured; a whole conversation runs on it", async () => {
