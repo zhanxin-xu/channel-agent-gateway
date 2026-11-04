@@ -2,7 +2,6 @@ import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import { messageLabel, type SessionEvent } from "../conversation/events.js";
 import type { Session } from "../conversation/session.js";
 import type { ChatStore } from "../store/index.js";
-import { MAX_MESSAGES_PER_TURN } from "../tools/chat.js";
 import type { ChatMeta } from "./types.js";
 
 /**
@@ -11,6 +10,9 @@ import type { ChatMeta } from "./types.js";
  * (QQ's msg_seq, Telegram's quote-once flag, the reply count), so a later
  * turn or another instance continues where the last one stopped.
  */
+/** Replies per inbound message when the channel sets no limit of its own: a cap on a looping model. */
+const DEFAULT_MAX_REPLIES = 5;
+
 export class Outbox {
   constructor(
     private store: ChatStore,
@@ -19,6 +21,10 @@ export class Outbox {
     private meta: ChatMeta,
     private collect: string[] | undefined,
   ) {}
+
+  private get maxReplies(): number {
+    return this.adapter.maxRepliesPerMessage ?? DEFAULT_MAX_REPLIES;
+  }
 
   private async context(target: SessionEvent<"user/message">): Promise<Record<string, string>> {
     return (await this.store.getReply(this.session.chatKey, target.data.eventId)) ?? { ...target.data.reply };
@@ -29,7 +35,7 @@ export class Outbox {
     const target = this.session.message(seq);
     if (!target) return false;
     const context = await this.context(target);
-    return Number(context.replies ?? 0) < MAX_MESSAGES_PER_TURN && Date.now() <= Number(context.expiresAt ?? Infinity);
+    return Number(context.replies ?? 0) < this.maxReplies && Date.now() <= Number(context.expiresAt ?? Infinity);
   }
 
   async deliver(seq: number, send: (message: InboundMessage) => Promise<void>): Promise<string> {
@@ -37,9 +43,9 @@ export class Outbox {
     if (!target) throw new Error(`${messageLabel(seq)} isn't in this chat; reply_to takes the N of a 第N条 label`);
     const replyContext = await this.context(target);
     const count = Number(replyContext.replies ?? 0);
-    if (count >= MAX_MESSAGES_PER_TURN) {
+    if (count >= this.maxReplies) {
       throw new Error(
-        `already replied to ${messageLabel(seq)} ${MAX_MESSAGES_PER_TURN} times, the limit; reply to another message or call end_turn`,
+        `already replied to ${messageLabel(seq)} ${this.maxReplies} times, the limit; reply to another message or call end_turn`,
       );
     }
     const message: InboundMessage = {
@@ -60,6 +66,6 @@ export class Outbox {
     } finally {
       await this.store.putReply(this.session.chatKey, target.data.eventId, replyContext);
     }
-    return `sent as a reply to ${messageLabel(seq)} (${count + 1}/${MAX_MESSAGES_PER_TURN})`;
+    return `sent as a reply to ${messageLabel(seq)} (${count + 1}/${this.maxReplies})`;
   }
 }

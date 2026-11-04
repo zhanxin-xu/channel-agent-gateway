@@ -262,11 +262,10 @@ const testChat = { key: "http:c0", scene: "私聊" as const, sender: "#USER01" }
 const noCtx = {
   sent: [] as string[],
   send: async () => "sent",
-  sendSticker: async () => "sent",
-  sendFile: async () => "sent",
   deadline: Number.POSITIVE_INFINITY,
   chat: testChat,
   images: [],
+  onRunEnd: () => {},
 };
 
 /** A chat's events as stored. */

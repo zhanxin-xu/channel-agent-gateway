@@ -48,11 +48,12 @@ export function workspaceFor(ctx: ToolContext): Promise<Workspace> {
     );
     open.set(ctx, ws);
     ws.catch(() => open.delete(ctx)); // let a later call try again
+    ctx.onRunEnd(() => closeWorkspace(ctx));
   }
   return ws;
 }
 
-/** Stop the run's sandbox, if one was started. Call once the agent run is over. */
+/** Stop the run's sandbox, if one was started (registered with ctx.onRunEnd when it starts). */
 export async function closeWorkspace(ctx: ToolContext): Promise<void> {
   const ws = open.get(ctx);
   if (!ws) return;

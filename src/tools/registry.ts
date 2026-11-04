@@ -7,7 +7,7 @@ import { llmKeyLimit, searchBalance } from "./account.js";
 import { endTurn, sendMessage, sendSticker } from "./chat.js";
 import { forget, recall, remember } from "./memory.js";
 import { bash, readFile, sendFile, writeFile } from "./sandbox/tools.js";
-import type { Tool, ToolContext } from "./types.js";
+import type { Tool, ToolContext, ToolRole } from "./types.js";
 import { calculate, getCurrentTime } from "./utility.js";
 import { webFetch, webSearch } from "./web.js";
 
@@ -32,6 +32,18 @@ const tools: Tool[] = [
 
 export function activeTools(): Tool[] {
   return tools.filter((t) => t.enabled?.() ?? true);
+}
+
+/** Names of the active tools with one of these roles. */
+export function toolNames(...roles: ToolRole[]): Set<string> {
+  return new Set(activeTools().filter((t) => t.role && roles.includes(t.role)).map((t) => t.name));
+}
+
+/** The active "say" tool: what the last step of a turn must call. */
+export function sayTool(): string {
+  const [name] = toolNames("say");
+  if (!name) throw new Error('no active tool has role "say"');
+  return name;
 }
 
 export async function runTool(name: string, rawArgs: string, ctx: ToolContext): Promise<string> {

@@ -109,5 +109,7 @@ export const myTool: Tool = {
 ```
 
 - `run` 抛出的错误会以 `Error: …` 的形式交给模型，不会中断这一轮。
-- `ctx` 里有当前聊天的信息（`ctx.chat`）、函数的截止时间（`ctx.deadline`），以及发消息、发表情包、发文件的方法。耗时较长的工具请参考 `bash`，根据 `ctx.deadline` 给自己设上限。
+- `ctx` 里有当前聊天的信息（`ctx.chat`）和函数的截止时间（`ctx.deadline`）。耗时较长的工具请参考 `bash`，根据 `ctx.deadline` 给自己设上限。
+- 往聊天里发东西用 `ctx.send(...)`：文字 `{ kind: "text", text }`、按 URL 发图片 `{ kind: "image", url, label }`、文件 `{ kind: "file", file }`。具体怎么发由渠道决定，发不了图片的渠道会退化成文字。发消息的工具要声明 `role: "talk"`，循环才知道它失败时不该挂断（见 [Agent 文档](agent.md#说话与挂断)）。
+- 工具占用了要释放的资源（比如沙盒），用 `ctx.onRunEnd(fn)` 注册清理函数，运行结束时统一执行。
 - 别忘了在 `scripts/selftest.ts` 里补一个测试。

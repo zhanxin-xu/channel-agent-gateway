@@ -5,6 +5,7 @@
  * read. Webhooks may append at any time; only the lock holder reads,
  * recovers, compacts and trims.
  */
+import { imagePrefix, storeToolImages, type ImagePart } from "../media/images.js";
 import type { ChatStore, SessionState } from "../store/index.js";
 import { deriveInput } from "./derive.js";
 import { isEvent, visibleWindow, type NewEvent, type SessionEvent } from "./events.js";
@@ -25,7 +26,7 @@ export class Session {
   private images = new Map<string, string | null>();
 
   private constructor(
-    readonly store: ChatStore,
+    private store: ChatStore,
     public state: SessionState,
   ) {}
 
@@ -91,6 +92,11 @@ export class Session {
       for (const key of missing) this.images.set(key, found[key] ?? null);
     }
     return deriveInput(events, async (key) => this.images.get(key) ?? null);
+  }
+
+  /** Store images a tool opened (shrunk to 1024px) for a tool/images event; returns their keys. */
+  storeToolImages(id: string, images: ImagePart[]): Promise<string[]> {
+    return storeToolImages(this.store, this.chatKey, imagePrefix(this.chatKey, id), images);
   }
 
   message(seq: number): SessionEvent<"user/message"> | undefined {

@@ -137,5 +137,6 @@ curl -X POST https://<域名>/api/webhook/http \
 | `sendFile(message, file)` | 否 | 上传并发送文件。不实现时 `send_file` 会返回错误 |
 | `typing(message)` | 否 | 显示"正在输入" |
 | `promptHint` | 否 | 追加到系统提示词后面的格式要求，例如"不要用 Markdown" |
+| `maxRepliesPerMessage` | 否 | 平台对一条消息最多允许几次回复（QQ 是 5）。不设置时用网关默认的 5 次，防止模型刷屏 |
 
 `InboundMessage.replyContext` 用来保存回复时需要的平台信息（比如 QQ 的 `msg_id` 和 `msg_seq` 计数），在同一轮的多次发送之间共享。

@@ -43,6 +43,8 @@ export interface ChannelAdapter {
   readonly name: string;
   /** Extra instructions appended to the system prompt, e.g. formatting limits. */
   readonly promptHint?: string;
+  /** How many replies one inbound message can take on this platform. Unset: the gateway's default (5). */
+  readonly maxRepliesPerMessage?: number;
   isConfigured(): boolean;
   /** Verify and parse a webhook request. `rawBody` is the exact request body. */
   receive(req: Request, rawBody: string): Promise<ReceiveResult>;

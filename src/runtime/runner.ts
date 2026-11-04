@@ -16,7 +16,6 @@ import { SYSTEM_PROMPT } from "../agent/system-prompt.js";
 import { recoverOpenTurn } from "../conversation/recovery.js";
 import { Session } from "../conversation/session.js";
 import { getStore, type ChatStore } from "../store/index.js";
-import { closeWorkspace } from "../tools/sandbox/workspace.js";
 import { makeToolContext } from "./context.js";
 import { handOff } from "./handoff.js";
 import { RunLock } from "./lock.js";
@@ -95,7 +94,7 @@ async function drain(
 
   const outbox = new Outbox(store, adapter, session, meta, opts.collect);
   const turnState = { main: -1 };
-  const ctx = makeToolContext(adapter, meta, chatKey, deadline, outbox, turnState, opts.collect);
+  const { ctx, endRun } = makeToolContext(adapter, meta, chatKey, deadline, outbox, turnState, opts.collect);
   let ambientClaimed = opts.ambientClaimed;
 
   const done = (outcome: "idle" | "handoff") => ({ outcome, session });
@@ -130,7 +129,7 @@ async function drain(
           main,
           canReply: () => outbox.canReply(main.seq),
         });
-        if (direct && ctx.sent.length === 0 && result.text) await ctx.send(result.text).catch(() => {});
+        if (direct && ctx.sent.length === 0 && result.text) await ctx.send({ kind: "text", text: result.text }).catch(() => {});
         await session.setCursor(result.handledUpTo);
         console.log(
           `[turn] ${chatKey} #${turn} ${direct ? "direct" : "ambient"} pending=${pending.length} steps=${result.steps} ` +
@@ -140,11 +139,11 @@ async function drain(
       } catch (err) {
         console.error(`[runner] turn ${turn} failed for ${chatKey}`, err);
         await session.setCursor(pending.at(-1)!.seq);
-        if (direct && ctx.sent.length === 0) await ctx.send("抱歉，处理消息时出错了，请稍后再试。").catch(() => {});
+        if (direct && ctx.sent.length === 0) await ctx.send({ kind: "text", text: "抱歉，处理消息时出错了，请稍后再试。" }).catch(() => {});
       }
     }
   } finally {
-    await closeWorkspace(ctx);
+    await endRun();
   }
 }
 

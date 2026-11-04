@@ -1,16 +1,14 @@
 /** Talking and hanging up: send_message, send_sticker, end_turn, and the reply rules they share. */
-import { isStickerName, STICKER_NAMES, STICKERS } from "./stickers.js";
+import { config } from "../config.js";
+import { DEFAULT_STICKER_BASE_URL, isStickerName, STICKER_NAMES, STICKERS, stickerUrl } from "./stickers.js";
 import type { Tool } from "./types.js";
-
-/** QQ allows 5 replies per inbound message (bot-docs send.md); apply the same cap on every channel. */
-export const MAX_MESSAGES_PER_TURN = 5;
 
 /** Shared `reply_to` parameter of the tools that talk (send_message, send_sticker, send_file). */
 export const REPLY_TO = {
   type: "integer",
   description:
     "Which message this replies to: the N of its 第N条 label. Default: the turn's main message, named in the system note. " +
-    `Each message takes at most ${MAX_MESSAGES_PER_TURN} replies.`,
+    "Each message takes a limited number of replies; every send reports how many are used.",
 };
 
 export const replyTo = (args: Record<string, unknown>): number | undefined =>
@@ -18,6 +16,7 @@ export const replyTo = (args: Record<string, unknown>): number | undefined =>
 
 export const sendMessage: Tool = {
   name: "send_message",
+  role: "say",
   description:
     "Send one chat message right now. This is how your words reach the chat: each call is a separate message, " +
     "so call it several times to send a few short messages in a row. " +
@@ -30,12 +29,13 @@ export const sendMessage: Tool = {
   async run(args, ctx) {
     const text = String(args.text ?? "").trim();
     if (!text) throw new Error("text is empty");
-    return `${await ctx.send(text, replyTo(args))}. If you're done, call end_turn (in the same step as your last message).`;
+    return `${await ctx.send({ kind: "text", text }, replyTo(args))}. If you're done, call end_turn (in the same step as your last message).`;
   },
 };
 
 export const sendSticker: Tool = {
   name: "send_sticker",
+  role: "talk",
   description:
     "Send one 大肥鱼 sticker (an image) right now, as its own message (it counts as a reply like send_message). Pick by mood:\n" +
     STICKER_NAMES.map((n) => `- ${n}：${STICKERS[n].when}`).join("\n"),
@@ -47,7 +47,7 @@ export const sendSticker: Tool = {
   async run(args, ctx) {
     const name = String(args.name ?? "");
     if (!isStickerName(name)) throw new Error(`unknown sticker "${name}"`);
-    return `${await ctx.sendSticker(name, replyTo(args))}. If you're done, call end_turn (in the same step as your last message).`;
+    return `${await ctx.send({ kind: "image", url: stickerUrl(config.stickerBaseUrl || DEFAULT_STICKER_BASE_URL, name), label: `[表情包：${name}]` }, replyTo(args))}. If you're done, call end_turn (in the same step as your last message).`;
   },
 };
 
@@ -56,6 +56,7 @@ export const END_TURN = "end_turn";
 
 export const endTurn: Tool = {
   name: END_TURN,
+  role: "hangup",
   description:
     "Hang up: end this turn. Call it once you've said everything, in the same step as your last " +
     "send_message so no extra round is needed. Don't call it while you still need to look something up " +

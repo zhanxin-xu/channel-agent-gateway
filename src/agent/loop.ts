@@ -26,9 +26,7 @@ import { config } from "../config.js";
 import { compactIfNeeded } from "./compaction.js";
 import { messageLabel, type NewEvent, type OutputItem, type SessionEvent, type TurnEndReason } from "../conversation/events.js";
 import type { Session } from "../conversation/session.js";
-import { imagePrefix, storeToolImages } from "../media/images.js";
-import { END_TURN } from "../tools/chat.js";
-import { activeTools, runTool } from "../tools/registry.js";
+import { activeTools, runTool, sayTool, toolNames } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
 import { createResponse, outputText, type ResponsesResult } from "./model.js";
 
@@ -38,9 +36,6 @@ const isFunctionCall = (item: OutputItem): item is FunctionCall => item.type ===
 export function toolDefinitions() {
   return activeTools().map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters }));
 }
-
-/** Tools that deliver to the chat; if one fails in the step that hangs up, the turn goes on. */
-const TALK_TOOLS = new Set(["send_message", "send_sticker", "send_file"]);
 
 /** Time kept for the last step (one model call plus sending) before the function's deadline. */
 export const LAST_STEP_RESERVE_MS = 90_000;
@@ -53,8 +48,8 @@ function listMessages(messages: SessionEvent<"user/message">[]): string {
   return messages.length > 10 ? `……${shown}（共 ${messages.length} 条）` : shown;
 }
 
-const AMBIENT_GUIDANCE =
-  "这些消息都没 @ 你，你只是在旁边看群聊。默认不说话：只调用 end_turn，就是不回复。" +
+const ambientGuidance = (hangup: string) =>
+  `这些消息都没 @ 你，你只是在旁边看群聊。默认不说话：只调用 ${hangup}，就是不回复。` +
   "但如果哪条明显是在跟你说话（接你的话、问你），就当成 @ 你，一定要回。" +
   "其他时候，只在有人聊到你、有梗能接、有图值得吐槽、有问题没人答而你知道时插话，插话要短。";
 
@@ -86,13 +81,17 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   const { session, ctx, turn } = o;
   const { model, extraBody } = config.openrouter;
   const tools = toolDefinitions();
+  // Tools are told apart by role (tools/types.ts), never by name.
+  const say = sayTool();
+  const talks = toolNames("say", "talk");
+  const hangups = toolNames("hangup");
   const usage = { input: 0, cached: 0, reasoning: 0 };
   let handledUpTo = o.pending.at(-1)!.seq;
 
   const start =
     `（系统提示）第${turn}轮开始。待处理的消息：${listMessages(o.pending)}。` +
     `发消息默认回复${messageLabel(o.main.seq)}，要回复别的消息用 reply_to。` +
-    (o.trigger === "ambient" ? AMBIENT_GUIDANCE : "");
+    (o.trigger === "ambient" ? ambientGuidance([...hangups].join(" / ")) : "");
   // Events are written in a few batches per step (each batch is one store call).
   let opening: NewEvent[] = [
     { type: "turn/start", data: { turn, trigger: o.trigger } },
@@ -125,7 +124,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
         return result(step - 1, reason);
       }
       notes.push(
-        `（系统提示）第${turn}轮：${outOfTime ? "时间快用完了" : "步数用完了"}，这是最后一步：必须现在用 send_message 发一条消息，发完这一轮就结束。` +
+        `（系统提示）第${turn}轮：${outOfTime ? "时间快用完了" : "步数用完了"}，这是最后一步：必须现在用 ${say} 发一条消息，发完这一轮就结束。` +
           "说出已经得到的结果；没做完就说做到哪了、卡在哪、接下来怎么办。",
       );
     }
@@ -144,9 +143,9 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
         instructions: o.systemPrompt,
         input: await session.input(),
         tools,
-        // Every step acts through a tool: talk with send_message, hang up with end_turn.
-        // The last step must send: whoever is waiting hears the result or where it got stuck.
-        tool_choice: lastStep ? { type: "function", name: "send_message" } : "required",
+        // Every step acts through a tool: talk, or hang up.
+        // The last step must say something: whoever is waiting hears the result or where it got stuck.
+        tool_choice: lastStep ? { type: "function", name: say } : "required",
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
@@ -171,7 +170,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     await session.append(
       { type: "assistant/message", data: { turn, step, output, ...(response.usage ? { usage: response.usage } : {}) } },
       ...calls
-        .filter((c) => c.name !== END_TURN)
+        .filter((c) => !hangups.has(c.name))
         .map((c) => ({ type: "tool/call" as const, data: { turn, step, callId: c.call_id, name: c.name } })),
     );
 
@@ -183,27 +182,27 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
 
     // The tool/call markers are already in the log, so a run killed mid-tool is
     // recovered as "may or may not have taken effect"; results are written together.
-    const hangingUp = calls.some((c) => c.name === END_TURN);
+    const hangingUp = calls.some((c) => hangups.has(c.name));
     let sendFailed = false;
     const results: NewEvent[] = [];
     for (const call of calls) {
-      if (call.name === END_TURN) continue;
+      if (hangups.has(call.name)) continue;
       const output = await runTool(call.name, call.arguments, ctx);
       console.log(`[agent] tool ${call.name}(${call.arguments}) -> ${output.slice(0, 200)}`);
-      sendFailed ||= TALK_TOOLS.has(call.name) && output.startsWith("Error:");
+      sendFailed ||= talks.has(call.name) && output.startsWith("Error:");
       results.push({ type: "tool/result", data: { turn, step, callId: call.call_id, output } });
     }
     const done = lastStep || (hangingUp && !sendFailed);
     // Images a tool opened (read_file) are stored and shown after the step's tool results.
     const images = ctx.images.splice(0);
     const imageKeys = images.length
-      ? await storeToolImages(session.store, session.chatKey, imagePrefix(session.chatKey, `t${turn}s${step}`), images)
+      ? await session.storeToolImages(`t${turn}s${step}`, images)
       : [];
     const reason: TurnEndReason = !lastStep ? "completed" : outOfTime ? "out-of-time" : "max-steps";
     await session.append(
       ...results,
       ...calls
-        .filter((c) => c.name === END_TURN)
+        .filter((c) => hangups.has(c.name))
         .map((c) => ({
           type: "tool/result" as const,
           data: { turn, step, callId: c.call_id, output: done ? "turn ended" : "not ended: a message failed to send, see the error above" },

@@ -122,6 +122,7 @@ export const readFile: Tool = {
 
 export const sendFile: Tool = {
   name: "send_file",
+  role: "talk",
   description:
     "Send a file from your workspace to the chat, as its own message (it counts as a reply like send_message). " +
     "png/jpg/gif show as pictures, mp4 as video, " +
@@ -139,7 +140,7 @@ export const sendFile: Tool = {
     if (data.byteLength > MAX_SEND_BYTES) {
       throw new Error(`${file} is ${data.byteLength} bytes, over the 5 MB limit; compress or split it`);
     }
-    const status = await ctx.sendFile({ name: path.posix.basename(file), data }, replyTo(args));
+    const status = await ctx.send({ kind: "file", file: { name: path.posix.basename(file), data } }, replyTo(args));
     return `${status}. If you're done, call end_turn (in the same step as your last message).`;
   },
 };

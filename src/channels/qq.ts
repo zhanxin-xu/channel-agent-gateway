@@ -269,6 +269,8 @@ const ACK = () => json({ op: OP_HTTP_CALLBACK_ACK, d: 0 });
 export const qqAdapter: ChannelAdapter = {
   name: "qq",
   promptHint: "This is QQ: reply in plain text, no Markdown syntax. Keep replies under 1500 characters.",
+  /** Passive replies: 5 per inbound message (bot-docs send.md). */
+  maxRepliesPerMessage: 5,
 
   isConfigured() {
     return Boolean(config.qq.appId && config.qq.appSecret);
