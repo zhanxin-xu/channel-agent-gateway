@@ -10,6 +10,7 @@
 import crypto from "node:crypto";
 import { config } from "../config.js";
 import { pcmToSilk } from "../media/voice.js";
+import { ChannelUnreachableError, platformFetch } from "./net.js";
 import { chunkText, json, type Attachment, type ChannelAdapter, type InboundMessage, type OutgoingFile, type ReceiveResult } from "./types.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
@@ -64,28 +65,30 @@ let cachedToken: { value: string; expiresAt: number } | undefined;
 
 async function getAccessToken(): Promise<string> {
   if (cachedToken && Date.now() < cachedToken.expiresAt - 5 * 60_000) return cachedToken.value;
-  const res = await fetch(TOKEN_URL, {
+  const res = await platformFetch(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ appId: config.qq.appId, clientSecret: config.qq.appSecret }),
   });
   const data = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number | string };
   if (!res.ok || !data.access_token) {
-    throw new Error(`QQ getAppAccessToken failed: HTTP ${res.status} ${JSON.stringify(data).slice(0, 200)}`);
+    const Err = res.status >= 500 ? ChannelUnreachableError : Error;
+    throw new Err(`QQ getAppAccessToken failed: HTTP ${res.status} ${JSON.stringify(data).slice(0, 200)}`);
   }
   cachedToken = { value: data.access_token, expiresAt: Date.now() + Number(data.expires_in ?? 7200) * 1000 };
   return cachedToken.value;
 }
 
 async function qqApi<T = unknown>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(API_BASE + path, {
+  const res = await platformFetch(API_BASE + path, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `QQBot ${await getAccessToken()}` },
     body: JSON.stringify(body),
   });
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`QQ POST ${path} failed: HTTP ${res.status} ${text.slice(0, 300)}`);
+    const Err = res.status >= 500 ? ChannelUnreachableError : Error;
+    throw new Err(`QQ POST ${path} failed: HTTP ${res.status} ${text.slice(0, 300)}`);
   }
   return (text ? JSON.parse(text) : {}) as T;
 }

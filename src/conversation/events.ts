@@ -32,7 +32,8 @@ export interface Usage {
   output_tokens_details?: { reasoning_tokens?: number };
 }
 
-export type TurnEndReason = "completed" | "max-steps" | "out-of-time" | "error" | "interrupted";
+/** "unreachable": the platform couldn't be reached, so the turn stopped instead of retrying (runtime/outbox.ts). */
+export type TurnEndReason = "completed" | "max-steps" | "out-of-time" | "error" | "interrupted" | "unreachable";
 
 export interface EventMap {
   /** A message from the chat. `header` is the context line without its "第N条" id, which comes from `seq`. */

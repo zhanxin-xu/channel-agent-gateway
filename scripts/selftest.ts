@@ -153,6 +153,9 @@ async function fakeResponses(body: any) {
     } else if (userText.startsWith("存附件")) {
       const seq = Number(/^存附件\s*(\d+)/.exec(userText)?.[1] ?? 0);
       output = toolOutput ? [textMessage(`结果：${toolOutput.output}`)] : [fnCall("call_sa", "save_attachment", { message: seq })];
+    } else if (userText.startsWith("断网")) {
+      // A model that keeps trying: two messages every step, whatever happened before.
+      output = [fnCall(`call_n${llmCalls}a`, "send_message", { text: "第一句" }), fnCall(`call_n${llmCalls}b`, "send_message", { text: "第二句" })];
     } else if (userText.startsWith("说句话")) {
       output = toolOutput ? [textMessage(`结果：${toolOutput.output}`)] : [fnCall("call_v", "send_voice", { text: userText.slice(3).trim() || "你好呀" })];
     } else if (userText.startsWith("读图")) {
@@ -188,6 +191,8 @@ function respond(body: any, output: unknown[]) {
 }
 
 let worker: ((request: Request) => Promise<Response>) | undefined;
+/** The next this-many calls to QQ's API fail to connect (as undici reports a connect timeout). */
+let qqConnectFailures = 0;
 /** What the fake image API answers; set by the generate_image test. */
 let imageResponse: (() => Response) | undefined;
 /** Half a second of a 440 Hz tone, as the speech API returns it (mono s16le PCM). */
@@ -257,6 +262,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     if (url.includes("flaky") && calls.filter((c) => c.url === url).length === 1) return new Response("busy", { status: 503 });
     return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "content-type": "image/png" } });
   }
+  if (url.startsWith("https://api.sgroup.qq.com/") && qqConnectFailures > 0) {
+    qqConnectFailures--;
+    throw new TypeError("fetch failed", { cause: Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }) });
+  }
   if (url === "https://bots.qq.com/app/getAppAccessToken") return Response.json({ access_token: "qq-token", expires_in: "7200" });
   if (url.startsWith("https://api.sgroup.qq.com/v2/") && url.endsWith("/files")) {
     return Response.json({ file_uuid: "u1", file_info: "FILEINFO", ttl: 3600 });
@@ -286,6 +295,7 @@ const { config } = await import("../src/config.js");
 const { setWorkspaceFactory } = await import("../src/tools/sandbox/workspace.js");
 const { attachmentFileName } = await import("../src/tools/sandbox/tools.js");
 const { driveName } = await import("../src/tools/sandbox/vercel.js");
+(await import("../src/channels/net.js")).connectRetry.delayMs = 5;
 
 /** Tool context for calling tools directly, outside a conversation. */
 const testChat = { key: "http:c0", scene: "私聊" as const, sender: "#USER01" };
@@ -1387,6 +1397,37 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
   } finally {
     resetTts();
   }
+});
+
+await test("qq: a connection that fails once is tried again; nothing is lost", async () => {
+  qqConnectFailures = 1;
+  await handleWebhook(c2c("msg-n1", "断网 一下下"), "qq");
+  await drain();
+  const attempts = sentTo("/v2/users/USER1/messages");
+  assert.equal(attempts.length, 3, "the first message twice (failed connect + retry), then the second");
+  assert.deepEqual(attempts.slice(1).map((b: any) => [b.content, b.msg_seq]), [["第一句", 1], ["第二句", 2]], "the retry keeps its msg_seq");
+  assert.equal(llmRequests().length, 1, "sent, so the turn ended as usual");
+});
+
+await test("qq unreachable: the turn ends after that step, later sends fail fast, the next message tries again", async () => {
+  qqConnectFailures = 99;
+  try {
+    await handleWebhook(c2c("msg-n2", "断网 很久"), "qq");
+    await drain();
+    assert.equal(llmRequests().length, 1, "no second step to retry in");
+    assert.equal(sentTo("/v2/users/USER1/messages").length, 2, "one connect + one retry; the second message isn't even tried");
+    const log = await events("qq:c2c:USER1");
+    const results = log.filter((e) => e.type === "tool/result" && /^call_n\d+[ab]$/.test(e.data.callId)).slice(-2);
+    for (const r of results) assert.match(r.data.output, /^Error: qq can't be reached right now \(network error: UND_ERR_CONNECT_TIMEOUT\); nothing was sent\. Stop for this turn/);
+    assert.equal(log.filter((e) => e.type === "turn/end").at(-1)!.data.reason, "unreachable");
+  } finally {
+    qqConnectFailures = 0;
+  }
+  calls.length = 0;
+  llmCalls = 0;
+  await handleWebhook(c2c("msg-n3", "断网 好了"), "qq");
+  await drain();
+  assert.deepEqual(sentTo("/v2/users/USER1/messages").map((b: any) => b.content), ["第一句", "第二句"], "a new run tries again");
 });
 
 await test("qq: send_voice → SILK uploaded as file_type 3, then sent as msg_type 7", async () => {

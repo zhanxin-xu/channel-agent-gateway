@@ -1,3 +1,4 @@
+import { unreachableReason } from "../channels/net.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import { messageLabel, type SessionEvent } from "../conversation/events.js";
 import type { Session } from "../conversation/session.js";
@@ -14,6 +15,12 @@ import type { ChatMeta } from "./types.js";
 const DEFAULT_MAX_REPLIES = 5;
 
 export class Outbox {
+  /**
+   * Set when the platform couldn't be reached (after the adapter's own retry):
+   * the rest of the run sends nothing and the turn ends; the next run tries again.
+   */
+  unreachable: string | undefined;
+
   constructor(
     private store: ChatStore,
     private adapter: ChannelAdapter,
@@ -32,6 +39,7 @@ export class Outbox {
 
   /** Under the reply cap and, where the channel has one (QQ), inside the reply window. */
   async canReply(seq: number): Promise<boolean> {
+    if (this.unreachable) return false;
     const target = this.session.message(seq);
     if (!target) return false;
     const context = await this.context(target);
@@ -39,6 +47,7 @@ export class Outbox {
   }
 
   async deliver(seq: number, send: (message: InboundMessage) => Promise<void>): Promise<string> {
+    if (this.unreachable) throw new Error(this.unreachable);
     const target = this.session.message(seq);
     if (!target) throw new Error(`${messageLabel(seq)} isn't in this chat; reply_to takes the N of a 第N条 label`);
     const replyContext = await this.context(target);
@@ -62,6 +71,14 @@ export class Outbox {
       replyContext.replies = String(count + 1);
     } catch (err) {
       if (!this.collect) console.error(`[outbox] ${this.adapter.name} delivery to ${messageLabel(seq)} failed`, err);
+      const reason = unreachableReason(err);
+      if (reason) {
+        // Retrying or rephrasing can't help, and each try waits out another timeout.
+        this.unreachable =
+          `${this.adapter.name} can't be reached right now (${reason}); nothing was sent. ` +
+          "Stop for this turn: don't retry or rephrase, call end_turn. Later messages will try again.";
+        throw new Error(this.unreachable);
+      }
       throw err;
     } finally {
       await this.store.putReply(this.session.chatKey, target.data.eventId, replyContext);

@@ -133,6 +133,7 @@ async function drain(
           pending,
           main,
           canReply: () => outbox.canReply(main.seq),
+          unreachable: () => Boolean(outbox.unreachable),
         });
         if (direct && ctx.sent.length === 0 && result.text) await ctx.send({ kind: "text", text: result.text }).catch(() => {});
         await session.setCursor(result.handledUpTo);
@@ -147,6 +148,8 @@ async function drain(
         await session.setCursor(pending.at(-1)!.seq);
         if (direct && ctx.sent.length === 0) await ctx.send({ kind: "text", text: "抱歉，处理消息时出错了，请稍后再试。" }).catch(() => {});
       }
+      // The platform is down: leave what's left for the next run instead of more turns that can't send.
+      if (outbox.unreachable) return done("idle");
     }
   } finally {
     await endRun();

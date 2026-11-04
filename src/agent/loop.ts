@@ -16,7 +16,9 @@
  * function is close to its time limit, a note tells the model to wrap up and
  * tool_choice forces a send_message. Every call in a step runs, in order,
  * wherever end_turn sits among them; the turn ends after the step, unless a
- * message failed to send (before the last step), so the model can react.
+ * message failed to send (before the last step), so the model can react. When
+ * the failure was the platform being unreachable, the turn ends anyway: a retry
+ * would only wait out the same timeout.
  *
  * The request body is `{ model, ...OPENAI_RESPONSES_EXTRA_BODY, instructions, input,
  * tools, tool_choice }`, so any provider-specific parameter (provider routing,
@@ -65,6 +67,8 @@ export interface TurnOptions {
   main: SessionEvent<"user/message">;
   /** Whether the main message can still take a reply (QQ: 5 per message). */
   canReply(): Promise<boolean>;
+  /** The platform couldn't be reached this run: the turn ends after the step instead of letting the model retry. */
+  unreachable?(): boolean;
 }
 
 export interface TurnResult {
@@ -192,13 +196,14 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
       sendFailed ||= talks.has(call.name) && output.startsWith("Error:");
       results.push({ type: "tool/result", data: { turn, step, callId: call.call_id, output } });
     }
-    const done = lastStep || (hangingUp && !sendFailed);
+    const unreachable = sendFailed && (o.unreachable?.() ?? false);
+    const done = lastStep || unreachable || (hangingUp && !sendFailed);
     // Images a tool opened (read_file) are stored and shown after the step's tool results.
     const images = ctx.images.splice(0);
     const imageKeys = images.length
       ? await session.storeToolImages(`t${turn}s${step}`, images)
       : [];
-    const reason: TurnEndReason = !lastStep ? "completed" : outOfTime ? "out-of-time" : "max-steps";
+    const reason: TurnEndReason = unreachable ? "unreachable" : !lastStep ? "completed" : outOfTime ? "out-of-time" : "max-steps";
     await session.append(
       ...results,
       ...calls

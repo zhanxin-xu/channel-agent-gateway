@@ -7,6 +7,7 @@
  */
 import crypto from "node:crypto";
 import { config } from "../config.js";
+import { ChannelUnreachableError, platformFetch } from "./net.js";
 import { chunkText, json, type ChannelAdapter, type OutgoingFile, type ReceiveResult } from "./types.js";
 
 const MAX_CHUNK = 4000;
@@ -27,13 +28,19 @@ function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
+/** A failed Bot API call: a 5xx means Telegram can't be reached right now. */
+async function tgFailed(method: string, res: Response): Promise<never> {
+  const Err = res.status >= 500 ? ChannelUnreachableError : Error;
+  throw new Err(`Telegram ${method} failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
+}
+
 async function tg(method: string, body: unknown): Promise<void> {
-  const res = await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/${method}`, {
+  const res = await platformFetch(`https://api.telegram.org/bot${config.telegram.botToken}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Telegram ${method} failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) await tgFailed(method, res);
 }
 
 /** Multipart upload (sendPhoto / sendAnimation / sendDocument with file bytes). */
@@ -41,8 +48,8 @@ async function tgUpload(method: string, fields: Record<string, string>, field: s
   const form = new FormData();
   for (const [key, value] of Object.entries(fields)) form.set(key, value);
   form.set(field, new Blob([new Uint8Array(file.data)]), file.name);
-  const res = await fetch(`https://api.telegram.org/bot${config.telegram.botToken}/${method}`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`Telegram ${method} failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
+  const res = await platformFetch(`https://api.telegram.org/bot${config.telegram.botToken}/${method}`, { method: "POST", body: form });
+  if (!res.ok) await tgFailed(method, res);
 }
 
 export const telegramAdapter: ChannelAdapter = {
