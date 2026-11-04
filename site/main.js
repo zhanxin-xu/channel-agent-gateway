@@ -8,25 +8,15 @@ const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) 
 /** 1 inside [a, b], ramping over `f` at both ends. */
 const window_ = (p, a, b, f = 0.04) => Math.min(seg(p, a, a + f), 1 - seg(p, b - f, b));
 
-/* ── split text: each character rises out of a clipped word ── */
+/* ── split text: every <br>-separated line rises out of its own clip ── */
 for (const node of $$(".split")) {
-  let i = 0;
-  const walk = (n) => {
-    for (const c of [...n.childNodes]) {
-      if (c.nodeType === 3) {
-        const frag = document.createDocumentFragment();
-        for (const word of c.textContent.split(/(\s+)/)) {
-          if (!word) continue;
-          if (/^\s+$/.test(word)) { frag.append(word); continue; }
-          const w = document.createElement("span"); w.className = "w";
-          for (const ch of word) { const s = document.createElement("span"); s.className = "ch"; s.textContent = ch; s.style.setProperty("--i", i++); w.append(s); }
-          frag.append(w);
-        }
-        c.replaceWith(frag);
-      } else if (c.nodeType === 1 && c.tagName !== "BR") walk(c);
-    }
-  };
-  walk(node);
+  const lines = [[]];
+  for (const c of [...node.childNodes]) (c.nodeName === "BR" ? lines.push([]) : lines.at(-1).push(c));
+  node.replaceChildren(...lines.map((nodes, i) => {
+    const line = document.createElement("span"), ln = document.createElement("span");
+    line.className = "line"; ln.className = "ln"; ln.style.setProperty("--i", i);
+    ln.append(...nodes); line.append(ln); return line;
+  }));
 }
 
 /* ── loader: a short count, then the curtain lifts and the hero text rises ── */
@@ -123,7 +113,7 @@ function measure() {
   const o = c(orb);
   offIn = { x: o.x - c(bIn).x, y: o.y - c(bIn).y };
   offOuts = outs.map((el) => ({ x: o.x - c(el).x, y: o.y - c(el).y }));
-  orbHero = mobile ? { x: 0, y: innerHeight * 0.3 } : { x: Math.min(innerWidth * 0.24, 420), y: 0 };
+  orbHero = mobile ? { x: 0, y: innerHeight * 0.3 } : { x: Math.min(innerWidth * 0.16, 300), y: 0 };
 }
 
 function render(p) {
@@ -175,7 +165,7 @@ function render(p) {
   [T.cap0, T.cap1, T.cap2, T.cap3].forEach(([a, b], k) => {
     const v = window_(p, a, b, 0.05);
     caps[k].style.opacity = v;
-    caps[k].style.transform = `translateY(${(1 - v) * 14}px)`;
+    caps[k].style.transform = `${mobile ? "" : "translateY(-50%) "}translateY(${(1 - v) * 16}px)`;
   });
 
   // statement
