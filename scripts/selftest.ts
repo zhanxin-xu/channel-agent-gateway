@@ -202,6 +202,12 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 
   if (url === "https://gw.example.com/api/v1/responses") return fakeResponses(body);
   if (url === "https://img.example.com/api/v1/images") return imageResponse!();
+  if (url === "https://img.example.com/api/v1/key") {
+    return Response.json({
+      data: { label: "sk-or-v1-img...", limit: 2, limit_remaining: 1.88, limit_reset: "daily", usage: 0.12, usage_daily: 0.12, usage_weekly: 0.12, usage_monthly: 0.12 },
+    });
+  }
+  if (url === "https://img.example.com/broken/key") return new Response("not found", { status: 404 });
   if (url === "https://api.deepseek.com/v1/tools/search") {
     return Response.json({ results: [{ title: "DeepSeek V4", url: "https://example.com/v4", summary: "发布了", rerank_score: 2.1, authority: 3 }] });
   }
@@ -401,14 +407,42 @@ await test("get_llm_key_limit: {baseUrl}/key with extra headers", async () => {
   const req = calls.find((c) => c.url === "https://gw.example.com/api/v1/key")!;
   assert.equal(req.headers.get("authorization"), "Bearer test-key");
   assert.equal(req.headers.get("x-title"), "selftest");
-  assert.equal(out.limit_remaining, 14.5);
-  assert.deepEqual(out.usage, { today: 0.3, this_week: 1.2, this_month: 5.5, all_time: 5.5 });
-  assert.deepEqual(out.byok_usage, { today: 0.34, this_week: 1, this_month: 3, all_time: 3 }, "BYOK spend reported apart from credits");
-  assert.equal(out.limit_counts_byok, true);
-  assert.equal(out.effective_budget.remaining, 14.5);
-  assert.equal(out.effective_budget.counts_byok, true);
-  assert.equal(out.effective_budget.reset_interval, "monthly");
+  const model = out.model_key;
+  assert.equal(model.limit_remaining, 14.5);
+  assert.deepEqual(model.usage, { today: 0.3, this_week: 1.2, this_month: 5.5, all_time: 5.5 });
+  assert.deepEqual(model.byok_usage, { today: 0.34, this_week: 1, this_month: 3, all_time: 3 }, "BYOK spend reported apart from credits");
+  assert.equal(model.limit_counts_byok, true);
+  assert.equal(model.effective_budget.remaining, 14.5);
+  assert.equal(model.effective_budget.counts_byok, true);
+  assert.equal(model.effective_budget.reset_interval, "monthly");
+  assert.equal(out.image_key, undefined, "no image key configured");
   assert.match(out.note, /00:00 UTC/);
+});
+
+await test("get_llm_key_limit: the image key is reported on its own, or marked as shared", async () => {
+  process.env.IMAGE_API_KEY = "img-key";
+  process.env.IMAGE_BASE_URL = "https://img.example.com/api/v1";
+  try {
+    const out = JSON.parse(await runTool("get_llm_key_limit", "{}", noCtx));
+    const req = calls.find((c) => c.url === "https://img.example.com/api/v1/key")!;
+    assert.equal(req.headers.get("authorization"), "Bearer img-key");
+    assert.equal(req.headers.get("x-title"), null, "the model's extra headers stay with the model key");
+    assert.equal(out.model_key.limit_remaining, 14.5);
+    assert.deepEqual(out.image_key.usage, { today: 0.12, this_week: 0.12, this_month: 0.12, all_time: 0.12 });
+    assert.equal(out.image_key.limit_remaining, 1.88);
+
+    process.env.IMAGE_BASE_URL = "https://img.example.com/broken";
+    const broken = JSON.parse(await runTool("get_llm_key_limit", "{}", noCtx));
+    assert.equal(broken.model_key.limit_remaining, 14.5, "one key failing doesn't hide the other");
+    assert.match(broken.image_key.error, /HTTP 404/);
+
+    process.env.IMAGE_API_KEY = "test-key";
+    const shared = JSON.parse(await runTool("get_llm_key_limit", "{}", noCtx));
+    assert.match(shared.image_key, /^same key as model_key/);
+  } finally {
+    delete process.env.IMAGE_API_KEY;
+    delete process.env.IMAGE_BASE_URL;
+  }
 });
 
 await test("qq: op13 callback validation", async () => {
