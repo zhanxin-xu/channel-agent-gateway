@@ -20,6 +20,11 @@ export interface InboundMessage {
   /** Images attached to the message (stored with it and shown to the model). */
   images?: Array<{ url: string; contentType: string }>;
   /**
+   * Every attachment's original (images included), so the agent can save it to
+   * its workspace later (save_attachment). Platform links expire.
+   */
+  attachments?: Attachment[];
+  /**
    * Channel-specific data the adapter needs to reply (msg_id, chat_id, …). Kept
    * with the message in the event log; adapters may update it while replying
    * (QQ's msg_seq) and the update is saved for the next reply.
@@ -32,6 +37,13 @@ export type ReceiveResult =
   | { kind: "respond"; response: Response }
   /** A message for the agent. `ack` is returned to the platform immediately. */
   | { kind: "message"; message: InboundMessage; ack?: Response };
+
+/** An attachment as the platform delivered it: a download link to the original. */
+export interface Attachment {
+  name: string;
+  url: string;
+  contentType: string;
+}
 
 /** A file the agent sends from its workspace. */
 export interface OutgoingFile {

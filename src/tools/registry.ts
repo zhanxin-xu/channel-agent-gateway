@@ -6,7 +6,7 @@
 import { llmKeyLimit, searchBalance } from "./account.js";
 import { endTurn, sendMessage, sendSticker } from "./chat.js";
 import { forget, recall, remember } from "./memory.js";
-import { bash, readFile, sendFile, writeFile } from "./sandbox/tools.js";
+import { bash, readFile, saveAttachment, sendFile, writeFile } from "./sandbox/tools.js";
 import type { Tool, ToolContext, ToolRole } from "./types.js";
 import { calculate, getCurrentTime } from "./utility.js";
 import { webFetch, webSearch } from "./web.js";
@@ -28,6 +28,7 @@ const tools: Tool[] = [
   readFile,
   writeFile,
   sendFile,
+  saveAttachment,
 ];
 
 export function activeTools(): Tool[] {

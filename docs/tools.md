@@ -13,7 +13,7 @@
 | `get_search_balance` | 查询 DeepSeek 余额 | 配置了 `DEEPSEEK_API_KEY` |
 | `get_llm_key_limit` | 查询模型 Key 的额度和用量（OpenRouter 专用） | 配置了 `OPENAI_RESPONSES_API_KEY` |
 | `remember` / `recall` / `forget` | 长期记忆 | 配置了 Upstash Vector |
-| `bash` / `read_file` / `write_file` / `send_file` | 沙盒工作区 | 部署在 Vercel 上，或本地有 `VERCEL_OIDC_TOKEN` |
+| `bash` / `read_file` / `write_file` / `send_file` / `save_attachment` | 沙盒工作区 | 部署在 Vercel 上，或本地有 `VERCEL_OIDC_TOKEN` |
 
 `send_message`、`end_turn` 的行为见 [Agent 与对话](agent.md#说话与挂断)。
 
@@ -42,7 +42,7 @@
 
 ## 沙盒工作区
 
-实现见 [`src/tools/sandbox/`](../src/tools/sandbox/)：`workspace.ts` 是工作区接口和生命周期（每次运行一个），`vercel.ts` 是 Vercel Sandbox 的实现，`tools.ts` 是四个工具。
+实现见 [`src/tools/sandbox/`](../src/tools/sandbox/)：`workspace.ts` 是工作区接口和生命周期（每次运行一个），`vercel.ts` 是 Vercel Sandbox 的实现，`tools.ts` 是五个工具。
 
 | 工具 | 作用 |
 |---|---|
@@ -50,6 +50,7 @@
 | `write_file` | 写入文本文件，自动创建上级目录 |
 | `read_file` | 读取文件；读到 png/jpg/gif/webp 时，会把图片直接给模型看 |
 | `send_file` | 把工作区里的文件发到聊天，最大 5 MB，和 `send_message` 一样可以用 `reply_to`，计入那条消息的 5 次回复 |
+| `save_attachment` | 把某条消息里别人发来的图片或文件的**原件**存进 `/workspace/inbox/`，文件名是 `{消息编号}-{原文件名}`。参数是消息编号（第N条的 N），可选 `index` 只存第几个附件，默认全部 |
 
 - **用到才创建**：一轮回复里第一次调用工作区工具时才创建沙盒，这一轮的所有调用共用它，结束后立即停止。只聊天不用工具的轮次不会创建沙盒。
 - **每个聊天一块盘**：每个群、每个私聊都有自己的一块 Vercel Drive（Hobby 默认 1 GiB），每次都挂到 `/workspace`，盘名由聊天 ID 哈希得到。同一个群的人共用一个工作目录。
@@ -58,6 +59,7 @@
 - **限时**：单条命令默认最多 60 秒，超时会被杀掉，已有输出保留。临近函数时限时，限时会自动缩短，剩余时间不够就直接报错，让模型先汇报现有结果。
 - **并发**：同一块盘同一时间只能被一个沙盒读写。同一个聊天的两轮回复撞到一起时，后来的会重试几次，还不行就由模型告诉用户稍后再试。
 - **读图片**：图片缩到最长边 1024px 存进数据库，作为一条用户消息附在工具结果后面交给模型（`detail: "auto"`），之后的请求也会重放。
+- **收到的附件**：聊天里看到的图片只是 512px 的预览，原图和文件都要先用 `save_attachment` 存进工作区才能处理，比如修图后用 `send_file` 发回去。下载在沙盒里用 `curl` 直接写盘，不经过函数内存，所以不限大小；沙盒连不上平台的 CDN 时，改由函数下载后写进去。平台的附件链接会过期，目前只有 QQ 渠道会记录附件链接。
 
 > **注意**：群里任何人都能让机器人执行命令，沙盒默认可以访问外网。沙盒里不放任何密钥，系统提示词也要求拒绝攻击、挖矿之类的请求。如果需要更严格的控制，可以只对指定用户开放这组工具。
 

@@ -20,6 +20,9 @@ const newCtx = (): ToolContext => ({
   chat,
   images: [],
   onRunEnd: () => {},
+  // Message 第1条 "has" one attachment: a public image, to check save_attachment's curl into the drive.
+  attachments: (seq) =>
+    seq === 1 ? [{ name: "logo.png", url: "https://serverless-agent.cnday.cn/logo.png", contentType: "image/png" }] : undefined,
 });
 const step = async (ctx: ToolContext, name: string, args: unknown) => {
   const t = Date.now();
@@ -38,6 +41,8 @@ await step(first, "bash", {
     "open('red.png','wb').write(b'\\x89PNG\\r\\n\\x1a\\n'+c(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))+c(b'IDAT',zlib.compress(raw))+c(b'IEND',b''))\" && ls -la",
 });
 await step(first, "read_file", { path: "red.png" });
+await step(first, "save_attachment", { message: 1 });
+await step(first, "bash", { command: "ls -la inbox && python3 -c \"import struct;d=open('inbox/1-logo.png','rb').read(24);print('png', struct.unpack('>II', d[16:24]))\"" });
 console.log(`images queued for the model: ${first.images.length} (${first.images[0]?.image_url.slice(0, 40)}…)`);
 await step(first, "bash", { command: "sleep 70; echo never" });
 

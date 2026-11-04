@@ -1,6 +1,8 @@
 import path from "node:path";
-/** The workspace tools: bash, read_file, write_file, send_file. */
+/** The workspace tools: bash, read_file, write_file, send_file, save_attachment. */
+import type { Attachment } from "../../channels/types.js";
 import { config } from "../../config.js";
+import { messageLabel } from "../../conversation/events.js";
 import type { ImagePart } from "../../media/images.js";
 import { REPLY_TO, replyTo } from "../chat.js";
 import type { Tool, ToolContext } from "../types.js";
@@ -117,6 +119,106 @@ export const readFile: Tool = {
     }
     if (bytes.includes(0)) return `${file} is a binary file (${bytes.byteLength} bytes); inspect it with bash instead.`;
     return clip(bytes.toString("utf8"), MAX_TEXT_CHARS);
+  },
+};
+
+/** Where save_attachment puts originals. */
+const INBOX = `${WORKDIR}/inbox`;
+const EXTENSIONS: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "video/mp4": ".mp4",
+  voice: ".silk",
+};
+
+/** Single-quote a string for bash. */
+const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/** A safe file name for attachment `i` of message `seq`: "{seq}-{name}", the name kept readable. */
+export function attachmentFileName(seq: number, i: number, a: Attachment): string {
+  let name = path.posix.basename(a.name.replace(/\\/g, "/")).replace(/[^\p{L}\p{N}._ -]+/gu, "_").replace(/^[.\s]+/, "").trim();
+  if (!name) name = `attachment-${i + 1}${EXTENSIONS[a.contentType] ?? ""}`;
+  if (name.length > 120) {
+    const ext = path.posix.extname(name).slice(0, 12);
+    name = name.slice(0, 120 - ext.length) + ext;
+  }
+  return `${seq}-${name}`;
+}
+
+/**
+ * Download into the workspace. curl inside the sandbox streams straight to the
+ * drive (no size limit, nothing held in the function's memory); if the sandbox
+ * can't reach the platform's CDN, the function downloads it and writes it in.
+ */
+async function download(ctx: ToolContext, a: Attachment, file: string): Promise<number> {
+  const ws = await workspaceFor(ctx);
+  const limit = commandLimitSeconds(ctx);
+  const errors: string[] = [];
+  if (limit >= 5) {
+    const { exitCode, output } = await ws.run(
+      `mkdir -p ${shellQuote(INBOX)} && curl -fsSL --retry 2 -o ${shellQuote(file)} ${shellQuote(a.url)} && stat -c %s ${shellQuote(file)}`,
+      limit,
+    );
+    const size = Number(output.trim().split("\n").at(-1));
+    if (exitCode === 0 && Number.isFinite(size)) return size;
+    errors.push(`sandbox: ${exitCode === 124 ? "timed out" : output.trim().split("\n").at(-1) || `exit ${exitCode}`}`);
+  }
+  try {
+    const left = ctx.deadline - Date.now() - REPLY_RESERVE_MS;
+    if (left < 5_000) throw new Error("no time left in this turn");
+    const res = await fetch(a.url, { signal: AbortSignal.timeout(Math.min(left, 290_000)) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    await ws.write(file, bytes);
+    return bytes.byteLength;
+  } catch (err) {
+    errors.push(`direct: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  throw new Error(errors.join("; "));
+}
+
+export const saveAttachment: Tool = {
+  name: "save_attachment",
+  description:
+    "Save the original of an image or file someone sent (a picture in their message, or [文件：…] / [视频] / [语音]) " +
+    `into your workspace, under ${INBOX}/. Use it whenever you need the actual file: to edit a photo, read a document, ` +
+    "convert or analyze it. The pictures you see in the chat are small previews; this gets the full original, any size. " +
+    "Then work on it with bash (python3, Pillow, ffmpeg via pip, …), look at images with read_file, and send results with send_file. " +
+    "Platform links expire after a while, so for an old message it may fail: then ask them to send it again.",
+  parameters: {
+    type: "object",
+    properties: {
+      message: { type: "integer", description: "The N of the 第N条 label of the message that has the attachment." },
+      index: { type: "integer", description: "Which attachment, 1-based, in the order they were sent. Default: all of them." },
+    },
+    required: ["message"],
+  },
+  enabled,
+  async run(args, ctx) {
+    const seq = Number(args.message);
+    const all = Number.isInteger(seq) ? ctx.attachments(seq) : undefined;
+    if (!all) throw new Error(`${Number.isInteger(seq) ? messageLabel(seq) : String(args.message)} isn't a message in this chat; message takes the N of a 第N条 label`);
+    if (!all.length) throw new Error(`${messageLabel(seq)} has no attachments that can be saved`);
+    const index = args.index === undefined || args.index === null ? undefined : Number(args.index);
+    if (index !== undefined && !(Number.isInteger(index) && index >= 1 && index <= all.length)) {
+      throw new Error(`${messageLabel(seq)} has ${all.length} attachment(s); index is 1 to ${all.length}`);
+    }
+    const picked = index === undefined ? all.map((a, i) => ({ a, i })) : [{ a: all[index - 1]!, i: index - 1 }];
+
+    const lines: string[] = [];
+    for (const { a, i } of picked) {
+      const file = `${INBOX}/${attachmentFileName(seq, i, a)}`;
+      try {
+        const size = await download(ctx, a, file);
+        lines.push(`saved ${file} (${size} bytes${a.contentType ? `, ${a.contentType}` : ""})`);
+      } catch (err) {
+        lines.push(`could not save attachment ${i + 1}: ${err instanceof Error ? err.message : String(err)} (the link may have expired; ask them to send it again)`);
+      }
+    }
+    if (lines.every((l) => l.startsWith("could not"))) throw new Error(lines.join("\n"));
+    return lines.join("\n");
   },
 };
 

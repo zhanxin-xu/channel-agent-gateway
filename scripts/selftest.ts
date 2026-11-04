@@ -150,6 +150,9 @@ async function fakeResponses(body: any) {
       output = last.role === "developer" && last.content.includes("最后一步") ? [sendCall("call_done", "做到一半")] : [calc];
     } else if (userText.startsWith("发文件")) {
       output = toolOutput ? [textMessage(`结果：${toolOutput.output}`)] : [fnCall("call_f", "send_file", { path: userText.slice(3).trim() })];
+    } else if (userText.startsWith("存附件")) {
+      const seq = Number(/^存附件\s*(\d+)/.exec(userText)?.[1] ?? 0);
+      output = toolOutput ? [textMessage(`结果：${toolOutput.output}`)] : [fnCall("call_sa", "save_attachment", { message: seq })];
     } else if (userText.startsWith("读图")) {
       output = toolOutput ? [textMessage("看到了")] : [fnCall("call_r", "read_file", { path: "out/plot.png" })];
     } else if (toolOutput) {
@@ -260,6 +263,7 @@ const { getStore, resetStore, storeBackend } = await import("../src/store/index.
 const qqHint = (await import("../src/channels/qq.js")).qqAdapter.promptHint!;
 const { config } = await import("../src/config.js");
 const { setWorkspaceFactory } = await import("../src/tools/sandbox/workspace.js");
+const { attachmentFileName } = await import("../src/tools/sandbox/tools.js");
 const { driveName } = await import("../src/tools/sandbox/vercel.js");
 
 /** Tool context for calling tools directly, outside a conversation. */
@@ -271,6 +275,7 @@ const noCtx = {
   chat: testChat,
   images: [],
   onRunEnd: () => {},
+  attachments: (_seq: number) => undefined as Array<{ name: string; url: string; contentType: string }> | undefined,
 };
 
 /** A chat's events as stored. */
@@ -1125,6 +1130,83 @@ await test("send_file: QQ uploads the bytes (file_data) with the right file_type
     assert.equal(uploads[1]!.body.file_type, 1);
     assert.deepEqual(sentTo("/v2/users/FILEUSER/messages")[0], { msg_type: 7, media: { file_info: "FILEINFO" }, msg_id: "f1", msg_seq: 1 });
     assert.equal(llmRequests().length, 2, "send_file + end_turn: one model call per message");
+  } finally {
+    delete process.env.SANDBOX_ENABLED;
+  }
+});
+
+await test("save_attachment: a QQ attachment's original is logged, then curled into the workspace", async () => {
+  process.env.SANDBOX_ENABLED = "1";
+  try {
+    const runs: string[] = [];
+    setWorkspaceFactory(async () => ({
+      async run(command) {
+        runs.push(command);
+        return { exitCode: 0, output: "2840113" };
+      },
+      async write() {
+        throw new Error("curl worked; nothing to write");
+      },
+      read: async () => null,
+      close: async () => {},
+    }));
+    await handleWebhook(
+      qqRequest({
+        op: 0,
+        t: "C2C_MESSAGE_CREATE",
+        d: {
+          id: "att1",
+          content: "存附件 0",
+          author: { user_openid: "ATTUSER" },
+          attachments: [{ content_type: "file", url: "//multimedia.nt.qq.com.cn/download?fileid=abc", filename: "retouch 1.jpg" }],
+        },
+      }),
+      "qq",
+    );
+    await drain();
+    const logged = (await events("qq:c2c:ATTUSER")).find((e) => e.type === "user/message")!;
+    assert.equal(logged.seq, 0);
+    assert.deepEqual(logged.data.attachments, [{ name: "retouch 1.jpg", url: "https://multimedia.nt.qq.com.cn/download?fileid=abc", contentType: "file" }]);
+    assert.match(llmRequests()[0]!.body.input[0].content, /\n\[文件：retouch 1\.jpg\]$/, "the model still sees the placeholder");
+    assert.equal(runs.length, 1);
+    assert.ok(
+      runs[0]!.includes(`curl -fsSL --retry 2 -o '/workspace/inbox/0-retouch 1.jpg' 'https://multimedia.nt.qq.com.cn/download?fileid=abc'`),
+      runs[0],
+    );
+    const out = llmRequests()[1]!.body.input.find((i: any) => i.type === "function_call_output").output;
+    assert.equal(out, "saved /workspace/inbox/0-retouch 1.jpg (2840113 bytes, file)");
+  } finally {
+    delete process.env.SANDBOX_ENABLED;
+  }
+});
+
+await test("save_attachment: downloads it itself when the sandbox can't; bad numbers and expired links", async () => {
+  process.env.SANDBOX_ENABLED = "1";
+  try {
+    const written = new Map<string, Buffer>();
+    setWorkspaceFactory(async () => ({
+      run: async () => ({ exitCode: 6, output: "curl: (6) Could not resolve host: multimedia.nt.qq.com.cn" }),
+      async write(file, content) {
+        written.set(file, Buffer.from(content));
+      },
+      read: async () => null,
+      close: async () => {},
+    }));
+    const atts = [
+      { name: "", url: "https://multimedia.nt.qq.com.cn/ok.png", contentType: "image/png" },
+      { name: "../../etc/passwd", url: "https://multimedia.nt.qq.com.cn/missing", contentType: "file" },
+    ];
+    const ctx = { ...noCtx, images: [], attachments: (seq: number) => (seq === 7 ? atts : seq === 8 ? [] : undefined) };
+    const out = await runTool("save_attachment", '{"message":7}', ctx);
+    assert.equal(out.split("\n")[0], "saved /workspace/inbox/7-attachment-1.png (4 bytes, image/png)");
+    assert.match(out.split("\n")[1]!, /^could not save attachment 2: sandbox: curl: \(6\) Could not resolve host.*; direct: HTTP 404 \(the link may have expired/);
+    assert.deepEqual([...written.entries()], [["/workspace/inbox/7-attachment-1.png", Buffer.from([0x89, 0x50, 0x4e, 0x47])]]);
+    assert.match(await runTool("save_attachment", '{"message":7,"index":2}', ctx), /^Error: could not save attachment 2/);
+    assert.match(await runTool("save_attachment", '{"message":7,"index":3}', ctx), /^Error: 第7条 has 2 attachment\(s\); index is 1 to 2/);
+    assert.match(await runTool("save_attachment", '{"message":8}', ctx), /^Error: 第8条 has no attachments/);
+    assert.match(await runTool("save_attachment", '{"message":9}', ctx), /^Error: 第9条 isn't a message in this chat/);
+    assert.equal(attachmentFileName(3, 1, atts[1]!), "3-passwd", "no path tricks");
+    assert.equal(attachmentFileName(3, 0, { name: "a'b; rm -rf ~.jpg", url: "", contentType: "" }), "3-a_b_ rm -rf _.jpg");
   } finally {
     delete process.env.SANDBOX_ENABLED;
   }

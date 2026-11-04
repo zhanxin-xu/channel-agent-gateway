@@ -55,6 +55,7 @@ export async function handleMessage(
           mentioned: direct,
           ...(images.keys.length ? { images: images.keys } : {}),
           ...(images.failed ? { imagesFailed: images.failed } : {}),
+          ...(message.attachments?.length ? { attachments: message.attachments } : {}),
           reply: message.replyContext,
         },
       };

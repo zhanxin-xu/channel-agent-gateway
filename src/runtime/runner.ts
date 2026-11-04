@@ -99,7 +99,7 @@ async function drain(
 
   const outbox = new Outbox(store, adapter, session, meta, opts.collect);
   const turnState = { main: -1 };
-  const { ctx, endRun } = makeToolContext(adapter, meta, chatKey, deadline, outbox, turnState, opts.collect);
+  const { ctx, endRun } = makeToolContext(adapter, meta, chatKey, deadline, outbox, session, turnState, opts.collect);
   let ambientClaimed = opts.ambientClaimed;
 
   const done = (outcome: "idle" | "handoff") => ({ outcome, session });

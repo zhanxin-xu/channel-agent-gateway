@@ -17,6 +17,8 @@
  * supabase/schema.sql). Webhooks only append; reading, recovery and trimming
  * happen in the single agent run that holds the chat's lock (see runtime/runner.ts).
  */
+import type { Attachment } from "../channels/types.js";
+
 /** A Responses API output item, stored and replayed untouched. */
 export type OutputItem =
   | { type: "message"; role: string; content?: Array<{ type: string; text?: string }> }
@@ -44,6 +46,8 @@ export interface EventMap {
     /** Store keys of the images, shrunk to what the model looks at. */
     images?: string[];
     imagesFailed?: number;
+    /** Links to the attachments' originals (images included), for save_attachment; not model-visible. */
+    attachments?: Attachment[];
     /** The channel's reply context (msg_id, chat_id, …) as received; not model-visible. */
     reply: Record<string, string>;
   };

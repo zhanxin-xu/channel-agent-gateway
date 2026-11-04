@@ -4,6 +4,7 @@
  * where that becomes a channel call.
  */
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
+import type { Session } from "../conversation/session.js";
 import type { Outgoing, ToolContext } from "../tools/types.js";
 import type { Outbox } from "./outbox.js";
 import type { ChatMeta } from "./types.js";
@@ -14,6 +15,7 @@ export function makeToolContext(
   chatKey: string,
   deadline: number,
   outbox: Outbox,
+  session: Session,
   turnState: { main: number },
   collect: string[] | undefined,
 ): { ctx: ToolContext; endRun(): Promise<void> } {
@@ -41,6 +43,10 @@ export function makeToolContext(
     },
     onRunEnd(fn) {
       cleanups.push(fn);
+    },
+    attachments(seq) {
+      const message = session.message(seq);
+      return message ? (message.data.attachments ?? []) : undefined;
     },
   };
 

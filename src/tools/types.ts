@@ -1,4 +1,4 @@
-import type { OutgoingFile } from "../channels/types.js";
+import type { Attachment, OutgoingFile } from "../channels/types.js";
 import type { ImagePart } from "../media/images.js";
 
 /** Something a tool delivers to the chat. */
@@ -27,6 +27,8 @@ export interface ToolContext {
   images: ImagePart[];
   /** Run `fn` when the agent run ends, e.g. to stop a sandbox the tool started. */
   onRunEnd(fn: () => Promise<void> | void): void;
+  /** The attachments of message `seq` (its 第N条 number): [] when it has none, undefined when there's no such message. */
+  attachments(seq: number): Attachment[] | undefined;
 }
 
 /**

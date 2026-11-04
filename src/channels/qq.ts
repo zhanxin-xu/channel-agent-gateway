@@ -9,7 +9,7 @@
  */
 import crypto from "node:crypto";
 import { config } from "../config.js";
-import { chunkText, json, type ChannelAdapter, type InboundMessage, type ReceiveResult } from "./types.js";
+import { chunkText, json, type Attachment, type ChannelAdapter, type InboundMessage, type ReceiveResult } from "./types.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -176,26 +176,30 @@ function cleanContent(content: string | undefined): string {
 /**
  * Split attachments into images (for the model to look at) and text notes:
  * voice becomes QQ's own transcript ("[语音] …"), video and files a placeholder.
+ * Every attachment with a link is also kept as-is, so its original can be saved later.
  */
 function parseAttachments(list: QQMessageEvent["attachments"] = []) {
   const images: Array<{ url: string; contentType: string }> = [];
   const notes: string[] = [];
+  const attachments: Attachment[] = [];
   for (const a of list) {
     const type = a.content_type ?? "";
     const url = a.url?.startsWith("//") ? `https:${a.url}` : (a.url ?? "");
+    if (url.startsWith("https://")) attachments.push({ name: a.filename ?? "", url, contentType: type });
     if (type.startsWith("image/") && url.startsWith("https://")) images.push({ url, contentType: type });
     else if (type === "voice" || type.startsWith("audio/")) notes.push(a.asr_refer_text ? `[语音] ${a.asr_refer_text}` : "[语音]");
     else if (type.startsWith("video/")) notes.push("[视频]");
     else notes.push(`[文件${a.filename ? `：${a.filename}` : ""}]`);
   }
-  return { images, notes };
+  return { images, notes, attachments };
 }
 
 function toInbound(t: string, d: QQMessageEvent): InboundMessage | undefined {
   const message = parseEvent(t, d);
   if (!message) return undefined;
-  const { images, notes } = parseAttachments(d.attachments);
+  const { images, notes, attachments } = parseAttachments(d.attachments);
   if (images.length) message.images = images;
+  if (attachments.length) message.attachments = attachments;
   if (notes.length) message.text = [message.text, ...notes].filter(Boolean).join("\n");
   // A bare "@大肥鱼" has no text once the mention is stripped, but it's still someone calling the bot.
   if (message.mode !== "ambient" && !message.text && !images.length) message.text = "（只 @ 了你，没说话）";

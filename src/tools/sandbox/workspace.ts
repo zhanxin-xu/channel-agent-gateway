@@ -22,7 +22,8 @@ export const WORKDIR = "/workspace";
 export interface Workspace {
   /** Run a bash command in WORKDIR; output is stdout and stderr combined. */
   run(command: string, timeoutSeconds: number): Promise<{ exitCode: number | null; output: string }>;
-  write(file: string, content: string): Promise<void>;
+  /** Create or overwrite a file (parent folders are created). */
+  write(file: string, content: string | Uint8Array): Promise<void>;
   /** null when the file doesn't exist. */
   read(file: string): Promise<Buffer | null>;
   close(): Promise<void>;
