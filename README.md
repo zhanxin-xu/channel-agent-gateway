@@ -2,10 +2,10 @@
   <img src=".github/logo.png" alt="大肥鱼" width="160" height="160">
 </p>
 
-<h1 align="center">channel-agent-gateway</h1>
+<h1 align="center">serverless-agent-gateway</h1>
 
 <p align="center">
-  <a href="https://github.com/zhanxin-xu/channel-agent-gateway/actions/workflows/ci.yml"><img src="https://github.com/zhanxin-xu/channel-agent-gateway/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/zhanxin-xu/serverless-agent-gateway/actions/workflows/ci.yml"><img src="https://github.com/zhanxin-xu/serverless-agent-gateway/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/node-24.x-339933?logo=node.js&amp;logoColor=white" alt="Node.js 24">
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&amp;logoColor=white" alt="TypeScript">
@@ -15,7 +15,7 @@
 
 仓库自带一个示例人设「大肥鱼」：一个嘴毒、爱抬杠的群友。改一个文件就能换成你自己的机器人。
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fchannel-agent-gateway&env=OPENROUTER_API_KEY&envDescription=OpenRouter%20API%20key%20for%20the%20model)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fzhanxin-xu%2Fserverless-agent-gateway&env=OPENROUTER_API_KEY&envDescription=OpenRouter%20API%20key%20for%20the%20model)
 
 ## 特性
 

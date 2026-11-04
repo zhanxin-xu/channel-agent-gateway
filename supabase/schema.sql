@@ -1,4 +1,4 @@
--- Store for channel-agent-gateway on Supabase (Postgres).
+-- Store for serverless-agent-gateway on Supabase (Postgres).
 --
 -- After the session log of DeepSeek's dsh (deepseek-ai/deepseek-harness):
 --   gateway.sessions  one row per chat: the log's header (who, where, format

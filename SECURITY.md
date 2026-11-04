@@ -2,7 +2,7 @@
 
 ## 报告漏洞
 
-如果你发现了安全问题，请**不要公开提 Issue**。通过 GitHub 的 [Private vulnerability reporting](https://github.com/zhanxin-xu/channel-agent-gateway/security/advisories/new) 私下提交，并说明：
+如果你发现了安全问题，请**不要公开提 Issue**。通过 GitHub 的 [Private vulnerability reporting](https://github.com/zhanxin-xu/serverless-agent-gateway/security/advisories/new) 私下提交，并说明：
 
 - 问题类型和影响范围；
 - 复现步骤或概念验证；

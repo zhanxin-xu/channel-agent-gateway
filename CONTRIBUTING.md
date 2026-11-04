@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你愿意参与改进 channel-agent-gateway！
+感谢你愿意参与改进 serverless-agent-gateway！
 
 ## 提 Issue
 
