@@ -31,14 +31,13 @@ OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `AGENT_TIMEZONE` | `Asia/Shanghai` | 消息头里时间使用的时区 |
-| `AGENT_MAX_STEPS` | `40` | 私聊或被 @ 时，一轮最多调用模型的次数 |
+| `AGENT_MAX_STEPS` | `40` | 一轮最多调用模型的次数（旁观轮次也一样；不插话时只用 1 次） |
 | `AGENT_MAX_DURATION_SECONDS` | `300` | 函数的时间上限，要和 `vercel.json` 的 `maxDuration` 保持一致。剩余不到 90 秒时，下一步就是最后一步 |
 | `AGENT_HISTORY_LIMIT` | `100` | 每个私聊保留的消息条数 |
 | `AGENT_GROUP_HISTORY_LIMIT` | `200` | 每个群保留的消息条数（包括所有人的消息） |
 | `AGENT_HISTORY_TTL_DAYS` | `7` | 会话连续多少天没有新消息就整个删除 |
 | `AGENT_AMBIENT_INTERVAL_SECONDS` | `10` | 群里没 @ 的消息，每个群每隔多少秒最多触发一次模型；`0` 表示只记录、不触发 |
 | `AGENT_AMBIENT_CONTEXT` | `40` | 旁观时模型能看到的最近消息条数 |
-| `AGENT_AMBIENT_MAX_STEPS` | `3` | 旁观时一轮最多调用模型的次数 |
 
 历史条数是防止资源耗尽的安全上限，不是给模型的上下文预算，详见 [Agent 与对话](agent.md#历史与缓存)。
 

@@ -177,8 +177,6 @@ export async function handleMessage(
         : message.chatType === "group"
           ? `（系统提示）${senderLabel(message)} 刚 @ 了你：「${(body || "[图片]").slice(0, 100)}」，回复这条。`
           : undefined,
-      maxSteps: direct ? config.agent.maxSteps : config.agent.ambientMaxSteps,
-      mustReply: direct,
       ctx,
     });
     if (direct && ctx.sent.length === 0 && result.text) await ctx.send(result.text);

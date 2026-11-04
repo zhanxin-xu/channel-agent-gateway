@@ -7,8 +7,9 @@
  * `function_call`. Every request sets tool_choice "required", so the model
  * always acts through a tool. The loop ends when the model calls end_turn
  * (usually alongside its last message), or after the last step: when the step
- * budget runs out or the function is close to its time limit, a note asks the
- * model to wrap up with a message. Every call in a step runs, in order, wherever
+ * budget runs out or the function is close to its time limit, a note tells the
+ * model to wrap up and tool_choice forces a send_message, so whoever is waiting
+ * hears what was done. Every call in a step runs, in order, wherever
  * end_turn sits among them (a remember or write_file next to the goodbye still
  * happens); the turn ends after the step. If a message fails to send (before
  * the last step), the turn goes on so the model can react.
@@ -19,6 +20,7 @@
  */
 import { config } from "../config.js";
 import type { ImagePart } from "./images.js";
+import { MAX_MESSAGES_PER_TURN } from "./limits.js";
 import { activeTools, END_TURN, runTool, type ToolContext } from "./tools.js";
 
 export interface HistoryMessage {
@@ -96,11 +98,11 @@ const TALK_TOOLS = new Set(["send_message", "send_sticker", "send_file"]);
 /** Time kept for the last step (one model call plus sending) before the function's deadline. */
 const LAST_STEP_RESERVE_MS = 90_000;
 
-function lastStepNote(reason: string, mustReply: boolean): string {
-  return mustReply
-    ? `（系统提示）${reason}，这是最后一步：这一步调用的工具还会执行，但你看不到结果了。` +
-        "现在用 send_message 给对方发一条消息：说出已经得到的结果；没做完就说做到哪了、卡在哪、接下来怎么办。"
-    : `（系统提示）${reason}，这是最后一步：其他工具不会再执行了。要插话就现在用 send_message 说，不说就直接结束。`;
+function lastStepNote(reason: string): string {
+  return (
+    `（系统提示）${reason}，这是最后一步：必须现在用 send_message 发一条消息，发完这一轮就结束。` +
+    "说出已经得到的结果；没做完就说做到哪了、卡在哪、接下来怎么办。"
+  );
 }
 
 export async function runAgent(opts: {
@@ -113,8 +115,6 @@ export async function runAgent(opts: {
    */
   note?: string;
   maxSteps?: number;
-  /** Someone is waiting for an answer (DM / @): the last-step note asks for a message. */
-  mustReply?: boolean;
   ctx: ToolContext;
 }): Promise<AgentResult> {
   const { model, extraBody } = config.openrouter;
@@ -135,7 +135,9 @@ export async function runAgent(opts: {
     const outOfTime = opts.ctx.deadline - Date.now() < LAST_STEP_RESERVE_MS;
     const lastStep = step >= maxSteps || outOfTime;
     if (lastStep) {
-      input.push({ role: "developer", content: lastStepNote(outOfTime ? "时间快用完了" : "步数用完了", opts.mustReply ?? false) });
+      // Can't send any more this turn: nothing left to force.
+      if (opts.ctx.sent.length >= MAX_MESSAGES_PER_TURN) return { text: "", steps: step - 1, reasoningTokens };
+      input.push({ role: "developer", content: lastStepNote(outOfTime ? "时间快用完了" : "步数用完了") });
     }
     const response = await createResponse({
       model,
@@ -144,7 +146,8 @@ export async function runAgent(opts: {
       input,
       tools: toolDefs,
       // Every step acts through a tool: talk with send_message, hang up with end_turn.
-      tool_choice: "required",
+      // The last step must send: whoever is waiting hears the result or where it got stuck.
+      tool_choice: lastStep ? { type: "function", name: "send_message" } : "required",
     });
 
     reasoningTokens += response.usage?.output_tokens_details?.reasoning_tokens ?? 0;

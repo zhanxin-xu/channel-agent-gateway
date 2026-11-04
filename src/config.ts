@@ -80,7 +80,7 @@ export const config = {
     get timezone() {
       return str("AGENT_TIMEZONE", "Asia/Shanghai");
     },
-    /** Max model calls per inbound message (tool round-trips included). */
+    /** Max model calls per turn, ambient or not (tool round-trips included). An ambient run that stays silent uses one. */
     get maxSteps() {
       return int("AGENT_MAX_STEPS", 40);
     },
@@ -118,10 +118,6 @@ export const config = {
     get ambientIntervalSeconds() {
       const n = Number.parseInt(process.env.AGENT_AMBIENT_INTERVAL_SECONDS ?? "", 10);
       return Number.isFinite(n) && n >= 0 ? n : 10;
-    },
-    /** Step budget for an ambient run: decide, maybe look something up, talk. */
-    get ambientMaxSteps() {
-      return int("AGENT_AMBIENT_MAX_STEPS", 3);
     },
   },
 

@@ -4,9 +4,12 @@
  * Each chat has its own Vercel Drive (persistent storage), mounted at
  * /workspace in a sandbox that lives for one agent run: created on the first
  * workspace tool call, stopped when the run ends. Files under /workspace
- * survive; everything else (installed packages, /tmp) is gone next time.
+ * survive; everything else (/tmp, system packages) is gone next time.
  * `persistent: false` keeps the sandbox from snapshotting itself on stop, so
  * only the drive uses storage.
+ *
+ * `pip install` and `npm install -g` go to the drive too (PACKAGE_ENV), so
+ * each chat keeps its own dependencies between turns.
  *
  * A drive can be mounted read-write by one sandbox at a time, so two runs in
  * the same chat at once wait for each other (see openVercelWorkspace).
@@ -27,6 +30,17 @@ const MAX_SEND_BYTES = 5 * 1024 * 1024;
 /** Time left for the model to reply after a command, and for `timeout -k` to kill it. */
 const REPLY_RESERVE_MS = 15_000;
 const KILL_GRACE_SECONDS = 5;
+/**
+ * Send pip (user installs) and npm globals to the chat's drive. Python finds
+ * user site-packages under PYTHONUSERBASE by itself; their executables are
+ * put on PATH in run().
+ */
+const PACKAGE_ENV = {
+  PYTHONUSERBASE: `${WORKDIR}/.local`,
+  PIP_USER: "1",
+  NPM_CONFIG_PREFIX: `${WORKDIR}/.npm-global`,
+};
+const PACKAGE_PATH = `${WORKDIR}/.local/bin:${WORKDIR}/.npm-global/bin`;
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -64,6 +78,7 @@ async function openVercelWorkspace(chatKey: string): Promise<Workspace> {
         mounts: { [WORKDIR]: drive },
         region,
         persistent: false,
+        env: PACKAGE_ENV,
         timeout: 5 * 60 * 1000, // backstop if stop() never runs; a function lives at most 300s
       });
     } catch (err) {
@@ -80,7 +95,7 @@ async function openVercelWorkspace(chatKey: string): Promise<Workspace> {
       // `timeout` kills the command inside the VM and keeps what it printed (exit 124).
       const result = await box.runCommand({
         cmd: "timeout",
-        args: ["-k", "5", String(timeoutSeconds), "bash", "-c", command],
+        args: ["-k", "5", String(timeoutSeconds), "bash", "-c", `export PATH="${PACKAGE_PATH}:$PATH"\n${command}`],
         cwd: WORKDIR,
         signal: AbortSignal.timeout((timeoutSeconds + 15) * 1000),
       });
@@ -152,7 +167,8 @@ const enabled = () => config.sandbox.enabled;
 
 const WORKSPACE_NOTE =
   `Your workspace is a Linux sandbox (bash, python3, node, curl, git, internet). ${WORKDIR} is this chat's ` +
-  "own folder and is kept between turns; everything outside it (installed packages, /tmp) is wiped after each turn.";
+  "own folder and is kept between turns; everything outside it (/tmp, system packages) is wiped after each turn. " +
+  "`pip install` and `npm install -g` install into it, so packages stay installed for this chat.";
 
 export const bash: Tool = {
   name: "bash",

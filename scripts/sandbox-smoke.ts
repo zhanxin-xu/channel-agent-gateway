@@ -39,11 +39,14 @@ await step(first, "bash", {
 await step(first, "read_file", { path: "red.png" });
 console.log(`images queued for the model: ${first.images.length} (${first.images[0]?.image_url.slice(0, 40)}…)`);
 await step(first, "bash", { command: "sleep 70; echo never" });
+
+await step(first, "bash", { command: "pip install -q six && npm install -g --silent cowsay && which cowsay" });
 await closeWorkspace(first);
 
-// A new run (new sandbox) still sees the drive's files.
+// A new run (new sandbox) still sees the drive's files and this chat's packages.
 const second = newCtx();
 await step(second, "read_file", { path: "notes/hello.md" });
+await step(second, "bash", { command: "python3 -c 'import six; print(\"six\", six.__version__)' && cowsay -f tux persisted | tail -3" });
 await step(second, "bash", { command: "ls -la; ls /tmp | head -3" });
 await closeWorkspace(second);
 

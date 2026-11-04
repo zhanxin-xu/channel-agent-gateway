@@ -874,7 +874,7 @@ await test("end_turn: requests require a tool; talking alone doesn't end the tur
   // "搜索" makes the fake model call web_search, then answer: without end_turn the loop keeps going.
   const res = await httpCall("搜索 天气", "c-end");
   assert.match(res.reply, /^答案是 /);
-  assert.ok(llmRequests().every((r) => r.body.tool_choice === "required"));
+  assert.ok(llmRequests().every((r) => r.body.tool_choice === "required"), "required before the last step");
   // "连发" sends two messages and hangs up in the same step: one model call.
   await httpCall("连发", "c-end2");
   assert.equal(llmRequests().length, 3);
@@ -906,11 +906,13 @@ await test("step limit: the last step gets a wrap-up note, then the turn ends", 
     const reqs = llmRequests();
     assert.equal(reqs.length, 3);
     const last = reqs[2]!.body;
-    assert.equal(last.tool_choice, reqs[0]!.body.tool_choice, "the request itself is unchanged");
+    assert.deepEqual(last.tool_choice, { type: "function", name: "send_message" }, "the last step must send");
+    assert.equal(reqs[1]!.body.tool_choice, "required");
     assert.equal(last.tools.length, reqs[0]!.body.tools.length);
     assert.match(last.input.at(-1).content, /^（系统提示）步数用完了，这是最后一步.*send_message/);
     assert.equal(last.input.filter((i: any) => i.type === "function_call_output").length, 2);
     assert.ok(!reqs[1]!.body.input.some((i: any) => i.role === "developer"), "no note before the last step");
+    assert.match(last.input.at(-1).content, /必须现在用 send_message 发一条消息/);
   } finally {
     delete process.env.AGENT_MAX_STEPS;
   }
