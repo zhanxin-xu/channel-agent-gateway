@@ -132,7 +132,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     `（系统提示）第${turn}轮开始。待处理的消息：${listMessages(o.pending)}。` +
     `发消息默认回复${messageLabel(o.main.seq)}，要回复别的消息用 reply_to。` +
     (o.trigger === "ambient" ? AMBIENT_GUIDANCE : "");
-  // Events are written in a few batches per step (each batch is one Redis command).
+  // Events are written in a few batches per step (each batch is one store call).
   let opening: NewEvent[] = [
     { type: "turn/start", data: { turn, trigger: o.trigger } },
     { type: "developer/message", data: { turn, text: start } },

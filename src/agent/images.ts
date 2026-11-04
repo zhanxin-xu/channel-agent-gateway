@@ -13,7 +13,7 @@ import type { Store } from "../store/index.js";
 
 const MAX_IMAGES = 4;
 const MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
-/** Stored as-is when sharp can't decode it (still within one Redis value). */
+/** Stored as-is when sharp can't decode it (kept small enough for one stored value). */
 const MAX_RAW_BYTES = 1024 * 1024;
 const TIMEOUT_MS = 10_000;
 

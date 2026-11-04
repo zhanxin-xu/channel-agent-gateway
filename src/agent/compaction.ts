@@ -10,7 +10,7 @@
  *     made (same instructions, tools and leading input) plus one trailing
  *     instruction, so the provider reuses its cached tokens.
  *   - The result is appended as `compaction/summary` (fromSeq = the cut); the
- *     events it replaces are then deleted from Redis.
+ *     events it replaces are then deleted from the store.
  */
 import { config } from "../config.js";
 import { deriveInput, isEvent, visibleWindow, type SessionEvent } from "./events.js";

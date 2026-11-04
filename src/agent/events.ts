@@ -10,9 +10,10 @@
  *     the provider's prompt cache keeps hitting.
  *   - Compaction appends a `compaction/summary` that stands in for everything
  *     before `fromSeq`; unlike dsh (which keeps its log on disk forever), the
- *     events it replaces are then deleted, because Redis space is limited.
+ *     events it replaces are then deleted, because the free databases are small.
  *
- * Storage: a Redis list `ev:{chat}` of `{type, time, data}` JSON. An event's
+ * Storage: a store list `ev:{chat}` (a Redis list on Upstash, rows of
+ * gateway.list_items on Supabase) of `{type, time, data}` JSON. An event's
  * `seq` is its position counted from the start of the log, i.e. `base` (how
  * many events were deleted from the front) + list index; it is not stored.
  * Webhooks only append; reading, recovery and trimming happen in the single

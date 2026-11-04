@@ -25,7 +25,7 @@ npm test            # 离线端到端测试，所有外部接口都已经 mock
 npm run typecheck
 ```
 
-`npm test` 会替换掉全局的 `fetch`，模拟模型、QQ、Telegram、DeepSeek、Upstash 等所有外部服务，然后走一遍真实的 Webhook 处理和 agent loop。沙盒相关的测试使用内存里的假工作区；要在真实的 Vercel Sandbox 上验证，见[工具文档](docs/tools.md#沙盒工作区)。
+`npm test` 会替换掉全局的 `fetch`，模拟模型、QQ、Telegram、DeepSeek、Supabase、Upstash 等所有外部服务，然后走一遍真实的 Webhook 处理和 agent loop。沙盒相关的测试使用内存里的假工作区；要在真实的 Vercel Sandbox 上验证，见[工具文档](docs/tools.md#沙盒工作区)。
 
 ## 提交代码
 
@@ -38,7 +38,7 @@ npm run typecheck
 ## 代码约定
 
 - **和周围的代码保持一致**：命名、注释密度、写法都参照同一文件里已有的代码。
-- **外部接口直接用 `fetch`**：模型、QQ、Telegram、Upstash 都是直接调用 HTTP 接口，不引入 SDK，方便透传参数，也让测试能统一 mock。Vercel Sandbox 是例外，它需要 SDK 处理认证。
+- **外部接口直接用 `fetch`**：模型、QQ、Telegram、Supabase、Upstash 都是直接调用 HTTP 接口，不引入 SDK，方便透传参数，也让测试能统一 mock。Vercel Sandbox 是例外，它需要 SDK 处理认证。
 - **配置只从环境变量读**：新增配置加在 `src/config.ts` 里，使用 getter 实时读取，并写进 `docs/configuration.md` 和 `.env.example`。
 - **注释解释"为什么"**：平台限制、踩过的坑、看起来奇怪但必须这样写的地方，都值得写一句注释。
 - **不要提交密钥**：`.env*` 已经在 `.gitignore` 里。仓库是公开的，提交前请检查一遍 diff。
