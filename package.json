@@ -24,7 +24,8 @@
   "scripts": {
     "dev": "tsx watch scripts/dev-server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/selftest.ts"
+    "test": "tsx scripts/selftest.ts",
+    "test:store": "tsx scripts/storetest.ts"
   },
   "license": "MIT",
   "dependencies": {
@@ -34,6 +35,8 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "5.9"
   },

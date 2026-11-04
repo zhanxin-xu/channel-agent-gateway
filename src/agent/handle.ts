@@ -11,26 +11,25 @@
  *   One run per chat at a time, so several people talking at once get one
  *   answer, and messages that arrive mid-turn reach the running loop.
  *
- * Handing over: a webhook appends first, then tries the lock; a run releases
- * the lock, then checks for work once more. So a message can't fall in the
- * gap. A run that is about to run out of time with work left hands over to
+ * Handing over: a webhook appends and tries the lock in one transaction
+ * (ChatStore.ingest); a run releases the lock, then checks for work once more.
+ * So a message can't fall in the gap. A run that is about to run out of time with work left hands over to
  * /api/worker (worker.ts), which starts a fresh function.
  */
 import crypto from "node:crypto";
 import type { ChannelAdapter, InboundMessage, OutgoingFile } from "../channels/types.js";
 import { config } from "../config.js";
-import { getStore, type Store } from "../store/index.js";
-import { EventLog, isEvent, messageLabel, recoverOpenTurn, type SessionEvent } from "./events.js";
-import { storeChatImages } from "./images.js";
+import { getStore, type ChatStore } from "../store/index.js";
+import { messageLabel, recoverOpenTurn, type NewEvent, type SessionEvent } from "./events.js";
+import { imagePrefix, storeChatImages } from "./images.js";
 import { MAX_MESSAGES_PER_TURN } from "./limits.js";
 import { LAST_STEP_RESERVE_MS, runTurn } from "./loop.js";
 import { closeWorkspace } from "./sandbox.js";
-import { chatKeys, RunLock, Session, ttlSeconds } from "./session.js";
+import { LOCK_TTL_MS, RunLock, Session } from "./session.js";
 import { DEFAULT_STICKER_BASE_URL, stickerUrl } from "./stickers.js";
 import { SYSTEM_PROMPT } from "./system-prompt.js";
 import type { ToolContext } from "./tools.js";
 
-const DEDUPE_TTL = 60 * 60; // platforms retry within minutes; keep an hour
 /** A new turn starts only with this much time left; otherwise the run hands over to /api/worker. */
 const HANDOFF_BELOW_MS = LAST_STEP_RESERVE_MS + 30_000;
 
@@ -60,7 +59,7 @@ export function messageHeader(m: InboundMessage, now = new Date()): string {
   return `${time} ${timeZone}｜${scene}｜发送人 ${senderLabel(m)}${mention}`;
 }
 
-/** What a run needs to reply in a chat, kept in the store for runs started by the worker. */
+/** What a run needs to reply in a chat; the session row keeps it for runs started by the worker. */
 export interface ChatMeta {
   channel: string;
   conversationId: string;
@@ -88,63 +87,61 @@ export async function handleMessage(
   // The function's clock started with this request.
   const deadline = Date.now() + config.agent.maxDurationSeconds * 1000;
   const store = getStore();
-  const chatKey = `${message.channel}:${message.conversationId}`;
-  const keys = chatKeys(chatKey);
+  const chat = `${message.channel}:${message.conversationId}`;
   const direct = message.mode !== "ambient";
-  const ttl = ttlSeconds();
+  const meta: ChatMeta = { channel: message.channel, conversationId: message.conversationId, chatType: message.chatType, origin: opts.origin };
+  const reset = direct && message.text.trim() === "/reset";
 
-  // De-duplicate. `seenKey` marks "this message is logged"; direct handling has
-  // its own key, so a message that arrives both as an ordinary group message
-  // and as an @ event is logged once and still wakes the agent once.
-  const seenKey = `evt:${message.channel}:${message.eventId}`;
-  if (direct && !(await store.claim(`${seenKey}:direct`, DEDUPE_TTL))) {
+  // Images are stored before the message that references them (a retry stores them again under the same keys).
+  const images =
+    !reset && message.images?.length
+      ? await storeChatImages(store, chat, imagePrefix(chat, message.eventId), message.images)
+      : { keys: [], failed: 0 };
+  const event: NewEvent = reset
+    ? { type: "session/reset", data: {} }
+    : {
+        type: "user/message",
+        data: {
+          eventId: message.eventId,
+          header: messageHeader(message),
+          text: message.text,
+          sender: senderLabel(message),
+          mentioned: direct,
+          ...(images.keys.length ? { images: images.keys } : {}),
+          ...(images.failed ? { imagesFailed: images.failed } : {}),
+          reply: message.replyContext,
+        },
+      };
+
+  // One transaction: de-duplicate, log, and if this wakes the agent, take the lock.
+  const lock = new RunLock(store, chat);
+  const { status } = await store.ingest({
+    chat,
+    channel: message.channel,
+    conversationId: message.conversationId,
+    chatType: message.chatType,
+    origin: opts.origin,
+    eventId: message.eventId,
+    direct,
+    event,
+    wake: !reset,
+    ambientIntervalSeconds: config.agent.ambientIntervalSeconds,
+    lockOwner: lock.owner,
+    lockTtlMs: LOCK_TTL_MS,
+  });
+  if (status === "duplicate") {
     console.log(`[handle] duplicate event ${message.channel}:${message.eventId}, skipped`);
     return "duplicate";
   }
-  const firstSeen = await store.claim(seenKey, DEDUPE_TTL);
-  if (!direct && !firstSeen) return "duplicate";
-
-  const meta: ChatMeta = { channel: message.channel, conversationId: message.conversationId, chatType: message.chatType, origin: opts.origin };
-  await store.set(keys.meta, JSON.stringify(meta), ttl * 1000);
-  const log = new EventLog(store, chatKey, ttl);
-
-  if (direct && message.text.trim() === "/reset") {
-    await log.append({ type: "session/reset", data: {} });
+  if (reset) {
     const done = "已清空本会话的历史记录。";
     if (opts.collect) opts.collect.push(done);
     else await adapter.send?.(message, done);
     return "handled";
   }
-
-  if (firstSeen) {
-    const images = message.images?.length
-      ? await storeChatImages(store, keys.images(message.eventId), message.images, ttl)
-      : { keys: [], failed: 0 };
-    await log.append({
-      type: "user/message",
-      data: {
-        eventId: message.eventId,
-        header: messageHeader(message),
-        text: message.text,
-        sender: senderLabel(message),
-        mentioned: direct,
-        ...(images.keys.length ? { images: images.keys } : {}),
-        ...(images.failed ? { imagesFailed: images.failed } : {}),
-        reply: message.replyContext,
-      },
-    });
-  } else {
-    await log.append({ type: "user/mentioned", data: { eventId: message.eventId } });
-  }
-
-  // Ordinary group messages wake the agent at most once per interval per group.
-  if (!direct && !(await claimAmbient(store, keys.sample))) return "recorded";
-  return (await runChat(adapter, meta, { collect: opts.collect, ambientClaimed: !direct, deadline })) ? "handled" : "busy";
-}
-
-async function claimAmbient(store: Store, key: string): Promise<boolean> {
-  const interval = config.agent.ambientIntervalSeconds;
-  return interval > 0 && store.claim(key, interval);
+  if (status !== "acquired") return status;
+  await runChat(adapter, meta, { collect: opts.collect, ambientClaimed: !direct, deadline, lock });
+  return "handled";
 }
 
 /**
@@ -155,7 +152,7 @@ async function claimAmbient(store: Store, key: string): Promise<boolean> {
 export async function runChat(
   adapter: ChannelAdapter,
   meta: ChatMeta,
-  opts: { collect?: string[]; ambientClaimed?: boolean; deadline?: number } = {},
+  opts: { collect?: string[]; ambientClaimed?: boolean; deadline?: number; lock?: RunLock } = {},
 ): Promise<boolean> {
   const store = getStore();
   const chatKey = `${meta.channel}:${meta.conversationId}`;
@@ -163,10 +160,17 @@ export async function runChat(
   const deadline = opts.deadline ?? Date.now() + config.agent.maxDurationSeconds * 1000;
   let ambientClaimed = opts.ambientClaimed ?? false;
   for (let round = 0; ; round++) {
-    const lock = new RunLock(store, chatKeys(chatKey).lock);
-    if (!(await lock.acquire())) return round > 0;
+    // The webhook's ingest may already have taken the lock for this run.
+    let lock: RunLock;
+    if (round === 0 && opts.lock) {
+      lock = opts.lock;
+      lock.hold();
+    } else {
+      lock = new RunLock(store, chatKey);
+      if (!(await lock.acquire())) return round > 0;
+    }
     let outcome: "idle" | "handoff";
-    let session: Session;
+    let session: Session | null;
     try {
       ({ outcome, session } = await drain(store, adapter, meta, { collect: opts.collect, ambientClaimed, deadline }));
     } finally {
@@ -176,26 +180,29 @@ export async function runChat(
       await handOff(meta, chatKey);
       return true;
     }
+    if (!session) return true;
     // Something may have arrived after the last check, while its webhook couldn't get the lock.
     // (If another run took over meanwhile, a stale read only costs a lock attempt: that run handles it.)
     await session.refresh();
-    const pending = session.messagesAfter(await session.cursor());
+    const pending = session.messagesAfter(session.cursor);
     if (!pending.length) return true;
-    if (!pending.some((m) => m.data.mentioned) && !(await claimAmbient(store, chatKeys(chatKey).sample))) return true;
+    if (!pending.some((m) => m.data.mentioned) && !(await store.claimAmbient(chatKey, config.agent.ambientIntervalSeconds))) {
+      return true;
+    }
     ambientClaimed = true;
   }
 }
 
 async function drain(
-  store: Store,
+  store: ChatStore,
   adapter: ChannelAdapter,
   meta: ChatMeta,
   opts: { collect?: string[]; ambientClaimed: boolean; deadline: number },
-): Promise<{ outcome: "idle" | "handoff"; session: Session }> {
+): Promise<{ outcome: "idle" | "handoff"; session: Session | null }> {
   const chatKey = `${meta.channel}:${meta.conversationId}`;
-  const keys = chatKeys(chatKey);
   const deadline = opts.deadline;
   const session = await Session.open(store, chatKey);
+  if (!session) return { outcome: "idle", session };
 
   // A run that was killed left its turn open: close it the way dsh does.
   const fixes = recoverOpenTurn(session.events);
@@ -203,9 +210,6 @@ async function drain(
     console.warn(`[handle] ${chatKey}: closing an interrupted turn`);
     await session.append(...fixes);
   }
-  // Nothing before the latest /reset is visible any more.
-  const reset = session.events.findLast((e) => isEvent(e, "session/reset"));
-  if (reset && reset.seq > session.base) await session.trimBefore(reset.seq);
 
   const outbox = new Outbox(store, adapter, session, meta, opts.collect);
   const turnState = { main: -1 };
@@ -217,10 +221,12 @@ async function drain(
     for (let turns = 0; ; turns++) {
       // Session.open just read the log; after a turn, read what arrived during it.
       if (turns > 0) await session.refresh();
-      const pending = session.messagesAfter(await session.cursor());
+      const pending = session.messagesAfter(session.cursor);
       if (!pending.length) return done("idle");
       const direct = pending.some((m) => m.data.mentioned);
-      if (!direct && !ambientClaimed && !(await claimAmbient(store, keys.sample))) return done("idle");
+      if (!direct && !ambientClaimed && !(await store.claimAmbient(chatKey, config.agent.ambientIntervalSeconds))) {
+        return done("idle");
+      }
       ambientClaimed = false;
       if (deadline - Date.now() < HANDOFF_BELOW_MS) return done("handoff");
 
@@ -319,20 +325,15 @@ function makeToolContext(
  */
 class Outbox {
   constructor(
-    private store: Store,
+    private store: ChatStore,
     private adapter: ChannelAdapter,
     private session: Session,
     private meta: ChatMeta,
     private collect: string[] | undefined,
   ) {}
 
-  private key(target: SessionEvent<"user/message">) {
-    return chatKeys(this.session.chatKey).reply(target.data.eventId);
-  }
-
   private async context(target: SessionEvent<"user/message">): Promise<Record<string, string>> {
-    const saved = await this.store.get(this.key(target));
-    return saved ? (JSON.parse(saved) as Record<string, string>) : { ...target.data.reply };
+    return (await this.store.getReply(this.session.chatKey, target.data.eventId)) ?? { ...target.data.reply };
   }
 
   /** Under the reply cap and, where the channel has one (QQ), inside the reply window. */
@@ -369,7 +370,7 @@ class Outbox {
       if (!this.collect) console.error(`[handle] ${this.adapter.name} delivery to ${messageLabel(seq)} failed`, err);
       throw err;
     } finally {
-      await this.store.set(this.key(target), JSON.stringify(replyContext), ttlSeconds() * 1000);
+      await this.store.putReply(this.session.chatKey, target.data.eventId, replyContext);
     }
     return `sent as a reply to ${messageLabel(seq)} (${count + 1}/${MAX_MESSAGES_PER_TURN})`;
   }

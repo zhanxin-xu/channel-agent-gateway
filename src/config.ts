@@ -98,10 +98,6 @@ export const config = {
     get contextTokens() {
       return int("AGENT_CONTEXT_TOKENS", 200_000);
     },
-    /** A conversation's event log is deleted after this many days without messages. */
-    get historyTtlDays() {
-      return int("AGENT_HISTORY_TTL_DAYS", 7);
-    },
     /**
      * Ordinary (non-@) group messages are always recorded; at most one per this
      * many seconds per group is shown to the agent, which decides whether to chime
@@ -144,28 +140,14 @@ export const config = {
   },
 
   store: {
-    /**
-     * "supabase", "upstash" or "memory". Empty: Supabase when configured,
-     * else Upstash when configured, else memory.
-     */
-    get backend() {
-      return str("STORE_BACKEND").toLowerCase();
-    },
     // Supabase (Postgres, see supabase/schema.sql). The Vercel Marketplace
-    // integration injects SUPABASE_URL and the server keys.
+    // integration injects SUPABASE_URL and the server keys. Without them the
+    // store is per-instance memory (local development and tests only).
     get supabaseUrl() {
       return str("SUPABASE_URL").replace(/\/+$/, "");
     },
     get supabaseKey() {
       return str("SUPABASE_SECRET_KEY") || str("SUPABASE_SERVICE_ROLE_KEY");
-    },
-    // Upstash Redis REST credentials. The Vercel Marketplace integration
-    // injects KV_REST_API_*; a direct Upstash setup uses UPSTASH_REDIS_REST_*.
-    get url() {
-      return str("UPSTASH_REDIS_REST_URL") || str("KV_REST_API_URL");
-    },
-    get token() {
-      return str("UPSTASH_REDIS_REST_TOKEN") || str("KV_REST_API_TOKEN");
     },
   },
 

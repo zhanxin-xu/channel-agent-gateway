@@ -21,24 +21,33 @@ npm run dev                  # 本地服务：http://localhost:3000/api/webhook/
 不需要任何真实凭据也能跑测试：
 
 ```bash
-npm test            # 离线端到端测试，所有外部接口都已经 mock
+npm test             # 离线端到端测试，所有外部接口都已经 mock
+npm run test:store   # 存储契约测试
 npm run typecheck
 ```
 
-`npm test` 会替换掉全局的 `fetch`，模拟模型、QQ、Telegram、DeepSeek、Supabase、Upstash 等所有外部服务，然后走一遍真实的 Webhook 处理和 agent loop。沙盒相关的测试使用内存里的假工作区；要在真实的 Vercel Sandbox 上验证，见[工具文档](docs/tools.md#沙盒工作区)。
+改了 `supabase/schema.sql` 或存储层时，请用一个可以随便清空的本地 Postgres 跑一遍真实的 SQL（测试会重建其中的 `gateway` schema）：
+
+```bash
+createdb gateway_test
+TEST_DATABASE_URL=postgresql:///gateway_test npm run test:store
+TEST_DATABASE_URL=postgresql:///gateway_test npm test
+```
+
+`npm test` 会替换掉全局的 `fetch`，模拟模型、QQ、Telegram、DeepSeek、Supabase、Upstash Vector 等所有外部服务，然后走一遍真实的 Webhook 处理和 agent loop。沙盒相关的测试使用内存里的假工作区；要在真实的 Vercel Sandbox 上验证，见[工具文档](docs/tools.md#沙盒工作区)。
 
 ## 提交代码
 
 1. Fork 仓库并新建分支。
-2. 修改代码，**同时在 `scripts/selftest.ts` 里补上或更新测试**。
-3. 确认 `npm run typecheck` 和 `npm test` 都通过。CI 会在每个 Pull Request 上自动运行这两项。
+2. 修改代码，**同时在 `scripts/selftest.ts`（存储相关的在 `scripts/storetest.ts`）里补上或更新测试**。
+3. 确认 `npm run typecheck`、`npm test` 和 `npm run test:store` 都通过。CI 会在每个 Pull Request 上自动运行，并且带一个真实的 Postgres。
 4. 改了行为或配置的话，同步更新 `docs/`、`README.md` 和 `.env.example`。
 5. 提交 Pull Request，说明改了什么、为什么改。
 
 ## 代码约定
 
 - **和周围的代码保持一致**：命名、注释密度、写法都参照同一文件里已有的代码。
-- **外部接口直接用 `fetch`**：模型、QQ、Telegram、Supabase、Upstash 都是直接调用 HTTP 接口，不引入 SDK，方便透传参数，也让测试能统一 mock。Vercel Sandbox 是例外，它需要 SDK 处理认证。
+- **外部接口直接用 `fetch`**：模型、QQ、Telegram、Supabase、Upstash Vector 都是直接调用 HTTP 接口，不引入 SDK，方便透传参数，也让测试能统一 mock。Vercel Sandbox 是例外，它需要 SDK 处理认证。
 - **配置只从环境变量读**：新增配置加在 `src/config.ts` 里，使用 getter 实时读取，并写进 `docs/configuration.md` 和 `.env.example`。
 - **注释解释"为什么"**：平台限制、踩过的坑、看起来奇怪但必须这样写的地方，都值得写一句注释。
 - **不要提交密钥**：`.env*` 已经在 `.gitignore` 里。仓库是公开的，提交前请检查一遍 diff。

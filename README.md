@@ -23,7 +23,7 @@
 - **长期记忆**：基于 Upstash Vector 的语义检索，所有聊天共用一个记忆库，并记录每条记忆的来源。
 - **沙盒工作区**：在 Vercel Sandbox 里跑 bash、Python、Node，每个聊天有一块自己的持久盘，能读图、能把文件发回聊天。
 - **联网**：DeepSeek 搜索和网页抓取，另有余额和额度查询工具。
-- **免费额度就能跑**：Vercel Hobby 加 Supabase、Upstash 的免费版即可运行，资源消耗见[部署文档](docs/deployment.md#免费额度与资源消耗)。
+- **免费额度就能跑**：Vercel Hobby 加 Supabase、Upstash Vector 的免费版即可运行，资源消耗见[部署文档](docs/deployment.md#免费额度与资源消耗)。
 
 ## 工作原理
 
@@ -39,7 +39,7 @@
                          ▼
           每一步：读事件流 → 调用模型 → 输出和工具结果写回事件流
                          │
-      OpenRouter Responses API · Supabase / Upstash · Vercel Sandbox
+      OpenRouter Responses API · Supabase · Upstash Vector · Vercel Sandbox
 ```
 
 ## 快速开始
@@ -51,7 +51,7 @@
    |---|---|
    | `OPENROUTER_API_KEY` | 模型的 API Key |
    | `QQ_APP_ID` / `QQ_APP_SECRET` | QQ 机器人凭据（或者配置 Telegram、HTTP 渠道的凭据） |
-   | `SUPABASE_URL` / `SUPABASE_SECRET_KEY` | 在 Vercel Marketplace 添加 Supabase 后自动注入，再执行一次 [`supabase/schema.sql`](supabase/schema.sql)。事件流和锁都在这里，生产环境必需（也可以改用 Upstash Redis，见[部署](docs/deployment.md#存储)） |
+   | `SUPABASE_URL` / `SUPABASE_SECRET_KEY` | 在 Vercel Marketplace 添加 Supabase 后自动注入，再执行一次 [`supabase/schema.sql`](supabase/schema.sql)。会话、事件流和锁都在这里，生产环境必需 |
 
 3. **检查**：访问 `https://<你的域名>/api/health`，确认模型、渠道和工具都已就绪。
 4. **接入渠道**：按[渠道接入](docs/channels.md)配置回调地址。在中国大陆使用 QQ 机器人时，必须绑定自定义域名，原因见[部署文档](docs/deployment.md#自定义域名)。
@@ -113,13 +113,15 @@ src/
     account-tools.ts     余额与额度查询
     stickers.ts          表情包清单
     images.ts            图片下载、缩小、入库
-  store/                 存储：Supabase 或 Upstash Redis（都走 HTTP），未配置时退化为内存
-supabase/
-  schema.sql             Supabase 的表和函数
+  store/                 存储：Supabase（Postgres 函数，走 HTTP），未配置时退化为内存
   config.ts              环境变量
   worker.ts              接力请求的验签与处理
+supabase/
+  schema.sql             表和函数（会话、事件流、回复状态、图片、去重）
 scripts/
   selftest.ts            离线端到端测试
+  storetest.ts           存储契约测试（内存，以及设置 TEST_DATABASE_URL 时的真实 Postgres）
+  rpc-shim.ts            测试用的 Supabase Data API 替身
   sandbox-smoke.ts       用真实 Vercel Sandbox 跑一遍工作区工具
   dev-server.ts          本地开发服务器
 docs/                    详细文档

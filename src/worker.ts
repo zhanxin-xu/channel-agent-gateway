@@ -6,7 +6,6 @@
 import crypto from "node:crypto";
 import { waitUntil } from "@vercel/functions";
 import { runChat, workerSignature, type ChatMeta } from "./agent/handle.js";
-import { chatKeys } from "./agent/session.js";
 import { channels } from "./channels/index.js";
 import { json } from "./channels/types.js";
 import { getStore } from "./store/index.js";
@@ -22,9 +21,14 @@ export async function handleWorker(request: Request): Promise<Response> {
   }
 
   const { chatKey } = JSON.parse(body) as { chatKey?: string };
-  const saved = chatKey ? await getStore().get(chatKeys(chatKey).meta) : null;
-  if (!saved) return json({ error: "unknown chat" }, 404);
-  const meta = { ...(JSON.parse(saved) as ChatMeta), origin: publicOrigin(request) };
+  const { session } = chatKey ? await getStore().open(chatKey, Number.MAX_SAFE_INTEGER) : { session: null };
+  if (!session) return json({ error: "unknown chat" }, 404);
+  const meta: ChatMeta = {
+    channel: session.channel,
+    conversationId: session.conversationId,
+    chatType: session.chatType,
+    origin: publicOrigin(request),
+  };
   const adapter = channels.get(meta.channel);
   if (!adapter?.send) return json({ error: `channel "${meta.channel}" can't continue in the background` }, 400);
 

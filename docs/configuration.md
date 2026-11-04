@@ -34,10 +34,9 @@ OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"
 | `AGENT_MAX_STEPS` | `40` | 一轮最多调用模型的次数（旁观轮次也一样；不插话时只用 1 次） |
 | `AGENT_MAX_DURATION_SECONDS` | `300` | 函数的时间上限，要和 `vercel.json` 的 `maxDuration` 保持一致。剩余不到 90 秒时，下一步就是最后一步 |
 | `AGENT_CONTEXT_TOKENS` | `200000` | 上下文预算（token）。请求输入超过它的 80% 时，较早的对话会被压缩成摘要，见[上下文压缩](agent.md#上下文压缩) |
-| `AGENT_HISTORY_TTL_DAYS` | `7` | 会话连续多少天没有新消息，事件流和相关数据就整个删除 |
 | `AGENT_AMBIENT_INTERVAL_SECONDS` | `10` | 群里没 @ 的消息，每个群每隔多少秒最多唤起一次 agent；`0` 表示只记录、不唤起 |
 
-每次唤起，模型看到的都是这个聊天的完整事件流（超过预算的部分已压缩）。在很热闹的群里，旁观唤起的频率直接决定 Redis 命令数和模型费用，见[资源消耗](deployment.md#免费额度与资源消耗)。
+每次唤起，模型看到的都是这个聊天的完整事件流（超过预算的部分已压缩）。在很热闹的群里，旁观唤起的频率直接决定模型费用，见[资源消耗](deployment.md#免费额度与资源消耗)。
 
 ## 渠道
 
@@ -56,14 +55,11 @@ OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `STORE_BACKEND` | 自动 | `supabase`、`upstash` 或 `memory`。不设置时：配置了 Supabase 就用 Supabase，否则配置了 Upstash 就用 Upstash，否则用内存 |
 | `SUPABASE_URL` | 空 | Supabase 项目地址，Vercel Marketplace 集成会自动注入 |
 | `SUPABASE_SECRET_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | 空 | 服务端密钥，优先用新版的 `sb_secret_…` 密钥，集成会自动注入 |
-| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | 空 | Upstash Redis，Vercel Marketplace 集成会自动注入这两个变量 |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | 空 | 直接使用 Upstash 时的变量名，优先级高于上面两个 |
 | `UPSTASH_VECTOR_REST_URL` / `UPSTASH_VECTOR_REST_TOKEN` | 空 | Upstash Vector，用于长期记忆；为空时记忆工具不启用 |
 
-存储都没配置时退化为内存存储：单实例能用，但多实例之间历史不共享，锁、去重和采样也会失效。Supabase 需要先执行 [`supabase/schema.sql`](../supabase/schema.sql)，见[部署文档](deployment.md#supabase推荐)。
+没配置 Supabase 时退化为内存存储：单实例能用，但多实例之间历史不共享，锁、去重和采样也会失效。Supabase 需要先执行 [`supabase/schema.sql`](../supabase/schema.sql)，见[部署文档](deployment.md#存储supabase)。聊天数据保留多久见[数据保留](deployment.md#存储supabase)。
 
 ## 工具
 

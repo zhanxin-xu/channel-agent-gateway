@@ -12,16 +12,11 @@
  *     before `fromSeq`; unlike dsh (which keeps its log on disk forever), the
  *     events it replaces are then deleted, because the free databases are small.
  *
- * Storage: a store list `ev:{chat}` (a Redis list on Upstash, rows of
- * gateway.list_items on Supabase) of `{type, time, data}` JSON. An event's
- * `seq` is its position counted from the start of the log, i.e. `base` (how
- * many events were deleted from the front) + list index; it is not stored.
- * Webhooks only append; reading, recovery and trimming happen in the single
- * agent run that holds the chat's lock (see handle.ts), so `base` only changes
- * under that lock.
+ * Storage: rows of gateway.events, `{seq, type, time, data}` with `seq`
+ * numbered contiguously per chat by the store (see src/store and
+ * supabase/schema.sql). Webhooks only append; reading, recovery and trimming
+ * happen in the single agent run that holds the chat's lock (see handle.ts).
  */
-import type { Store } from "../store/index.js";
-
 /** A Responses API output item, stored and replayed untouched. */
 export type OutputItem =
   | { type: "message"; role: string; content?: Array<{ type: string; text?: string }> }
@@ -83,63 +78,6 @@ export type SessionEvent<K extends EventType = EventType> = {
 
 export const isEvent = <K extends EventType>(e: SessionEvent, type: K): e is Extract<SessionEvent, { type: K }> =>
   e.type === type;
-
-export class EventLog {
-  readonly key: string;
-  readonly baseKey: string;
-
-  constructor(
-    private store: Store,
-    readonly chatKey: string,
-    private ttlSeconds: number,
-  ) {
-    this.key = `ev:${chatKey}`;
-    this.baseKey = `ev:base:${chatKey}`;
-  }
-
-  /**
-   * Append in order; safe to call from any instance at any time. Returns the
-   * log's new length (excluding base). Webhooks refresh the log's TTL; a run's
-   * own appends skip that (`touch: false`), since a message always precedes them.
-   */
-  async append(...events: NewEvent[]): Promise<number> {
-    return this.appendWith({ touch: true }, ...events);
-  }
-
-  async appendWith(opts: { touch: boolean }, ...events: NewEvent[]): Promise<number> {
-    if (!events.length) return 0;
-    const now = Date.now();
-    return this.store.rpush(
-      this.key,
-      events.map((e) => JSON.stringify({ type: e.type, time: now, data: e.data })),
-      opts.touch ? this.ttlSeconds : 0,
-    );
-  }
-
-  async base(): Promise<number> {
-    return Number((await this.store.get(this.baseKey)) ?? 0);
-  }
-
-  /** Events with seq >= `from` (clamped to what still exists), given the current `base`. */
-  async read(from: number, base: number): Promise<SessionEvent[]> {
-    const start = Math.max(from, base);
-    const raw = await this.store.lrange(this.key, start - base, -1);
-    return raw.map((item, i) => ({ seq: start + i, ...(JSON.parse(item) as Omit<SessionEvent, "seq">) }) as SessionEvent);
-  }
-
-  /** Delete the events before `seq` (and the images they reference). Only under the chat's lock. */
-  async trimBefore(seq: number, base: number, dropped: SessionEvent[]): Promise<number> {
-    const count = seq - base;
-    if (count <= 0) return base;
-    const images = dropped.flatMap((e) =>
-      isEvent(e, "user/message") ? (e.data.images ?? []) : isEvent(e, "tool/images") ? e.data.images : [],
-    );
-    await this.store.lpop(this.key, count);
-    await this.store.set(this.baseKey, String(seq), this.ttlSeconds * 1000);
-    if (images.length) await this.store.del(...images);
-    return seq;
-  }
-}
 
 /** The model-visible message number of a user/message: its seq. */
 export const messageLabel = (seq: number) => `第${seq}条`;

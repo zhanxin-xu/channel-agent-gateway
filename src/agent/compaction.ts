@@ -13,7 +13,7 @@
  *     events it replaces are then deleted from the store.
  */
 import { config } from "../config.js";
-import { deriveInput, isEvent, visibleWindow, type SessionEvent } from "./events.js";
+import { isEvent, visibleWindow, type SessionEvent } from "./events.js";
 import { createResponse, outputText } from "./loop.js";
 import type { Session } from "./session.js";
 
@@ -79,7 +79,7 @@ export async function compactIfNeeded(
     model: config.openrouter.model,
     ...config.openrouter.extraBody,
     instructions: o.systemPrompt,
-    input: [...(await deriveInput(head, (key) => session.store.get(key))), { role: "user", content: COMPACTION_INSTRUCTION }],
+    input: [...(await session.input(head)), { role: "user", content: COMPACTION_INSTRUCTION }],
     tools: o.tools,
     tool_choice: "none",
   });

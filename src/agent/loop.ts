@@ -25,8 +25,8 @@
 import { config } from "../config.js";
 import { compactIfNeeded } from "./compaction.js";
 import { messageLabel, type NewEvent, type OutputItem, type SessionEvent, type TurnEndReason, type Usage } from "./events.js";
-import { storeToolImages } from "./images.js";
-import { chatKeys, ttlSeconds, type Session } from "./session.js";
+import { imagePrefix, storeToolImages } from "./images.js";
+import type { Session } from "./session.js";
 import { activeTools, END_TURN, runTool, type ToolContext } from "./tools.js";
 
 interface ResponsesResult {
@@ -236,7 +236,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     // Images a tool opened (read_file) are stored and shown after the step's tool results.
     const images = ctx.images.splice(0);
     const imageKeys = images.length
-      ? await storeToolImages(session.store, chatKeys(session.chatKey).images(`t${turn}s${step}`), images, ttlSeconds())
+      ? await storeToolImages(session.store, session.chatKey, imagePrefix(session.chatKey, `t${turn}s${step}`), images)
       : [];
     const reason: TurnEndReason = !lastStep ? "completed" : outOfTime ? "out-of-time" : "max-steps";
     await session.append(

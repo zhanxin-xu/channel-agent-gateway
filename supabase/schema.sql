@@ -1,160 +1,300 @@
 -- Store for channel-agent-gateway on Supabase (Postgres).
 --
--- The gateway's store is a tiny Redis-like interface (src/store/index.ts):
--- string keys with TTLs, and lists. Here that is two tables in a private
--- schema, `gateway`, which the Data API doesn't expose, and a handful of
--- functions in `public` that the gateway calls over the Data API
--- (POST /rest/v1/rpc/<name>) with the service-role / secret key. Each store
--- operation is one function call, so one HTTP request.
+-- After the session log of DeepSeek's dsh (deepseek-ai/deepseek-harness):
+--   gateway.sessions  one row per chat: the log's header (who, where, format
+--                     version) outside the log, plus the run state (cursor,
+--                     turn counter, run lock, ambient sampling window).
+--   gateway.events    the append-only log: (chat, seq) with seq contiguous per
+--                     chat, the event type, time and its JSON data. The model's
+--                     input is derived from it (src/agent/events.ts).
+--   gateway.replies   per-message reply state (QQ msg_seq, reply count).
+--   gateway.images    images referenced by events, as data URLs.
+--   gateway.inbound   platform deliveries already seen (webhook retries).
+--
+-- The tables live in a private schema the Data API doesn't expose, with RLS on.
+-- The gateway calls the functions below over the Data API
+-- (POST /rest/v1/rpc/<name>) with the server key; each returns jsonb. Only
+-- service_role may execute them.
 --
 -- Run this once in the SQL editor. It is safe to run again.
 
 create schema if not exists gateway;
 
--- Strings: kv_get / kv_set / kv_incrby / store_del. A null expires_at never expires.
-create table if not exists gateway.kv (
+create table if not exists gateway.sessions (
+  chat text primary key, -- "{channel}:{conversation}"
+  channel text not null,
+  conversation_id text not null,
+  chat_type text not null default 'private' check (chat_type in ('private', 'group')),
+  origin text, -- public origin of the deployment, for the worker hand-off
+  format_version int not null default 1,
+  next_seq bigint not null default 0,
+  cursor bigint not null default -1, -- seq of the last user message a turn handled
+  turn int not null default 0,
+  lock_owner text,
+  lock_expires_at timestamptz,
+  ambient_until timestamptz, -- no ambient wake before this
+  created_at timestamptz not null default now(),
+  last_active_at timestamptz not null default now()
+);
+
+create table if not exists gateway.events (
+  chat text not null references gateway.sessions (chat) on delete cascade,
+  seq bigint not null,
+  type text not null,
+  time timestamptz not null default now(),
+  data jsonb not null,
+  -- Copied out of data for filtering in the table editor and in SQL.
+  turn int generated always as ((data ->> 'turn')::int) stored,
+  step int generated always as ((data ->> 'step')::int) stored,
+  primary key (chat, seq)
+);
+create index if not exists events_chat_type on gateway.events (chat, type);
+
+create table if not exists gateway.replies (
+  chat text not null references gateway.sessions (chat) on delete cascade,
+  event_id text not null,
+  context jsonb not null,
+  updated_at timestamptz not null default now(),
+  primary key (chat, event_id)
+);
+
+-- Written before the event that references them, so no foreign key; orphans are expired.
+create table if not exists gateway.images (
   key text primary key,
-  value text not null,
-  expires_at timestamptz
+  chat text not null,
+  data_url text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists images_chat on gateway.images (chat);
+
+create table if not exists gateway.inbound (
+  channel text not null,
+  event_id text not null,
+  direct boolean not null default false,
+  seen_at timestamptz not null default now(),
+  primary key (channel, event_id)
 );
 
--- Lists: items numbered from `head` (inclusive) to `tail` (exclusive), so
--- appending and dropping from the front never renumber anything.
-create table if not exists gateway.list_meta (
-  key text primary key,
-  head bigint not null default 0,
-  tail bigint not null default 0,
-  expires_at timestamptz
-);
-create table if not exists gateway.list_items (
-  key text not null,
-  idx bigint not null,
-  value text not null,
-  primary key (key, idx)
-);
+alter table gateway.sessions enable row level security;
+alter table gateway.events enable row level security;
+alter table gateway.replies enable row level security;
+alter table gateway.images enable row level security;
+alter table gateway.inbound enable row level security;
 
-create index if not exists kv_expires_at on gateway.kv (expires_at);
-create index if not exists list_meta_expires_at on gateway.list_meta (expires_at);
+-- ── Helpers ──
 
--- Nobody reads the tables directly; the security-definer functions below do.
-alter table gateway.kv enable row level security;
-alter table gateway.list_meta enable row level security;
-alter table gateway.list_items enable row level security;
-
--- ── Strings ──
-
-create or replace function public.kv_get(p_key text) returns text
-language sql stable security definer set search_path = '' as $$
-  select value from gateway.kv where key = p_key and (expires_at is null or expires_at > now());
+create or replace function gateway.event_json(e gateway.events) returns jsonb
+language sql immutable set search_path = '' as $$
+  select jsonb_build_object('seq', e.seq, 'type', e.type, 'time', (extract(epoch from e.time) * 1000)::bigint, 'data', e.data);
 $$;
 
--- Like SET key value PX ttl [NX]. Returns whether the value was written.
-create or replace function public.kv_set(p_key text, p_value text, p_ttl_ms bigint, p_nx boolean default false)
-returns boolean
-language plpgsql security definer set search_path = '' as $$
+create or replace function gateway.session_json(s gateway.sessions) returns jsonb
+language sql stable set search_path = '' as $$
+  select jsonb_build_object(
+    'chat', s.chat, 'channel', s.channel, 'conversationId', s.conversation_id, 'chatType', s.chat_type,
+    'origin', s.origin, 'formatVersion', s.format_version,
+    'createdAt', (extract(epoch from s.created_at) * 1000)::bigint, 'nextSeq', s.next_seq, 'cursor', s.cursor, 'turn', s.turn,
+    'minSeq', coalesce((select min(e.seq) from gateway.events e where e.chat = s.chat), s.next_seq)
+  );
+$$;
+
+-- Append events ({type, data} objects) to a locked session row; returns the first seq.
+create or replace function gateway.append(p_chat text, p_events jsonb) returns bigint
+language plpgsql set search_path = '' as $$
 declare
-  written int;
+  first_seq bigint;
 begin
-  insert into gateway.kv as kv (key, value, expires_at)
-  values (p_key, p_value, now() + p_ttl_ms * interval '1 millisecond')
-  on conflict (key) do update set value = excluded.value, expires_at = excluded.expires_at
-    where not p_nx or kv.expires_at <= now();
-  get diagnostics written = row_count;
-  return written > 0;
+  select next_seq into first_seq from gateway.sessions where chat = p_chat for update;
+  if not found then raise exception 'no session %', p_chat; end if;
+  insert into gateway.events (chat, seq, type, data)
+  select p_chat, first_seq + e.ord - 1, e.value ->> 'type', coalesce(e.value -> 'data', '{}'::jsonb)
+  from jsonb_array_elements(p_events) with ordinality as e(value, ord);
+  update gateway.sessions
+    set next_seq = first_seq + jsonb_array_length(p_events), last_active_at = now()
+    where chat = p_chat;
+  return first_seq;
 end;
 $$;
 
--- Like INCRBY followed by EXPIRE. An expired value counts as 0.
-create or replace function public.kv_incrby(p_key text, p_by bigint, p_ttl_s bigint) returns bigint
-language sql security definer set search_path = '' as $$
-  insert into gateway.kv as kv (key, value, expires_at)
-  values (p_key, p_by::text, now() + p_ttl_s * interval '1 second')
-  on conflict (key) do update set
-    value = ((case when kv.expires_at <= now() then 0 else kv.value::bigint end) + p_by)::text,
-    expires_at = excluded.expires_at
-  returning value::bigint;
-$$;
+-- ── Ingress ──
 
--- Like DEL: strings and lists.
-create or replace function public.store_del(p_keys text[]) returns void
-language sql security definer set search_path = '' as $$
-  delete from gateway.kv where key = any (p_keys);
-  delete from gateway.list_items where key = any (p_keys);
-  delete from gateway.list_meta where key = any (p_keys);
-$$;
-
--- ── Lists ──
-
--- Like RPUSH followed by EXPIRE (no TTL change when p_ttl_s <= 0). Returns the new length.
-create or replace function public.list_rpush(p_key text, p_values text[], p_ttl_s bigint) returns bigint
+-- One webhook delivery in one transaction: de-duplicate, upsert the session,
+-- append the event (or a user/mentioned mark for a repeat that is now an @),
+-- and decide whether to wake the agent: @ / DMs always, ordinary messages at
+-- most once per p_ambient_interval_s. Waking tries the run lock for p_lock_owner.
+-- A session/reset event deletes everything logged before it.
+-- Returns {status: duplicate | recorded | busy | acquired, seq}.
+create or replace function public.chat_ingest(
+  p_chat text, p_channel text, p_conversation_id text, p_chat_type text, p_origin text,
+  p_event_id text, p_direct boolean, p_event jsonb, p_wake boolean,
+  p_ambient_interval_s int, p_lock_owner text, p_lock_ttl_ms bigint
+) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
-  m gateway.list_meta;
-  n bigint := coalesce(array_length(p_values, 1), 0);
+  first_seen boolean;
+  n int;
+  s gateway.sessions;
+  ev jsonb := p_event;
+  v_seq bigint;
+  wake boolean;
+  acquired boolean := false;
 begin
-  insert into gateway.list_meta (key) values (p_key) on conflict (key) do nothing;
-  select * into m from gateway.list_meta where key = p_key for update;
-  if m.expires_at is not null and m.expires_at <= now() then
-    delete from gateway.list_items where key = p_key;
-    m.head := 0;
-    m.tail := 0;
-    m.expires_at := null;
+  insert into gateway.inbound (channel, event_id, direct) values (p_channel, p_event_id, p_direct)
+    on conflict do nothing;
+  get diagnostics n = row_count;
+  first_seen := n > 0;
+  if not first_seen then
+    if not p_direct then return jsonb_build_object('status', 'duplicate'); end if;
+    update gateway.inbound set direct = true where channel = p_channel and event_id = p_event_id and not direct;
+    get diagnostics n = row_count;
+    if n = 0 then return jsonb_build_object('status', 'duplicate'); end if;
+    ev := jsonb_build_object('type', 'user/mentioned', 'data', jsonb_build_object('eventId', p_event_id));
   end if;
-  insert into gateway.list_items (key, idx, value)
-  select p_key, m.tail + v.ord - 1, v.value from unnest(p_values) with ordinality as v(value, ord);
-  update gateway.list_meta set
-    head = m.head,
-    tail = m.tail + n,
-    expires_at = case when p_ttl_s > 0 then now() + p_ttl_s * interval '1 second' else m.expires_at end
-  where key = p_key;
-  return m.tail + n - m.head;
+
+  insert into gateway.sessions as cur (chat, channel, conversation_id, chat_type, origin)
+    values (p_chat, p_channel, p_conversation_id, p_chat_type, p_origin)
+    on conflict (chat) do update set
+      chat_type = excluded.chat_type,
+      origin = coalesce(excluded.origin, cur.origin),
+      last_active_at = now();
+
+  if ev ->> 'type' = 'session/reset' then
+    delete from gateway.images where key in (
+      select jsonb_array_elements_text(e.data -> 'images') from gateway.events e
+      where e.chat = p_chat and e.data ? 'images');
+    delete from gateway.events where chat = p_chat;
+    delete from gateway.replies where chat = p_chat;
+  end if;
+  v_seq := gateway.append(p_chat, jsonb_build_array(ev));
+
+  select * into s from gateway.sessions where chat = p_chat;
+  wake := p_wake and (p_direct or (p_ambient_interval_s > 0 and (s.ambient_until is null or s.ambient_until <= now())));
+  if wake and not p_direct then
+    update gateway.sessions set ambient_until = now() + p_ambient_interval_s * interval '1 second' where chat = p_chat;
+  end if;
+  if wake and p_lock_owner is not null then
+    update gateway.sessions
+      set lock_owner = p_lock_owner, lock_expires_at = now() + p_lock_ttl_ms * interval '1 millisecond'
+      where chat = p_chat and (lock_expires_at is null or lock_expires_at <= now());
+    acquired := found;
+  end if;
+  return jsonb_build_object(
+    'status', case when not wake then 'recorded' when acquired then 'acquired' else 'busy' end,
+    'seq', v_seq);
 end;
 $$;
 
--- Like LRANGE key start stop (inclusive; negative counts from the end).
-create or replace function public.list_range(p_key text, p_start bigint, p_stop bigint) returns setof text
-language plpgsql stable security definer set search_path = '' as $$
-declare
-  m gateway.list_meta;
-  len bigint;
-  s bigint;
-  e bigint;
-begin
-  select * into m from gateway.list_meta where key = p_key and (expires_at is null or expires_at > now());
-  if not found then return; end if;
-  len := m.tail - m.head;
-  s := case when p_start < 0 then greatest(len + p_start, 0) else p_start end;
-  e := case when p_stop < 0 then len + p_stop else least(p_stop, len - 1) end;
-  if s > e then return; end if;
-  return query select i.value from gateway.list_items i
-    where i.key = p_key and i.idx between m.head + s and m.head + e order by i.idx;
-end;
+-- ── Runs ──
+
+-- The session row and its events after p_after_seq: {session, events}.
+create or replace function public.chat_open(p_chat text, p_after_seq bigint) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select jsonb_build_object(
+    'session', (select gateway.session_json(s) from gateway.sessions s where s.chat = p_chat),
+    'events', coalesce((
+      select jsonb_agg(gateway.event_json(e) order by e.seq) from gateway.events e
+      where e.chat = p_chat and e.seq > p_after_seq), '[]'::jsonb));
 $$;
 
--- Drop the first p_count items (like LTRIM key p_count -1).
-create or replace function public.list_lpop(p_key text, p_count bigint) returns void
+create or replace function public.chat_append(p_chat text, p_events jsonb) returns jsonb
+language sql security definer set search_path = '' as $$
+  select to_jsonb(gateway.append(p_chat, p_events));
+$$;
+
+-- Delete events before p_seq (compaction) and the images they reference.
+create or replace function public.chat_trim(p_chat text, p_seq bigint) returns jsonb
+language sql security definer set search_path = '' as $$
+  delete from gateway.images where key in (
+    select jsonb_array_elements_text(e.data -> 'images') from gateway.events e
+    where e.chat = p_chat and e.seq < p_seq and e.data ? 'images');
+  with deleted as (delete from gateway.events where chat = p_chat and seq < p_seq returning 1)
+  select to_jsonb(count(*)) from deleted;
+$$;
+
+-- The run lock: p_mode acquire (if free or expired) / renew (if ours) / release (if ours).
+create or replace function public.chat_lock(p_chat text, p_owner text, p_ttl_ms bigint, p_mode text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare
-  m gateway.list_meta;
-  new_head bigint;
 begin
-  select * into m from gateway.list_meta where key = p_key for update;
-  if not found or p_count <= 0 then return; end if;
-  new_head := least(m.head + p_count, m.tail);
-  delete from gateway.list_items where key = p_key and idx < new_head;
-  update gateway.list_meta set head = new_head where key = p_key;
+  if p_mode = 'acquire' then
+    update gateway.sessions set lock_owner = p_owner, lock_expires_at = now() + p_ttl_ms * interval '1 millisecond'
+      where chat = p_chat and (lock_expires_at is null or lock_expires_at <= now());
+  elsif p_mode = 'renew' then
+    update gateway.sessions set lock_expires_at = now() + p_ttl_ms * interval '1 millisecond'
+      where chat = p_chat and lock_owner = p_owner;
+  elsif p_mode = 'release' then
+    update gateway.sessions set lock_owner = null, lock_expires_at = null
+      where chat = p_chat and lock_owner = p_owner;
+  else
+    raise exception 'unknown lock mode %', p_mode;
+  end if;
+  return to_jsonb(found);
 end;
+$$;
+
+-- Take the ambient sampling window if it has passed.
+create or replace function public.chat_claim_ambient(p_chat text, p_interval_s int) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+begin
+  if p_interval_s <= 0 then return to_jsonb(false); end if;
+  update gateway.sessions set ambient_until = now() + p_interval_s * interval '1 second'
+    where chat = p_chat and (ambient_until is null or ambient_until <= now());
+  return to_jsonb(found);
+end;
+$$;
+
+create or replace function public.chat_begin_turn(p_chat text) returns jsonb
+language sql security definer set search_path = '' as $$
+  update gateway.sessions set turn = turn + 1, last_active_at = now() where chat = p_chat returning to_jsonb(turn);
+$$;
+
+create or replace function public.chat_set_cursor(p_chat text, p_cursor bigint) returns jsonb
+language sql security definer set search_path = '' as $$
+  update gateway.sessions set cursor = p_cursor where chat = p_chat returning to_jsonb(cursor);
+$$;
+
+-- ── Replies and images ──
+
+create or replace function public.reply_get(p_chat text, p_event_id text) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select context from gateway.replies where chat = p_chat and event_id = p_event_id;
+$$;
+
+create or replace function public.reply_put(p_chat text, p_event_id text, p_context jsonb) returns jsonb
+language sql security definer set search_path = '' as $$
+  insert into gateway.replies (chat, event_id, context) values (p_chat, p_event_id, p_context)
+    on conflict (chat, event_id) do update set context = excluded.context, updated_at = now()
+    returning 'true'::jsonb;
+$$;
+
+create or replace function public.image_put(p_chat text, p_key text, p_data_url text) returns jsonb
+language sql security definer set search_path = '' as $$
+  insert into gateway.images (key, chat, data_url) values (p_key, p_chat, p_data_url)
+    on conflict (key) do update set data_url = excluded.data_url
+    returning 'true'::jsonb;
+$$;
+
+-- {key: data_url} for the keys that exist.
+create or replace function public.image_get(p_keys text[]) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_object_agg(key, data_url), '{}'::jsonb) from gateway.images where key = any (p_keys);
 $$;
 
 -- ── Housekeeping ──
 
--- Deletes everything past its TTL; scheduled daily below.
-create or replace function public.store_expire() returns void
-language sql security definer set search_path = '' as $$
-  delete from gateway.kv where expires_at <= now();
-  delete from gateway.list_items i using gateway.list_meta m
-    where i.key = m.key and m.expires_at <= now();
-  delete from gateway.list_meta where expires_at <= now();
+-- Chats quiet for p_days go away with everything they own; retries are only
+-- tracked for an hour; images no event references are dropped after a day.
+create or replace function public.gateway_expire(p_days int default 7) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  sessions_deleted int;
+begin
+  delete from gateway.sessions where last_active_at < now() - p_days * interval '1 day';
+  get diagnostics sessions_deleted = row_count;
+  delete from gateway.inbound where seen_at < now() - interval '1 hour';
+  delete from gateway.images i where i.created_at < now() - interval '1 day' and not exists (
+    select from gateway.events e where e.chat = i.chat and e.data -> 'images' ? i.key);
+  return jsonb_build_object('sessions', sessions_deleted);
+end;
 $$;
 
 -- Only the gateway's server key may call these (Supabase roles; skipped where they don't exist).
@@ -163,8 +303,11 @@ declare
   fn text;
 begin
   foreach fn in array array[
-    'kv_get(text)', 'kv_set(text,text,bigint,boolean)', 'kv_incrby(text,bigint,bigint)', 'store_del(text[])',
-    'list_rpush(text,text[],bigint)', 'list_range(text,bigint,bigint)', 'list_lpop(text,bigint)', 'store_expire()'
+    'chat_ingest(text,text,text,text,text,text,boolean,jsonb,boolean,int,text,bigint)',
+    'chat_open(text,bigint)', 'chat_append(text,jsonb)', 'chat_trim(text,bigint)',
+    'chat_lock(text,text,bigint,text)', 'chat_claim_ambient(text,int)', 'chat_begin_turn(text)',
+    'chat_set_cursor(text,bigint)', 'reply_get(text,text)', 'reply_put(text,text,jsonb)',
+    'image_put(text,text,text)', 'image_get(text[])', 'gateway_expire(int)'
   ] loop
     execute format('revoke all on function public.%s from public', fn);
     if exists (select from pg_roles where rolname = 'anon') then
@@ -177,14 +320,14 @@ begin
 end;
 $$;
 
--- Daily cleanup with pg_cron, where available (Supabase: Database → Extensions → pg_cron).
+-- Daily cleanup with pg_cron, where available.
 do $$
 begin
   if exists (select from pg_available_extensions where name = 'pg_cron') then
     create extension if not exists pg_cron;
-    perform cron.schedule('gateway-store-expire', '17 4 * * *', 'select public.store_expire()');
+    perform cron.schedule('gateway-expire', '17 4 * * *', 'select public.gateway_expire(7)');
   end if;
 exception when others then
-  raise notice 'pg_cron not set up (%); run select public.store_expire() yourself now and then', sqlerrm;
+  raise notice 'pg_cron not set up (%); run select public.gateway_expire(7) now and then', sqlerrm;
 end;
 $$;

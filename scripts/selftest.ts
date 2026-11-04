@@ -1,6 +1,7 @@
 /**
  * Offline end-to-end test: `npm test`.
- * Stubs global fetch (Responses API, DeepSeek tools, QQ, Telegram, Upstash) and
+ * Stubs global fetch (Responses API, DeepSeek tools, QQ, Telegram, Supabase,
+ * Upstash Vector) and
  * Vercel's waitUntil, then drives each channel through the real webhook
  * handler, event log and agent loop.
  */
@@ -19,8 +20,6 @@ process.env.TELEGRAM_BOT_TOKEN = "123:abc";
 process.env.TELEGRAM_WEBHOOK_SECRET = "tg-secret";
 process.env.HTTP_CHANNEL_TOKEN = "http-secret";
 for (const name of [
-  "UPSTASH_REDIS_REST_URL",
-  "KV_REST_API_URL",
   "UPSTASH_VECTOR_REST_URL",
   "UPSTASH_VECTOR_REST_TOKEN",
   "VERCEL",
@@ -30,7 +29,6 @@ for (const name of [
   "SUPABASE_URL",
   "SUPABASE_SECRET_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
-  "STORE_BACKEND",
 ]) {
   delete process.env[name];
 }
@@ -79,95 +77,15 @@ const fnCall = (callId: string, name: string, args: unknown) => ({
 });
 const sendCall = (callId: string, text: string, extra: Record<string, unknown> = {}) => fnCall(callId, "send_message", { text, ...extra });
 
-/** Minimal Upstash REST emulator: POST / with one command, POST /pipeline with many. */
-const redis = new Map<string, string | string[]>();
-function runRedis([cmd, key, ...args]: string[]): unknown {
-  const list = () => (redis.get(key!) as string[] | undefined) ?? [];
-  const at = (i: number, len: number) => (i < 0 ? len + i : i);
-  switch (cmd) {
-    case "SET":
-      if (args.includes("NX") && redis.has(key!)) return null;
-      redis.set(key!, args[0]!);
-      return "OK";
-    case "GET":
-      return (redis.get(key!) as string | undefined) ?? null;
-    case "INCRBY": {
-      const next = Number(redis.get(key!) ?? 0) + Number(args[0]);
-      redis.set(key!, String(next));
-      return next;
-    }
-    case "RPUSH":
-      redis.set(key!, [...list(), ...args]);
-      return list().length;
-    case "LPUSH":
-      redis.set(key!, [...[...args].reverse(), ...list()]);
-      return list().length;
-    case "LTRIM": {
-      const l = list();
-      redis.set(key!, l.slice(at(Number(args[0]), l.length), at(Number(args[1]), l.length) + 1));
-      return "OK";
-    }
-    case "LRANGE": {
-      const l = list();
-      return l.slice(at(Number(args[0]), l.length), at(Number(args[1]), l.length) + 1);
-    }
-    case "EXPIRE":
-      return 1;
-    case "DEL":
-      return [key!, ...args].filter((k) => redis.delete(k)).length;
-    default:
-      return { error: `unknown command ${cmd}` };
-  }
-}
-function fakeUpstash(url: string, body: any) {
-  if (new URL(url).pathname === "/pipeline") return Response.json(body.map((c: string[]) => ({ result: runRedis(c) })));
-  return Response.json({ result: runRedis(body) });
-}
-
-/** Minimal Supabase Data API emulator: the functions of supabase/schema.sql, in memory. */
-const pg = { kv: new Map<string, { value: string; expiresAt: number }>(), lists: new Map<string, string[]>() };
-function fakeSupabase(url: string, headers: Headers, body: any) {
-  if (headers.get("apikey") !== "sb_secret_test") return Response.json({ message: "Invalid API key" }, { status: 401 });
-  const fn = new URL(url).pathname.replace("/rest/v1/rpc/", "");
-  const live = (k: string) => {
-    const hit = pg.kv.get(k);
-    return hit && hit.expiresAt > Date.now() ? hit : undefined;
-  };
-  const list = (k: string) => pg.lists.get(k) ?? [];
-  const at = (i: number, len: number) => (i < 0 ? Math.max(len + i, 0) : i);
-  switch (fn) {
-    case "kv_get":
-      return Response.json(live(body.p_key)?.value ?? null);
-    case "kv_set":
-      if (body.p_nx && live(body.p_key)) return Response.json(false);
-      pg.kv.set(body.p_key, { value: body.p_value, expiresAt: Date.now() + body.p_ttl_ms });
-      return Response.json(true);
-    case "kv_incrby": {
-      const next = Number(live(body.p_key)?.value ?? 0) + body.p_by;
-      pg.kv.set(body.p_key, { value: String(next), expiresAt: Date.now() + body.p_ttl_s * 1000 });
-      return Response.json(next);
-    }
-    case "store_del":
-      for (const k of body.p_keys) {
-        pg.kv.delete(k);
-        pg.lists.delete(k);
-      }
-      return new Response(null, { status: 204 });
-    case "list_rpush":
-      pg.lists.set(body.p_key, [...list(body.p_key), ...body.p_values]);
-      return Response.json(list(body.p_key).length);
-    case "list_range": {
-      const l = list(body.p_key);
-      const stop = body.p_stop < 0 ? l.length + body.p_stop : Math.min(body.p_stop, l.length - 1);
-      return Response.json(l.slice(at(body.p_start, l.length), stop + 1));
-    }
-    case "list_lpop":
-      pg.lists.set(body.p_key, list(body.p_key).slice(body.p_count));
-      return new Response(null, { status: 204 });
-    default:
-      return Response.json({ message: `no function ${fn}` }, { status: 404 });
-  }
-}
+/**
+ * Supabase's Data API: the real functions of supabase/schema.sql in a local
+ * Postgres when TEST_DATABASE_URL is set, else a MemoryStore behind the same URLs.
+ */
+const { MemoryStore } = await import("../src/store/index.js");
+const { memoryRpc, postgresRpc, rpcResponse } = await import("./rpc-shim.js");
+const pgBackend = process.env.TEST_DATABASE_URL ? await postgresRpc(process.env.TEST_DATABASE_URL) : undefined;
+const supabaseRpc = pgBackend?.rpc ?? memoryRpc(new MemoryStore());
+const fakeSupabase = rpcResponse(supabaseRpc, "sb_secret_test");
 
 /** Minimal Upstash Vector emulator: "similarity" is just shared characters with the query. */
 const vectors = new Map<string, { data: string; metadata: unknown }>();
@@ -305,7 +223,6 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
       },
     });
   }
-  if (url.startsWith("https://redis.example.com")) return fakeUpstash(url, body);
   if (url.startsWith("https://db.example.supabase.co/rest/v1/rpc/")) return fakeSupabase(url, req.headers, body);
   if (url.startsWith("https://vector.example.com/")) return fakeVector(url, req.method, body);
   if (url.startsWith("https://multimedia.nt.qq.com.cn/")) {
@@ -335,7 +252,6 @@ worker = handleWorker;
 const { evaluate, activeTools, runTool } = await import("../src/agent/tools.js");
 const { messageHeader } = await import("../src/agent/handle.js");
 const { getStore, resetStore, storeBackend } = await import("../src/store/index.js");
-const { EventLog } = await import("../src/agent/events.js");
 const qqHint = (await import("../src/channels/qq.js")).qqAdapter.promptHint!;
 const { config } = await import("../src/config.js");
 const { setWorkspaceFactory, driveName } = await import("../src/agent/sandbox.js");
@@ -353,8 +269,8 @@ const noCtx = {
 };
 
 /** A chat's events as stored. */
-async function events(chatKey: string): Promise<Array<{ type: string; data: any }>> {
-  return (await getStore().lrange(`ev:${chatKey}`, 0, -1)).map((e) => JSON.parse(e));
+async function events(chatKey: string): Promise<Array<{ seq: number; type: string; data: any }>> {
+  return (await getStore().open(chatKey, -1)).events;
 }
 
 // ── QQ signing helpers (independent of the implementation under test) ──
@@ -625,44 +541,48 @@ await test("message header: time, scene, sender, @你 (the 第N条 number is add
   assert.match(messageHeader({ ...base, chatType: "private", userId: "7", senderName: "Alice" }, now), /｜私聊｜发送人 Alice #7$/);
 });
 
-await test("upstash store: lists, set NX/PX, incrby, claim, del", async () => {
-  const { UpstashStore } = await import("../src/store/index.js");
-  const store = new UpstashStore("https://redis.example.com/", "rd-token");
-  assert.equal(await store.claim("evt:x", 60), true);
-  assert.equal(await store.claim("evt:x", 60), false, "second claim (webhook retry) is rejected");
-  assert.equal(await store.rpush("l", ["a", "b", "c", "d"], 600), 4);
-  assert.equal(await store.rpush("l", ["e"], 0), 5, "no TTL refresh: a bare RPUSH");
-  await store.lpop("l", 1);
-  assert.deepEqual(await store.lrange("l", 1, -1), ["c", "d", "e"]);
-  assert.equal(await store.set("lock", "me", 60_000, { nx: true }), true);
-  assert.equal(await store.set("lock", "you", 60_000, { nx: true }), false);
-  assert.equal(await store.get("lock"), "me");
-  const set = calls.findLast((c) => c.url === "https://redis.example.com/" && c.body[0] === "SET")!;
-  assert.deepEqual(set.body, ["SET", "lock", "you", "PX", "60000", "NX"]);
-  assert.equal(await store.incrby("n", 1, 60), 1);
-  assert.equal(await store.incrby("n", 1, 60), 2);
-  await store.del("l", "lock");
-  assert.deepEqual(await store.lrange("l", 0, -1), []);
-  assert.equal(calls.find((c) => c.url.startsWith("https://redis.example.com"))!.headers.get("authorization"), "Bearer rd-token");
-});
-
-await test("supabase store: Redis-shaped operations over /rest/v1/rpc with the secret key", async () => {
-  const { SupabaseStore } = await import("../src/store/index.js");
-  const store = new SupabaseStore("https://db.example.supabase.co/", "sb_secret_test");
-  assert.equal(await store.claim("evt:x", 60), true);
-  assert.equal(await store.claim("evt:x", 60), false);
-  assert.equal(await store.rpush("l", ["a", "b", "c"], 600), 3);
-  assert.deepEqual(await store.lrange("l", 1, -1), ["b", "c"]);
-  await store.lpop("l", 1);
-  assert.deepEqual(await store.lrange("l", 0, -1), ["b", "c"]);
-  assert.equal(await store.incrby("n", 2, 60), 2);
-  assert.equal(await store.get("missing"), null);
-  await store.del("l");
-  assert.deepEqual(await store.lrange("l", 0, -1), []);
-  const call = calls.find((c) => c.url === "https://db.example.supabase.co/rest/v1/rpc/kv_set")!;
+await test("postgres store: one function call per operation over /rest/v1/rpc with the secret key", async () => {
+  const { PostgresStore } = await import("../src/store/index.js");
+  const store = new PostgresStore("https://db.example.supabase.co/", "sb_secret_test");
+  calls.length = 0;
+  const ingest = {
+    chat: "qq:shape",
+    channel: "qq",
+    conversationId: "shape",
+    chatType: "group" as const,
+    eventId: "s1",
+    direct: true,
+    event: { type: "user/message", data: { text: "hi" } },
+    wake: true,
+    ambientIntervalSeconds: 10,
+    lockOwner: "me",
+    lockTtlMs: 60_000,
+  };
+  assert.deepEqual(await store.ingest(ingest), { status: "acquired", seq: 0 });
+  assert.equal(await store.append("qq:shape", [{ type: "turn/start", data: { turn: 1 } }]), 1);
+  assert.deepEqual((await store.open("qq:shape", 0)).events.map((e) => e.type), ["turn/start"]);
+  assert.equal(await store.getReply("qq:shape", "s1"), null);
+  const call = calls.find((c) => c.url === "https://db.example.supabase.co/rest/v1/rpc/chat_ingest")!;
   assert.equal(call.headers.get("apikey"), "sb_secret_test");
   assert.equal(call.headers.get("authorization"), null, "a sb_secret_ key is not a bearer token");
-  assert.deepEqual(call.body, { p_key: "evt:x", p_value: "1", p_ttl_ms: 60000, p_nx: true });
+  assert.deepEqual(call.body, {
+    p_chat: "qq:shape",
+    p_channel: "qq",
+    p_conversation_id: "shape",
+    p_chat_type: "group",
+    p_origin: null,
+    p_event_id: "s1",
+    p_direct: true,
+    p_event: ingest.event,
+    p_wake: true,
+    p_ambient_interval_s: 10,
+    p_lock_owner: "me",
+    p_lock_ttl_ms: 60000,
+  });
+  assert.equal(calls.length, 4);
+  const legacy = new PostgresStore("https://db.example.supabase.co", "eyJhbGciOi.legacy");
+  await legacy.getImages(["x"]).catch(() => {});
+  assert.equal(calls.at(-1)!.headers.get("authorization"), "Bearer eyJhbGciOi.legacy", "a legacy JWT key is also the bearer token");
 });
 
 await test("supabase store: picked when configured; a whole conversation runs on it", async () => {
@@ -674,15 +594,14 @@ await test("supabase store: picked when configured; a whole conversation runs on
     assert.equal(storeBackend(), "supabase");
     assert.equal((await httpCall("first", "pgchat")).reply, "答案是 20");
     await httpCall("second", "pgchat");
-    const stored = pg.lists.get("ev:http:pgchat")!.map((e) => JSON.parse(e).type);
-    assert.equal(stored.filter((t) => t === "turn/end").length, 2);
-    assert.equal(pg.kv.get("ev:cursor:http:pgchat")!.value, String(stored.lastIndexOf("user/message")));
-    process.env.STORE_BACKEND = "upstash";
-    process.env.KV_REST_API_URL = "https://redis.example.com";
-    process.env.KV_REST_API_TOKEN = "rd-token";
-    assert.equal(storeBackend(), "upstash", "STORE_BACKEND overrides");
+    const { session, events: stored } = (await supabaseRpc("chat_open", { p_chat: "http:pgchat", p_after_seq: -1 })) as any;
+    const types = stored.map((e: any) => e.type);
+    assert.equal(types.filter((t: string) => t === "turn/end").length, 2);
+    assert.deepEqual(stored.map((e: any) => e.seq), [...stored.keys()], "contiguous seqs from 0");
+    assert.equal(session.cursor, stored.findLast((e: any) => e.type === "user/message").seq);
+    assert.equal(session.turn, 2);
   } finally {
-    for (const k of ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "STORE_BACKEND", "KV_REST_API_URL", "KV_REST_API_TOKEN"]) delete process.env[k];
+    for (const k of ["SUPABASE_URL", "SUPABASE_SECRET_KEY"]) delete process.env[k];
     resetStore(memory);
   }
 });
@@ -744,12 +663,26 @@ await test("http: sync reply, /reset hides everything before it", async () => {
 });
 
 await test("http: busy conversation → queued; the running turn picks the message up", async () => {
-  await getStore().set("ev:lock:http:busy", "someone-else", 60_000);
+  const store = getStore();
+  // Another run holds the chat: it took the lock with an earlier message.
+  await store.ingest({
+    chat: "http:busy",
+    channel: "http",
+    conversationId: "busy",
+    chatType: "private",
+    eventId: "earlier",
+    direct: true,
+    event: { type: "user/message", data: { eventId: "earlier", header: "h", text: "先来的", sender: "#A", mentioned: true, reply: {} } },
+    wake: true,
+    ambientIntervalSeconds: 10,
+    lockOwner: "someone-else",
+    lockTtlMs: 60_000,
+  });
   const res = await httpCall("排队", "busy");
   assert.deepEqual(res, { reply: null, messages: [], queued: true });
   assert.equal(llmCalls, 0);
   assert.equal((await events("http:busy")).at(-1)!.type, "user/message", "the message is in the log");
-  await getStore().del("ev:lock:http:busy");
+  await store.lock("http:busy", "someone-else", 0, "release");
 });
 
 // ── One run per chat ──
@@ -813,26 +746,16 @@ await test("qq group: ordinary messages logged; ≤1 ambient wake per window; am
   assert.equal(sentTo("/v2/groups/GROUP3/messages").length, 1, "the @ is answered");
 });
 
-await test("cost: a silent ambient wake (model only hangs up) stays around 20 Redis commands", async () => {
-  // Count commands as Upstash would bill them: a pipeline of N counts N.
+await test("cost: a silent ambient wake (model only hangs up) is a handful of store calls", async () => {
+  // Each store call is one function call (one HTTP request) on Supabase.
   const store = getStore() as unknown as Record<string, (...args: any[]) => Promise<unknown>>;
-  const weights: Record<string, (...args: any[]) => number> = {
-    rpush: (_k, _v, ttl) => (ttl > 0 ? 2 : 1),
-    incrby: () => 2,
-  };
-  let commands = 0;
-  let depth = 0; // MemoryStore methods call each other; count only the outermost call
+  const counts: Record<string, number> = {};
   const originals: Record<string, any> = {};
-  for (const name of ["rpush", "lrange", "lpop", "get", "set", "incrby", "del", "claim"]) {
+  for (const name of ["ingest", "open", "append", "trim", "lock", "claimAmbient", "beginTurn", "setCursor", "getReply", "putReply", "putImage", "getImages"]) {
     originals[name] = store[name];
     store[name] = async (...args: any[]) => {
-      if (depth === 0) commands += weights[name]?.(...args) ?? 1;
-      depth++;
-      try {
-        return await originals[name]!.apply(store, args);
-      } finally {
-        depth--;
-      }
+      counts[name] = (counts[name] ?? 0) + 1;
+      return originals[name]!.apply(store, args);
     };
   }
   try {
@@ -842,8 +765,10 @@ await test("cost: a silent ambient wake (model only hangs up) stays around 20 Re
     Object.assign(store, originals);
   }
   assert.equal(llmCalls, 1);
-  console.log(`  silent ambient wake: ${commands} Redis commands`);
-  assert.ok(commands <= 21, `${commands} commands`);
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  console.log(`  silent ambient wake: ${total} store calls ${JSON.stringify(counts)}`);
+  assert.equal(counts.ingest, 1, "ingest de-duplicates, logs and takes the lock in one call");
+  assert.ok(total <= 12, `${total} calls`);
 });
 
 await test("qq group: one message as both full and @ events → logged once, answered once", async () => {
@@ -947,7 +872,7 @@ await test("compaction: past 80% of the context, older events become a summary (
     const stored = await events("http:cmp");
     assert.ok(!stored.some((e) => e.type === "user/message" && e.data.text === "first"), "deleted from the store");
     assert.ok(stored.some((e) => e.type === "compaction/summary"));
-    assert.ok(Number(await getStore().get("ev:base:http:cmp")) > 0, "seq numbering continues after deletion");
+    assert.ok(stored[0]!.seq > 0, "seq numbering continues after deletion");
   } finally {
     delete process.env.AGENT_CONTEXT_TOKENS;
     fakeInputTokens = undefined;
@@ -956,15 +881,28 @@ await test("compaction: past 80% of the context, older events become a summary (
 
 await test("recovery: a turn cut off mid-tool is closed with interrupted results, not rewritten", async () => {
   const store = getStore();
-  const log = new EventLog(store, "http:crash", 3600);
-  await log.append(
-    { type: "user/message", data: { eventId: "x0", header: "h", text: "跑个长任务", sender: "#A", mentioned: true, reply: {} } },
+  await store.ingest({
+    chat: "http:crash",
+    channel: "http",
+    conversationId: "crash",
+    chatType: "private",
+    eventId: "x0",
+    direct: true,
+    event: { type: "user/message", data: { eventId: "x0", header: "h", text: "跑个长任务", sender: "#A", mentioned: true, reply: {} } },
+    wake: false,
+    ambientIntervalSeconds: 10,
+    lockOwner: "crashed-run",
+    lockTtlMs: 60_000,
+  });
+  await store.append(
+    "http:crash",
+    [
     { type: "turn/start", data: { turn: 1, trigger: "direct" } },
     { type: "step/start", data: { turn: 1, step: 1 } },
     { type: "assistant/message", data: { turn: 1, step: 1, output: [fnCall("call_long", "calculate", { expression: "1" })] } },
     { type: "tool/call", data: { turn: 1, step: 1, callId: "call_long", name: "calculate" } },
+    ],
   );
-  await store.set("ev:cursor:http:crash", "-1", 60_000);
   await httpCall("还在吗", "crash");
   const stored = await events("http:crash");
   const fix = stored.find((e) => e.type === "tool/result" && e.data.callId === "call_long")!;
@@ -1216,5 +1154,6 @@ await test("unknown channel → 404", async () => {
   assert.equal((await handleWebhook(new Request("http://x/api/webhook/nope", { method: "POST" }), "nope")).status, 404);
 });
 
+await pgBackend?.client.end();
 console.log(`\n${passed} tests passed`);
 process.exit(0);
