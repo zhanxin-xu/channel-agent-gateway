@@ -20,6 +20,8 @@ function msg(chat: string, eventId: string, over: Partial<IngestInput> = {}): In
     eventId,
     direct: true,
     event: { type: "user/message", data: { eventId, text: eventId, images: [] } },
+    reset: false,
+    upgrade: { type: "user/mentioned", data: { eventId } },
     wake: true,
     ambientIntervalSeconds: 10,
     lockOwner: `owner-${eventId}`,
@@ -81,13 +83,14 @@ async function contract(name: string, store: ChatStore) {
 
   await test("append: contiguous seqs in order, first seq returned", async () => {
     const c = "qq:g1";
-    assert.equal(await store.append(c, [{ type: "turn/start", data: { turn: 1 } }, { type: "step/start", data: { turn: 1, step: 1 } }]), 5);
-    assert.equal(await store.append(c, [{ type: "step/end", data: { turn: 1, step: 1 } }]), 7);
+    // m0's run holds the lock (it took it at ingest).
+    assert.equal(await store.append(c, "owner-m0", [{ type: "turn/start", data: { turn: 1 } }, { type: "step/start", data: { turn: 1, step: 1 } }]), 5);
+    assert.equal(await store.append(c, "owner-m0", [{ type: "step/end", data: { turn: 1, step: 1 } }]), 7);
     const { session, events } = await store.open(c, 4);
     assert.deepEqual(events.map((e) => [e.seq, e.type]), [[5, "turn/start"], [6, "step/start"], [7, "step/end"]]);
     assert.deepEqual(events[1]!.data, { turn: 1, step: 1 });
     assert.equal(session!.nextSeq, 8);
-    await assert.rejects(store.append("qq:nobody", [{ type: "turn/start", data: {} }]));
+    await assert.rejects(store.append("qq:nobody", "x", [{ type: "turn/start", data: {} }]));
   });
 
   await test("lock: acquire / renew / release by owner, expiry", async () => {
@@ -108,12 +111,13 @@ async function contract(name: string, store: ChatStore) {
   await test("ambient claim, turn counter, cursor", async () => {
     const c = "qq:g2";
     await store.ingest(msg(c, "a0", { wake: false }));
+    assert.equal(await store.lock(c, "run", 60_000, "acquire"), true);
     assert.equal(await store.claimAmbient(c, 0), false, "interval 0: never");
     assert.equal(await store.claimAmbient(c, 10), true);
     assert.equal(await store.claimAmbient(c, 10), false);
-    assert.equal(await store.beginTurn(c), 1);
-    assert.equal(await store.beginTurn(c), 2);
-    await store.setCursor(c, 0);
+    assert.equal(await store.beginTurn(c, "run"), 1);
+    assert.equal(await store.beginTurn(c, "run"), 2);
+    await store.setCursor(c, "run", 0);
     const { session } = await store.open(c, 0);
     assert.equal(session!.turn, 2);
     assert.equal(session!.cursor, 0);
@@ -132,14 +136,14 @@ async function contract(name: string, store: ChatStore) {
     await store.putImage(c, "img:a", "data:image/jpeg;base64,AAAA");
     await store.putImage(c, "img:b", "data:image/jpeg;base64,BBBB");
     await store.ingest(msg(c, "t0", { event: { type: "user/message", data: { eventId: "t0", images: ["img:a"] } } }));
-    await store.append(c, [{ type: "tool/images", data: { turn: 1, step: 1, images: ["img:b"] } }]);
-    await store.append(c, [{ type: "compaction/summary", data: { fromSeq: 1, summary: "s" } }]);
+    await store.append(c, "owner-t0", [{ type: "tool/images", data: { turn: 1, step: 1, images: ["img:b"] } }]);
+    await store.append(c, "owner-t0", [{ type: "compaction/summary", data: { fromSeq: 1, summary: "s" } }]);
     assert.deepEqual(await store.getImages(["img:a", "img:b", "img:none"]), {
       "img:a": "data:image/jpeg;base64,AAAA",
       "img:b": "data:image/jpeg;base64,BBBB",
     });
     assert.deepEqual(await store.getImages([]), {});
-    await store.trim(c, 1);
+    await store.trim(c, "owner-t0", 1);
     assert.deepEqual(Object.keys(await store.getImages(["img:a", "img:b"])), ["img:b"]);
     const { session, events } = await store.open(c, -1);
     assert.deepEqual(events.map((e) => e.seq), [1, 2]);
@@ -147,10 +151,25 @@ async function contract(name: string, store: ChatStore) {
     assert.equal(session!.nextSeq, 3);
   });
 
+  await test("fencing: a run that lost its lock can't write", async () => {
+    const c = "qq:g4";
+    await store.ingest(msg(c, "f0", { lockTtlMs: 50 }));
+    await sleep(120);
+    assert.equal(await store.lock(c, "new-run", 60_000, "acquire"), true, "the old lease ran out; another run took it");
+    await assert.rejects(store.append(c, "owner-f0", [{ type: "turn/start", data: {} }]), (e: Error) => e.name === "LockLostError");
+    await assert.rejects(store.beginTurn(c, "owner-f0"), (e: Error) => e.name === "LockLostError");
+    await assert.rejects(store.setCursor(c, "owner-f0", 0), (e: Error) => e.name === "LockLostError");
+    await assert.rejects(store.trim(c, "owner-f0", 1), (e: Error) => e.name === "LockLostError");
+    assert.equal(await store.append(c, "new-run", [{ type: "turn/start", data: {} }]), 1);
+    // Without an upgrade event, a repeat that is now direct is just a duplicate.
+    await store.ingest(msg(c, "f1", { direct: false, wake: false }));
+    assert.deepEqual(await store.ingest(msg(c, "f1", { upgrade: undefined })), { status: "duplicate" });
+  });
+
   await test("reset: deletes the log, its images and reply state; numbering continues", async () => {
     const c = "qq:g3";
     await store.putReply(c, "t0", { replies: "1" });
-    const r = await store.ingest(msg(c, "reset1", { event: { type: "session/reset", data: {} }, wake: false }));
+    const r = await store.ingest(msg(c, "reset1", { event: { type: "session/reset", data: {} }, reset: true, wake: false }));
     assert.deepEqual(r, { status: "recorded", seq: 3 });
     const { session, events } = await store.open(c, -1);
     assert.deepEqual(events.map((e) => [e.seq, e.type]), [[3, "session/reset"]]);

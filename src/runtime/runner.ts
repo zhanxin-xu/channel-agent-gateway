@@ -15,7 +15,7 @@ import { LAST_STEP_RESERVE_MS, runTurn } from "../agent/loop.js";
 import { SYSTEM_PROMPT } from "../agent/system-prompt.js";
 import { recoverOpenTurn } from "../conversation/recovery.js";
 import { Session } from "../conversation/session.js";
-import { getStore, type ChatStore } from "../store/index.js";
+import { getStore, LockLostError, type ChatStore } from "../store/index.js";
 import { makeToolContext } from "./context.js";
 import { handOff } from "./handoff.js";
 import { RunLock } from "./lock.js";
@@ -56,7 +56,12 @@ export async function runChat(
     let outcome: "idle" | "handoff";
     let session: Session | null;
     try {
-      ({ outcome, session } = await drain(store, adapter, meta, { collect: opts.collect, ambientClaimed, deadline }));
+      ({ outcome, session } = await drain(store, adapter, meta, { collect: opts.collect, ambientClaimed, deadline, owner: lock.owner }));
+    } catch (err) {
+      if (!(err instanceof LockLostError)) throw err;
+      // The lease ran out and another run took the chat; that run carries on from the log.
+      console.warn(`[runner] ${chatKey}: lost the lock, stopping`);
+      return true;
     } finally {
       await lock.release();
     }
@@ -78,11 +83,11 @@ async function drain(
   store: ChatStore,
   adapter: ChannelAdapter,
   meta: ChatMeta,
-  opts: { collect?: string[]; ambientClaimed: boolean; deadline: number },
+  opts: { collect?: string[]; ambientClaimed: boolean; deadline: number; owner: string },
 ): Promise<{ outcome: "idle" | "handoff"; session: Session | null }> {
   const chatKey = `${meta.channel}:${meta.conversationId}`;
   const deadline = opts.deadline;
-  const session = await Session.open(store, chatKey);
+  const session = await Session.open(store, chatKey, opts.owner);
   if (!session) return { outcome: "idle", session };
 
   // A run that was killed left its turn open: close it the way dsh does.
@@ -137,6 +142,7 @@ async function drain(
             `reasoning=${result.usage.reasoning} ms=${Date.now() - started}`,
         );
       } catch (err) {
+        if (err instanceof LockLostError) throw err;
         console.error(`[runner] turn ${turn} failed for ${chatKey}`, err);
         await session.setCursor(pending.at(-1)!.seq);
         if (direct && ctx.sent.length === 0) await ctx.send({ kind: "text", text: "抱歉，处理消息时出错了，请稍后再试。" }).catch(() => {});

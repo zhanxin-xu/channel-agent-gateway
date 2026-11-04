@@ -15,15 +15,28 @@ export async function handOff(meta: ChatMeta, chatKey: string): Promise<void> {
     return;
   }
   const body = JSON.stringify({ chatKey });
-  try {
-    const res = await fetch(`${meta.origin}/api/worker`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-worker-signature": workerSignature(body) },
-      body,
-      signal: AbortSignal.timeout(10_000),
-    });
-    console.log(`[handoff] ${chatKey}: handed off to the worker (HTTP ${res.status})`);
-  } catch (err) {
-    console.error(`[handoff] ${chatKey}: hand-off failed`, err);
+  // There are ~2 minutes left, so a network blip or a 5xx gets two more tries. A 4xx won't get better.
+  for (const [attempt, wait] of [[1, 1000], [2, 3000], [3, 0]] as const) {
+    try {
+      const res = await fetch(`${meta.origin}/api/worker`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-worker-signature": workerSignature(body) },
+        body,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status < 500) {
+        if (res.ok) console.log(`[handoff] ${chatKey}: handed off to the worker (HTTP ${res.status})`);
+        else console.error(`[handoff] ${chatKey}: the worker refused the hand-off (HTTP ${res.status})`);
+        return;
+      }
+      throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      if (!wait) {
+        console.error(`[handoff] ${chatKey}: hand-off failed after ${attempt} attempts`, err);
+        return;
+      }
+      console.warn(`[handoff] ${chatKey}: attempt ${attempt} failed (${err instanceof Error ? err.message : String(err)}), retrying`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
 }

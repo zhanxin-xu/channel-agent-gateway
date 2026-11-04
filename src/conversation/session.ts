@@ -10,8 +10,11 @@ import type { ChatStore, SessionState } from "../store/index.js";
 import { deriveInput } from "./derive.js";
 import { isEvent, visibleWindow, type NewEvent, type SessionEvent } from "./events.js";
 
-/** Warm instances keep each chat's events, so a new run only reads what was appended since. */
-const cache = new Map<string, { createdAt: number; events: SessionEvent[] }>();
+/**
+ * Warm instances keep each chat's events and the images they reference, so a
+ * new run only reads what was appended since. Images never change once stored.
+ */
+const cache = new Map<string, { createdAt: number; events: SessionEvent[]; images: Map<string, string | null> }>();
 const CACHE_CHATS = 50;
 
 /** Image keys referenced by events. */
@@ -27,17 +30,22 @@ export class Session {
 
   private constructor(
     private store: ChatStore,
+    /** The run lock's owner: every write is fenced by it (see ChatStore). */
+    private owner: string,
     public state: SessionState,
   ) {}
 
   /** Null when the chat has no session (never seen, or expired). */
-  static async open(store: ChatStore, chat: string): Promise<Session | null> {
+  static async open(store: ChatStore, chat: string, owner: string): Promise<Session | null> {
     const hit = cache.get(chat);
     let { session: state, events } = await store.open(chat, hit?.events.at(-1)?.seq ?? -1);
     if (state && hit && hit.createdAt !== state.createdAt) ({ session: state, events } = await store.open(chat, -1));
     if (!state) return null;
-    const session = new Session(store, state);
-    if (hit && hit.createdAt === state.createdAt) session.events = [...hit.events];
+    const session = new Session(store, owner, state);
+    if (hit && hit.createdAt === state.createdAt) {
+      session.events = [...hit.events];
+      session.images = hit.images;
+    }
     session.merge(events as SessionEvent[]);
     return session;
   }
@@ -51,10 +59,12 @@ export class Session {
     const last = this.events.at(-1)?.seq ?? -1;
     this.events.push(...fresh.filter((e) => e.seq > last));
     if (this.events[0] && this.events[0].seq < this.state.minSeq) {
+      const dropped = this.events.filter((e) => e.seq < this.state.minSeq);
       this.events = this.events.filter((e) => e.seq >= this.state.minSeq);
+      for (const key of imageKeys(dropped)) this.images.delete(key);
     }
     cache.delete(this.chatKey);
-    cache.set(this.chatKey, { createdAt: this.state.createdAt, events: this.events });
+    cache.set(this.chatKey, { createdAt: this.state.createdAt, events: this.events, images: this.images });
     if (cache.size > CACHE_CHATS) cache.delete(cache.keys().next().value!);
   }
 
@@ -74,7 +84,7 @@ export class Session {
    */
   async append(...events: NewEvent[]): Promise<void> {
     if (!events.length) return;
-    const first = await this.store.append(this.chatKey, events);
+    const first = await this.store.append(this.chatKey, this.owner, events);
     if (first !== this.state.nextSeq) {
       await this.refresh();
       return;
@@ -117,7 +127,7 @@ export class Session {
 
   /** Delete events before `seq` (and their images), from the store and from memory. */
   async trimBefore(seq: number): Promise<void> {
-    await this.store.trim(this.chatKey, seq);
+    await this.store.trim(this.chatKey, this.owner, seq);
     this.state.minSeq = Math.max(this.state.minSeq, seq);
     this.merge([]);
   }
@@ -129,11 +139,11 @@ export class Session {
 
   async setCursor(seq: number): Promise<void> {
     this.state.cursor = seq;
-    await this.store.setCursor(this.chatKey, seq);
+    await this.store.setCursor(this.chatKey, this.owner, seq);
   }
 
   async nextTurn(): Promise<number> {
-    this.state.turn = await this.store.beginTurn(this.chatKey);
+    this.state.turn = await this.store.beginTurn(this.chatKey, this.owner);
     return this.state.turn;
   }
 }

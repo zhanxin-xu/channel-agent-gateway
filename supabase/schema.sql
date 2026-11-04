@@ -116,17 +116,27 @@ begin
 end;
 $$;
 
+-- Lock the session row if p_owner holds the run lock; raise 'lock lost' otherwise.
+create or replace function gateway.check_owner(p_chat text, p_owner text) returns void
+language plpgsql set search_path = '' as $$
+begin
+  perform from gateway.sessions where chat = p_chat and lock_owner = p_owner for update;
+  if not found then raise exception 'lock lost: %', p_chat; end if;
+end;
+$$;
+
 -- ── Ingress ──
 
 -- One webhook delivery in one transaction: de-duplicate, upsert the session,
--- append the event (or a user/mentioned mark for a repeat that is now an @),
--- and decide whether to wake the agent: @ / DMs always, ordinary messages at
--- most once per p_ambient_interval_s. Waking tries the run lock for p_lock_owner.
--- A session/reset event deletes everything logged before it.
+-- with p_reset delete what it logged so far, append p_event, and decide whether
+-- to wake the agent: p_direct always, others at most once per
+-- p_ambient_interval_s. Waking tries the run lock for p_lock_owner.
+-- A repeat delivery that is now direct appends p_upgrade instead (if given).
+-- Event types are the caller's business; this only follows the flags.
 -- Returns {status: duplicate | recorded | busy | acquired, seq}.
 create or replace function public.chat_ingest(
   p_chat text, p_channel text, p_conversation_id text, p_chat_type text, p_origin text,
-  p_event_id text, p_direct boolean, p_event jsonb, p_wake boolean,
+  p_event_id text, p_direct boolean, p_event jsonb, p_reset boolean, p_upgrade jsonb, p_wake boolean,
   p_ambient_interval_s int, p_lock_owner text, p_lock_ttl_ms bigint
 ) returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -144,11 +154,11 @@ begin
   get diagnostics n = row_count;
   first_seen := n > 0;
   if not first_seen then
-    if not p_direct then return jsonb_build_object('status', 'duplicate'); end if;
+    if not p_direct or p_upgrade is null then return jsonb_build_object('status', 'duplicate'); end if;
     update gateway.inbound set direct = true where channel = p_channel and event_id = p_event_id and not direct;
     get diagnostics n = row_count;
     if n = 0 then return jsonb_build_object('status', 'duplicate'); end if;
-    ev := jsonb_build_object('type', 'user/mentioned', 'data', jsonb_build_object('eventId', p_event_id));
+    ev := p_upgrade;
   end if;
 
   insert into gateway.sessions as cur (chat, channel, conversation_id, chat_type, origin)
@@ -158,7 +168,7 @@ begin
       origin = coalesce(excluded.origin, cur.origin),
       last_active_at = now();
 
-  if ev ->> 'type' = 'session/reset' then
+  if p_reset and first_seen then
     delete from gateway.images where key in (
       select jsonb_array_elements_text(e.data -> 'images') from gateway.events e
       where e.chat = p_chat and e.data ? 'images');
@@ -196,14 +206,17 @@ language sql stable security definer set search_path = '' as $$
       where e.chat = p_chat and e.seq > p_after_seq), '[]'::jsonb));
 $$;
 
-create or replace function public.chat_append(p_chat text, p_events jsonb) returns jsonb
+-- The lock holder's writes below all take p_owner and raise 'lock lost' if it no longer holds the lock.
+create or replace function public.chat_append(p_chat text, p_owner text, p_events jsonb) returns jsonb
 language sql security definer set search_path = '' as $$
+  select gateway.check_owner(p_chat, p_owner);
   select to_jsonb(gateway.append(p_chat, p_events));
 $$;
 
 -- Delete events before p_seq (compaction) and the images they reference.
-create or replace function public.chat_trim(p_chat text, p_seq bigint) returns jsonb
+create or replace function public.chat_trim(p_chat text, p_owner text, p_seq bigint) returns jsonb
 language sql security definer set search_path = '' as $$
+  select gateway.check_owner(p_chat, p_owner);
   delete from gateway.images where key in (
     select jsonb_array_elements_text(e.data -> 'images') from gateway.events e
     where e.chat = p_chat and e.seq < p_seq and e.data ? 'images');
@@ -242,13 +255,15 @@ begin
 end;
 $$;
 
-create or replace function public.chat_begin_turn(p_chat text) returns jsonb
+create or replace function public.chat_begin_turn(p_chat text, p_owner text) returns jsonb
 language sql security definer set search_path = '' as $$
+  select gateway.check_owner(p_chat, p_owner);
   update gateway.sessions set turn = turn + 1, last_active_at = now() where chat = p_chat returning to_jsonb(turn);
 $$;
 
-create or replace function public.chat_set_cursor(p_chat text, p_cursor bigint) returns jsonb
+create or replace function public.chat_set_cursor(p_chat text, p_owner text, p_cursor bigint) returns jsonb
 language sql security definer set search_path = '' as $$
+  select gateway.check_owner(p_chat, p_owner);
   update gateway.sessions set cursor = p_cursor where chat = p_chat returning to_jsonb(cursor);
 $$;
 
@@ -303,10 +318,10 @@ declare
   fn text;
 begin
   foreach fn in array array[
-    'chat_ingest(text,text,text,text,text,text,boolean,jsonb,boolean,int,text,bigint)',
-    'chat_open(text,bigint)', 'chat_append(text,jsonb)', 'chat_trim(text,bigint)',
-    'chat_lock(text,text,bigint,text)', 'chat_claim_ambient(text,int)', 'chat_begin_turn(text)',
-    'chat_set_cursor(text,bigint)', 'reply_get(text,text)', 'reply_put(text,text,jsonb)',
+    'chat_ingest(text,text,text,text,text,text,boolean,jsonb,boolean,jsonb,boolean,int,text,bigint)',
+    'chat_open(text,bigint)', 'chat_append(text,text,jsonb)', 'chat_trim(text,text,bigint)',
+    'chat_lock(text,text,bigint,text)', 'chat_claim_ambient(text,int)', 'chat_begin_turn(text,text)',
+    'chat_set_cursor(text,text,bigint)', 'reply_get(text,text)', 'reply_put(text,text,jsonb)',
     'image_put(text,text,text)', 'image_get(text[])', 'gateway_expire(int)'
   ] loop
     execute format('revoke all on function public.%s from public', fn);

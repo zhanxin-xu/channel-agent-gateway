@@ -1,4 +1,4 @@
-import type { ChatStore, IngestInput, IngestStatus, LockMode, SessionState, StoredEvent, NewStoredEvent } from "./types.js";
+import { LockLostError, type ChatStore, type IngestInput, type IngestStatus, type LockMode, type NewStoredEvent, type SessionState, type StoredEvent } from "./types.js";
 
 /** Supabase, with a secret key (sb_secret_…) in the `apikey` header. Every function returns JSON. */
 export class PostgresStore implements ChatStore {
@@ -14,6 +14,7 @@ export class PostgresStore implements ChatStore {
       body: JSON.stringify(args),
     });
     const text = await res.text();
+    if (!res.ok && text.includes("lock lost")) throw new LockLostError(String(args.p_chat));
     if (!res.ok) throw new Error(`Supabase ${fn} HTTP ${res.status}: ${text.slice(0, 300)}`);
     return (text ? JSON.parse(text) : null) as T;
   }
@@ -28,6 +29,8 @@ export class PostgresStore implements ChatStore {
       p_event_id: i.eventId,
       p_direct: i.direct,
       p_event: i.event,
+      p_reset: i.reset,
+      p_upgrade: i.upgrade ?? null,
       p_wake: i.wake,
       p_ambient_interval_s: i.ambientIntervalSeconds,
       p_lock_owner: i.lockOwner,
@@ -39,12 +42,12 @@ export class PostgresStore implements ChatStore {
     return this.rpc<{ session: SessionState | null; events: StoredEvent[] }>("chat_open", { p_chat: chat, p_after_seq: afterSeq });
   }
 
-  async append(chat: string, events: NewStoredEvent[]) {
-    return Number(await this.rpc("chat_append", { p_chat: chat, p_events: events }));
+  async append(chat: string, owner: string, events: NewStoredEvent[]) {
+    return Number(await this.rpc("chat_append", { p_chat: chat, p_owner: owner, p_events: events }));
   }
 
-  async trim(chat: string, seq: number) {
-    await this.rpc("chat_trim", { p_chat: chat, p_seq: seq });
+  async trim(chat: string, owner: string, seq: number) {
+    await this.rpc("chat_trim", { p_chat: chat, p_owner: owner, p_seq: seq });
   }
 
   async lock(chat: string, owner: string, ttlMs: number, mode: LockMode) {
@@ -55,12 +58,12 @@ export class PostgresStore implements ChatStore {
     return Boolean(await this.rpc("chat_claim_ambient", { p_chat: chat, p_interval_s: intervalSeconds }));
   }
 
-  async beginTurn(chat: string) {
-    return Number(await this.rpc("chat_begin_turn", { p_chat: chat }));
+  async beginTurn(chat: string, owner: string) {
+    return Number(await this.rpc("chat_begin_turn", { p_chat: chat, p_owner: owner }));
   }
 
-  async setCursor(chat: string, seq: number) {
-    await this.rpc("chat_set_cursor", { p_chat: chat, p_cursor: seq });
+  async setCursor(chat: string, owner: string, seq: number) {
+    await this.rpc("chat_set_cursor", { p_chat: chat, p_owner: owner, p_cursor: seq });
   }
 
   getReply(chat: string, eventId: string) {

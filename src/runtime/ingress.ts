@@ -70,6 +70,9 @@ export async function handleMessage(
     eventId: message.eventId,
     direct,
     event,
+    // /reset starts the log over; a message seen before that comes back as an @ is marked, not logged twice.
+    reset,
+    upgrade: direct ? { type: "user/mentioned", data: { eventId: message.eventId } } : undefined,
     wake: !reset,
     ambientIntervalSeconds: ambientIntervalSeconds(),
     lockOwner: lock.owner,

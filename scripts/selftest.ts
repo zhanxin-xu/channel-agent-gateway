@@ -553,13 +553,14 @@ await test("postgres store: one function call per operation over /rest/v1/rpc wi
     eventId: "s1",
     direct: true,
     event: { type: "user/message", data: { text: "hi" } },
+    reset: false,
     wake: true,
     ambientIntervalSeconds: 10,
     lockOwner: "me",
     lockTtlMs: 60_000,
   };
   assert.deepEqual(await store.ingest(ingest), { status: "acquired", seq: 0 });
-  assert.equal(await store.append("qq:shape", [{ type: "turn/start", data: { turn: 1 } }]), 1);
+  assert.equal(await store.append("qq:shape", "me", [{ type: "turn/start", data: { turn: 1 } }]), 1);
   assert.deepEqual((await store.open("qq:shape", 0)).events.map((e) => e.type), ["turn/start"]);
   assert.equal(await store.getReply("qq:shape", "s1"), null);
   const call = calls.find((c) => c.url === "https://db.example.supabase.co/rest/v1/rpc/chat_ingest")!;
@@ -574,6 +575,8 @@ await test("postgres store: one function call per operation over /rest/v1/rpc wi
     p_event_id: "s1",
     p_direct: true,
     p_event: ingest.event,
+    p_reset: false,
+    p_upgrade: null,
     p_wake: true,
     p_ambient_interval_s: 10,
     p_lock_owner: "me",
@@ -670,6 +673,7 @@ await test("http: busy conversation → queued; the running turn picks the messa
     eventId: "earlier",
     direct: true,
     event: { type: "user/message", data: { eventId: "earlier", header: "h", text: "先来的", sender: "#A", mentioned: true, reply: {} } },
+    reset: false,
     wake: true,
     ambientIntervalSeconds: 10,
     lockOwner: "someone-else",
@@ -699,6 +703,24 @@ await test("concurrency: messages during a turn are seen at the next step; one m
   assert.match(textOf(step2.findLast((i: any) => i.role === "user")), /\]\n顺便问个事$/);
   assert.match(step2.at(-1).content, /^（系统提示）第1轮：你处理期间又来了 第\d+条（#CONC，@你）/);
   assert.equal(llmCalls, 2, "handled inside the same turn, no second run");
+});
+
+await test("lost lock: a run whose lease was taken over stops without writing or replying", async () => {
+  let release!: () => void;
+  gate = new Promise((r) => (release = r));
+  await handleWebhook(c2c("ll1", "慢慢算 (2+3)*4", "LOST"), "qq");
+  await new Promise((r) => setTimeout(r, 20)); // the run is now waiting on the model
+  // Its lease runs out (renewals failed) and another run takes the chat.
+  clockOffset += 61_000;
+  assert.equal(await getStore().lock("qq:c2c:LOST", "thief", 60_000, "acquire"), true);
+  const before = (await events("qq:c2c:LOST")).length;
+  release();
+  gate = undefined;
+  await drain();
+  clockOffset = 0;
+  assert.equal(llmCalls, 1, "no further steps");
+  assert.equal(sentTo("/v2/users/LOST/messages").length, 0, "nothing sent, not even the error apology");
+  assert.equal((await events("qq:c2c:LOST")).length, before, "nothing appended by the old run");
 });
 
 await test("concurrency: two @ at once in a group → one run answers both", async () => {
@@ -811,11 +833,21 @@ await test("qq image: stored once, replayed in later turns (detail low)", async 
   assert.match(msg.content[0].text, /｜私聊｜发送人 #MGUSER\]\n这是啥\n\[图片\]$/);
   assert.deepEqual(msg.content[1], { type: "input_image", image_url: "data:image/png;base64,iVBORw==", detail: "low" });
 
-  await handleWebhook(c2cWith("i2", "", [{ content_type: "image/jpeg", url: "https://multimedia.nt.qq.com.cn/b.jpg" }]), "qq");
-  await drain();
+  // The next run on this (warm) instance reads only the new image from the store.
+  const store = getStore() as unknown as { getImages(keys: string[]): Promise<Record<string, string>> };
+  const getImages = store.getImages;
+  const asked: string[][] = [];
+  store.getImages = (keys) => (asked.push(keys), getImages.call(store, keys));
+  try {
+    await handleWebhook(c2cWith("i2", "", [{ content_type: "image/jpeg", url: "https://multimedia.nt.qq.com.cn/b.jpg" }]), "qq");
+    await drain();
+  } finally {
+    store.getImages = getImages;
+  }
   const input = llmRequests().at(-2)!.body.input;
   assert.deepEqual(input[0], msg, "the earlier image is still there, byte for byte");
   assert.equal(calls.filter((c) => c.url.endsWith("/a.png")).length, 1, "downloaded once");
+  assert.deepEqual(asked.flat().filter((k) => k.includes(":i1:")), [], "the earlier image came from the instance's cache");
 });
 
 await test("qq image: download failure tells the model instead of failing the turn", async () => {
@@ -886,13 +918,15 @@ await test("recovery: a turn cut off mid-tool is closed with interrupted results
     eventId: "x0",
     direct: true,
     event: { type: "user/message", data: { eventId: "x0", header: "h", text: "跑个长任务", sender: "#A", mentioned: true, reply: {} } },
-    wake: false,
+    reset: false,
+    wake: true,
     ambientIntervalSeconds: 10,
     lockOwner: "crashed-run",
     lockTtlMs: 60_000,
   });
   await store.append(
     "http:crash",
+    "crashed-run",
     [
     { type: "turn/start", data: { turn: 1, trigger: "direct" } },
     { type: "step/start", data: { turn: 1, step: 1 } },
@@ -900,6 +934,7 @@ await test("recovery: a turn cut off mid-tool is closed with interrupted results
     { type: "tool/call", data: { turn: 1, step: 1, callId: "call_long", name: "calculate" } },
     ],
   );
+  await store.lock("http:crash", "crashed-run", 0, "release"); // its lease ran out
   await httpCall("还在吗", "crash");
   const stored = await events("http:crash");
   const fix = stored.find((e) => e.type === "tool/result" && e.data.callId === "call_long")!;

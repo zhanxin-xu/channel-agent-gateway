@@ -1,4 +1,4 @@
-import type { ChatStore, IngestInput, LockMode, NewStoredEvent, SessionState, StoredEvent } from "./types.js";
+import { LockLostError, type ChatStore, type IngestInput, type LockMode, type NewStoredEvent, type SessionState, type StoredEvent } from "./types.js";
 
 interface MemorySession extends Omit<SessionState, "minSeq"> {
   lockOwner?: string;
@@ -31,9 +31,9 @@ export class MemoryStore implements ChatStore {
     const seen = this.inbound.get(seenKey);
     let event = i.event;
     if (seen) {
-      if (!i.direct || seen.direct) return { status: "duplicate" as const };
+      if (!i.direct || seen.direct || !i.upgrade) return { status: "duplicate" as const };
       seen.direct = true;
-      event = { type: "user/mentioned", data: { eventId: i.eventId } };
+      event = i.upgrade;
     } else {
       this.inbound.set(seenKey, { direct: i.direct });
     }
@@ -58,7 +58,7 @@ export class MemoryStore implements ChatStore {
       s.chatType = i.chatType;
       s.origin = i.origin ?? s.origin;
     }
-    if (event.type === "session/reset") {
+    if (i.reset && !seen) {
       this.dropImages(s.events);
       s.events = [];
       for (const key of [...this.replies.keys()]) if (key.startsWith(`${i.chat}\n`)) this.replies.delete(key);
@@ -87,15 +87,19 @@ export class MemoryStore implements ChatStore {
     };
   }
 
-  async append(chat: string, events: NewStoredEvent[]) {
+  /** The session, if `owner` holds its lock. */
+  private owned(chat: string, owner: string): MemorySession {
     const s = this.sessions.get(chat);
-    if (!s) throw new Error(`no session ${chat}`);
-    return this.appendTo(s, events);
+    if (!s || s.lockOwner !== owner) throw new LockLostError(chat);
+    return s;
   }
 
-  async trim(chat: string, seq: number) {
-    const s = this.sessions.get(chat);
-    if (!s) return;
+  async append(chat: string, owner: string, events: NewStoredEvent[]) {
+    return this.appendTo(this.owned(chat, owner), events);
+  }
+
+  async trim(chat: string, owner: string, seq: number) {
+    const s = this.owned(chat, owner);
     this.dropImages(s.events.filter((e) => e.seq < seq));
     s.events = s.events.filter((e) => e.seq >= seq);
   }
@@ -123,15 +127,12 @@ export class MemoryStore implements ChatStore {
     return true;
   }
 
-  async beginTurn(chat: string) {
-    const s = this.sessions.get(chat);
-    if (!s) throw new Error(`no session ${chat}`);
-    return ++s.turn;
+  async beginTurn(chat: string, owner: string) {
+    return ++this.owned(chat, owner).turn;
   }
 
-  async setCursor(chat: string, seq: number) {
-    const s = this.sessions.get(chat);
-    if (s) s.cursor = seq;
+  async setCursor(chat: string, owner: string, seq: number) {
+    this.owned(chat, owner).cursor = seq;
   }
 
   async getReply(chat: string, eventId: string) {
