@@ -360,7 +360,7 @@ await test("qq: c2c → ACK, Responses API tool loop, passive reply", async () =
   assert.equal(first!.body.model, "openai/gpt-6-luna");
   assert.deepEqual(first!.body.provider, { only: ["openai"], allow_fallbacks: false }, "extra body passed through");
   assert.equal(first!.body.max_output_tokens, 2000);
-  assert.ok(first!.body.instructions.startsWith("# 角色设定"), "built-in persona prompt");
+  assert.ok(first!.body.instructions.startsWith("# 身份"), "built-in persona prompt");
   assert.ok(first!.body.instructions.endsWith(qqHint), "channel hint appended");
   assert.equal(first!.body.input.length, 1);
   assert.match(first!.body.input[0].content, /^\[\d{4}\/\d{2}\/\d{2}.* Asia\/Shanghai｜私聊｜发送人 #USER1\]\n算一下 \(2\+3\)\*4$/);

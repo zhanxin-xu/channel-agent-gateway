@@ -1,7 +1,26 @@
 {
   "name": "channel-agent-gateway",
   "version": "0.1.0",
-  "description": "Vercel serverless gateway: multi-channel webhooks -> OpenRouter agent loop -> reply",
+  "description": "Multi-channel AI chatbot gateway on Vercel Functions: QQ / Telegram / HTTP webhooks -> tool-calling agent loop -> reply",
+  "keywords": [
+    "vercel",
+    "serverless",
+    "webhook",
+    "chatbot",
+    "agent",
+    "qq-bot",
+    "telegram-bot",
+    "openrouter",
+    "responses-api"
+  ],
+  "homepage": "https://github.com/zhanxin-xu/channel-agent-gateway#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhanxin-xu/channel-agent-gateway.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zhanxin-xu/channel-agent-gateway/issues"
+  },
   "scripts": {
     "dev": "tsx watch scripts/dev-server.ts",
     "typecheck": "tsc --noEmit",

@@ -1,11 +1,14 @@
 /**
  * Live check of the per-chat workspace against real Vercel Sandbox + Drive:
- *   VERCEL_OIDC_TOKEN=… npx tsx scripts/sandbox-smoke.ts
- * Uses (and then deletes) the drive for the chat key "smoke:test".
+ *   npx vercel env pull && npx tsx scripts/sandbox-smoke.ts
+ * Needs VERCEL_OIDC_TOKEN (read from .env.local if present). Uses, then
+ * deletes, the drive for the chat key "smoke:test".
  */
+import { existsSync } from "node:fs";
 import { runTool, type ToolContext } from "../src/agent/tools.js";
 import { closeWorkspace, driveName } from "../src/agent/sandbox.js";
 
+if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 process.env.SANDBOX_ENABLED = "1";
 const chat = { key: "smoke:test", scene: "私聊" as const, sender: "#SMOKE" };
 const newCtx = (): ToolContext => ({
