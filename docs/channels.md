@@ -2,11 +2,13 @@
 
 每个渠道对应一个 Webhook 地址：`POST https://<域名>/api/webhook/<渠道名>`。
 
-| 渠道 | 鉴权方式 | 回复方式 |
-|---|---|---|
-| `qq` | Ed25519 签名（密钥由 AppSecret 派生） | 先回执，后台调用 QQ OpenAPI 回复 |
-| `telegram` | `X-Telegram-Bot-Api-Secret-Token` 请求头 | 先回执，后台调用 Bot API 回复 |
-| `http` | `Authorization: Bearer <HTTP_CHANNEL_TOKEN>` | 同步：等 agent 跑完，直接在响应里返回 |
+| 渠道 | 鉴权方式 | 回复方式 | 实测情况 |
+|---|---|---|---|
+| `qq` | Ed25519 签名（密钥由 AppSecret 派生） | 先回执，后台调用 QQ OpenAPI 回复 | ✅ 生产环境在用 |
+| `telegram` | `X-Telegram-Bot-Api-Secret-Token` 请求头 | 先回执，后台调用 Bot API 回复 | 仅离线测试 |
+| `http` | `Authorization: Bearer <HTTP_CHANNEL_TOKEN>` | 同步：等 agent 跑完，直接在响应里返回 | 仅离线测试 |
+
+> **目前只有 QQ 机器人在真实环境里跑过。** Telegram 和 HTTP 渠道由 `npm test` 的离线端到端测试覆盖（平台接口是模拟的），还没有用真实账号验证过。用的时候遇到问题，欢迎[提 Issue](https://github.com/zhanxin-xu/serverless-agent-gateway/issues)。
 
 **为什么用 Webhook 而不是 WebSocket**：Serverless 函数只在有请求时运行，无法维持长连接；QQ 默认的 WebSocket 接入需要常驻进程做心跳和断线续传。各平台都提供 HTTP 回调模式，正好适合 Vercel Functions。
 
@@ -29,9 +31,21 @@
 
 4. **IP 白名单**：QQ 开放平台会限制调用 OpenAPI 的来源 IP，而 Vercel 函数的出口 IP 不固定。如果遇到"IP 不在白名单"之类的报错，可以使用 Vercel 的 Static IPs（付费功能），或者让请求经过一个固定 IP 的代理。
 
+QQ 频道（`AT_MESSAGE_CREATE` / `DIRECT_MESSAGE_CREATE`）只按官方文档实现，还没用真实消息验证过。
+
+### 常见的坑
+
+| 现象 | 原因与解决 |
+|---|---|
+| 保存回调地址时校验失败（"签名校验不通过"），Vercel 日志里却一条请求都没有 | 在中国大陆，QQ 开放平台的服务器访问不了 `*.vercel.app`，请求根本没到你的函数。绑定[自定义域名](deployment.md#自定义域名)，用它填回调地址；DNS 若在 Cloudflare，记得关掉代理（灰色云朵） |
+| 群里只有 @ 机器人才有反应，没 @ 的消息完全收不到 | 只勾选 `GROUP_MESSAGE_CREATE` 不够，还要**群主在手机 QQ 里给这个机器人"设置权限"，开启"接收全量消息"**，平台才会推送。这是按群设置的，每个群都要单独开。详见下文[群聊全量消息](#群聊全量消息) |
+| 群里回复发不出去，报消息过期 | 群聊的被动回复只在用户发消息后 5 分钟内有效，每条消息最多回复 5 次。模型搜索、跑代码太久就会错过窗口，见[被动回复规则](#被动回复规则) |
+| 调用 OpenAPI 报"IP 不在白名单" | Vercel 函数的出口 IP 不固定，见上面的第 4 步 |
+| 改了环境变量但没有生效 | 已经在运行的部署读不到新值，要重新部署一次，见[部署文档](deployment.md#部署到-vercel) |
+
 ### 群聊全量消息
 
-订阅 `GROUP_MESSAGE_CREATE` 后，机器人也能看到群里没有 @ 它的消息。这还需要**群主在手机 QQ 的群设置里给机器人开启"接收全部消息"的权限**，平台才会推送，详见 QQ 机器人官方 FAQ。
+订阅 `GROUP_MESSAGE_CREATE` 后，机器人也能看到群里没有 @ 它的消息。这还需要**群主在手机 QQ 里给机器人"设置权限"，开启"接收全量消息"**，平台才会推送，详见 QQ 机器人官方 FAQ。
 
 开启后，群消息分两类处理：
 
