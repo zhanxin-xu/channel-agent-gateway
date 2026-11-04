@@ -82,7 +82,14 @@ export const config = {
     },
     /** Max model calls per inbound message (tool round-trips included). */
     get maxSteps() {
-      return int("AGENT_MAX_STEPS", 6);
+      return int("AGENT_MAX_STEPS", 40);
+    },
+    /**
+     * The function's time limit; keep in sync with maxDuration in vercel.json.
+     * When less than 90s is left, the next step is the last (see runAgent).
+     */
+    get maxDurationSeconds() {
+      return int("AGENT_MAX_DURATION_SECONDS", 300);
     },
     /**
      * Messages kept per private conversation. A safety cap against unbounded

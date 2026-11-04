@@ -131,6 +131,11 @@ function fakeResponses(body: any) {
     output = toolOutput
       ? [textMessage("这句是收尾文字，不应该被发出去")]
       : [sendCall("call_a", "第一条"), sendCall("call_b", "第二条")];
+  } else if (userText.startsWith("死循环")) {
+    // Keeps calling tools until the last-step note shows up, then reports (and tries one more tool).
+    const last = body.input.at(-1);
+    const calc = { type: "function_call", id: "fc_l", call_id: `call_l${llmCalls}`, name: "calculate", arguments: '{"expression":"1+1"}' };
+    output = last.role === "developer" && last.content.includes("最后一步") ? [calc, sendCall("call_done", "做到一半")] : [calc];
   } else if (userText.startsWith("读图")) {
     output = toolOutput
       ? [textMessage("看到了")]
@@ -788,6 +793,36 @@ await test("workspace: read_file shows an image to the model; the sandbox stops 
     assert.ok(llmRequests().at(-1)!.body.input.every((i: any) => typeof i.content === "string" || i.type));
   } finally {
     delete process.env.SANDBOX_ENABLED;
+  }
+});
+
+await test("step limit: the last step gets a wrap-up note; only talk tools run in it", async () => {
+  process.env.AGENT_MAX_STEPS = "3";
+  try {
+    const res = await httpCall("死循环", "c-steps");
+    assert.equal(res.reply, "做到一半");
+    const reqs = llmRequests();
+    assert.equal(reqs.length, 3);
+    const last = reqs[2]!.body;
+    assert.equal(last.tool_choice, "auto", "the request itself is unchanged");
+    assert.equal(last.tools.length, reqs[0]!.body.tools.length);
+    assert.match(last.input.at(-1).content, /^（系统提示）步数用完了，这是最后一步.*send_message/);
+    assert.equal(last.input.filter((i: any) => i.type === "function_call_output").length, 2);
+    assert.ok(!reqs[1]!.body.input.some((i: any) => i.role === "developer"), "no note before the last step");
+  } finally {
+    delete process.env.AGENT_MAX_STEPS;
+  }
+});
+
+await test("time limit: close to the function's deadline, the next step is the last", async () => {
+  process.env.AGENT_MAX_DURATION_SECONDS = "60"; // < 90s reserve: the first step is already the last
+  try {
+    const res = await httpCall("死循环", "c-time");
+    assert.equal(res.reply, "做到一半");
+    assert.equal(llmRequests().length, 1);
+    assert.match(llmRequests()[0]!.body.input.at(-1).content, /^（系统提示）时间快用完了/);
+  } finally {
+    delete process.env.AGENT_MAX_DURATION_SECONDS;
   }
 });
 

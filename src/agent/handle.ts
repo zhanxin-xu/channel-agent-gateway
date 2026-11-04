@@ -80,6 +80,7 @@ export async function handleMessage(
   message: InboundMessage,
   deliver: Deliver,
 ): Promise<string[] | undefined> {
+  const deadline = Date.now() + config.agent.maxDurationSeconds * 1000;
   const store = getStore();
   const direct = message.mode !== "ambient";
   const key = historyKey(message);
@@ -167,6 +168,8 @@ export async function handleMessage(
           ? `（系统提示）${senderLabel(message)} 刚 @ 了你：「${(body || "[图片]").slice(0, 100)}」，回复这条。`
           : undefined,
       maxSteps: direct ? config.agent.maxSteps : config.agent.ambientMaxSteps,
+      deadline,
+      mustReply: direct,
       ctx,
     });
     if (direct && ctx.sent.length === 0 && result.text) await ctx.send(result.text);

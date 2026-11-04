@@ -6,7 +6,9 @@
  * appended to `input` verbatim, followed by a `function_call_output` for every
  * `function_call`. The loop ends when a response contains no function calls,
  * when a step only called the talk tools (send_message / send_sticker), or
- * when the step budget runs out (the last request sets tool_choice "none").
+ * after the last step: when the step budget runs out or the function is close
+ * to its time limit, a note asks the model to wrap up with a message, and only
+ * the talk tools it calls in that step are run.
  *
  * The request body is `{ model, ...OPENROUTER_EXTRA_BODY, instructions, input,
  * tools, tool_choice }`, so any provider-specific parameter (provider routing,
@@ -88,6 +90,16 @@ async function createResponse(body: Record<string, unknown>): Promise<ResponsesR
 /** Tools that only talk. A step that calls nothing else ends the turn (saves one model call). */
 const TALK_TOOLS = new Set(["send_message", "send_sticker"]);
 
+/** Time kept for the last step (one model call plus sending) before the function's deadline. */
+const LAST_STEP_RESERVE_MS = 90_000;
+
+function lastStepNote(reason: string, mustReply: boolean): string {
+  return mustReply
+    ? `（系统提示）${reason}，这是最后一步：除了 send_message / send_sticker，这一步调用的其他工具都不会执行。` +
+        "现在用 send_message 给对方发一条消息：说出已经得到的结果；没做完就说做到哪了、卡在哪、接下来怎么办。"
+    : `（系统提示）${reason}，这是最后一步：其他工具不会再执行了。要插话就现在用 send_message 说，不说就直接结束。`;
+}
+
 export async function runAgent(opts: {
   systemPrompt: string;
   /** The conversation so far, oldest first; the message being answered is already in it. */
@@ -98,6 +110,10 @@ export async function runAgent(opts: {
    */
   note?: string;
   maxSteps?: number;
+  /** When the function will be killed (epoch ms); the last step starts early enough to finish. */
+  deadline?: number;
+  /** Someone is waiting for an answer (DM / @): the last-step note asks for a message. */
+  mustReply?: boolean;
   ctx: ToolContext;
 }): Promise<AgentResult> {
   const { model, extraBody } = config.openrouter;
@@ -113,15 +129,19 @@ export async function runAgent(opts: {
   }));
 
   let reasoningTokens = 0;
-  for (let step = 1; step <= maxSteps; step++) {
-    const lastStep = step === maxSteps;
+  for (let step = 1; ; step++) {
+    const outOfTime = opts.deadline !== undefined && opts.deadline - Date.now() < LAST_STEP_RESERVE_MS;
+    const lastStep = step >= maxSteps || outOfTime;
+    if (lastStep) {
+      input.push({ role: "developer", content: lastStepNote(outOfTime ? "时间快用完了" : "步数用完了", opts.mustReply ?? false) });
+    }
     const response = await createResponse({
       model,
       ...extraBody,
       instructions: opts.systemPrompt,
       input,
       tools: toolDefs,
-      tool_choice: lastStep ? "none" : "auto",
+      tool_choice: "auto",
     });
 
     reasoningTokens += response.usage?.output_tokens_details?.reasoning_tokens ?? 0;
@@ -131,7 +151,18 @@ export async function runAgent(opts: {
     }
 
     const calls = output.filter(isFunctionCall);
-    if (calls.length === 0 || lastStep) {
+    if (calls.length === 0) {
+      return { text: outputText(output).trim(), steps: step, reasoningTokens };
+    }
+    if (lastStep) {
+      for (const call of calls) {
+        if (!TALK_TOOLS.has(call.name)) {
+          console.log(`[agent] last step: skipped ${call.name}`);
+          continue;
+        }
+        const result = await runTool(call.name, call.arguments, opts.ctx);
+        console.log(`[agent] tool ${call.name}(${call.arguments}) -> ${result.slice(0, 200)}`);
+      }
       return { text: outputText(output).trim(), steps: step, reasoningTokens };
     }
 
@@ -154,7 +185,4 @@ export async function runAgent(opts: {
       return { text: "", steps: step, reasoningTokens };
     }
   }
-
-  // Unreachable: the last step always returns.
-  throw new Error("agent loop exited without an answer");
 }

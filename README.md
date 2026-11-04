@@ -72,7 +72,7 @@ scripts/sandbox-smoke.ts   # 用真实的 Vercel Sandbox + Drive 跑一遍工作
 | 记入历史 | ✅ 每条都记 | ✅ |
 | 调用模型 | 每个群每 `AGENT_AMBIENT_INTERVAL_SECONDS` 秒（默认 10）最多一次，由模型自己决定要不要插话，**默认不说话** | 每次都调，一定回复 |
 | 模型看到的历史 | 最近 `AGENT_AMBIENT_CONTEXT` 条（默认 40） | 完整的群历史（最多 200 条） |
-| 最多几步 | `AGENT_AMBIENT_MAX_STEPS`（默认 3） | `AGENT_MAX_STEPS`（默认 6） |
+| 最多几步 | `AGENT_AMBIENT_MAX_STEPS`（默认 3） | `AGENT_MAX_STEPS`（默认 40） |
 
 - **判断有没有 @ 机器人**：事件类型是 `GROUP_AT_MESSAGE_CREATE`，或者 `mentions[].is_you` 为真，或者正文里有 `<@!AppID>`，满足任意一个就算 @ 了。这和官方 SDK 的判断方式一样。
 - **同一条消息可能推送两次**：一条 @ 消息可能既作为全量消息、又作为 @ 消息各推一次。代码按消息 ID 去重：只记录一次，也只回复一次。
@@ -152,7 +152,9 @@ OPENROUTER_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":false},"
 2. 为每个 `function_call` 追加一条对应 `call_id` 的 `function_call_output`；
 3. 再次请求模型，直到模型不再调用工具为止。
 
-最多执行 `AGENT_MAX_STEPS` 步，最后一步会强制 `tool_choice: "none"`，确保一定有回答。
+最多执行 `AGENT_MAX_STEPS` 步（默认 40）。函数最长只能运行 300 秒（`vercel.json` 的 `maxDuration`，对应 `AGENT_MAX_DURATION_SECONDS`），剩余时间不足 90 秒时，下一步就是最后一步。
+
+**最后一步怎么处理**：请求参数和平时一样，只是在末尾追加一条系统提示，告诉模型步数或时间用完了，让它用 `send_message` 说出目前的结果，没做完就说做到哪了。这一步里除了 `send_message` 和 `send_sticker`，其他工具调用都会被跳过。模型最后还是不发消息也不强求；如果它只写了文字、没调用工具，私聊或被 @ 时会照常把这段文字发出去。
 
 ## 系统提示词与消息头
 
