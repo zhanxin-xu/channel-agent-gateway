@@ -90,3 +90,19 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 | `IMAGE_RESOLUTION` | `1K` | 对应接口的 `resolution`：`512`、`768`、`1K`、`1.5K`、`2K`、`4K`。不管设成多少，结果都会再缩到 1920×1080 以内（横竖都算）再保存 |
 | `IMAGE_EXTRA_BODY` | 空 | JSON 对象，合并进请求体，例如 `{"provider":{"options":{"openai":{"moderation":"low"}}}}` |
 | `IMAGE_TIMEOUT_MS` | `180000` | 单次请求的超时时间（毫秒），临近函数时限时会自动缩短 |
+
+## 语音
+
+`send_voice` 调用 OpenAI 兼容的语音接口（`POST {TTS_BASE_URL}/audio/speech`），默认是 OpenRouter 上的 Fish Audio Drama 3。配置了 `TTS_API_KEY` 才启用。变量名后半段和接口字段一致。
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `TTS_API_KEY` | 空 | 语音接口的 API Key，不设置时不启用语音。用同一个 OpenRouter Key 也可以 |
+| `TTS_BASE_URL` | `https://openrouter.ai/api/v1` | 请求发到 `{TTS_BASE_URL}/audio/speech` |
+| `TTS_MODEL` | `fish-audio/drama-3` | 语音模型。换模型时要确认它支持 `pcm` 输出，克隆声音还要支持 `input_references` |
+| `TTS_VOICE` | 空 | 对应接口的 `voice`，填服务商的音色 ID。一般和参考音频二选一 |
+| `TTS_REFERENCE_AUDIO` | `assets/voice/dafeiyu.mp3` | 要克隆的声音：部署里的文件路径（相对项目根目录），或 https 链接；填 `none` 不克隆。放进仓库的新文件要在 `vercel.json` 的 `includeFiles` 里能匹配到，体积尽量小（单声道、32 kbps 左右的 mp3 就够） |
+| `TTS_REFERENCE_TEXT` | 内置参考音频的文字稿 | 参考音频说的话，有助于克隆。换了参考音频要一起改，不填就不发 |
+| `TTS_INSTRUCTIONS` | 空 | 对应接口的 `instructions`：每条语音都带的语气，例如 `软萌可爱的小女孩`。模型调用时给的 `instructions` 会接在后面 |
+| `TTS_EXTRA_BODY` | 空 | JSON 对象，合并进请求体，例如 `{"speed":1.1}` |
+| `TTS_TIMEOUT_MS` | `120000` | 单次请求的超时时间（毫秒），临近函数时限时会自动缩短 |

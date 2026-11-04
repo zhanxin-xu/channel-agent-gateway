@@ -29,6 +29,10 @@ function jsonObject(name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** 大肥鱼's voice: a short clip in the repo (bundled via vercel.json includeFiles), cloned by send_voice. */
+export const DEFAULT_VOICE_REFERENCE = "assets/voice/dafeiyu.mp3";
+const DEFAULT_VOICE_REFERENCE_TEXT = "嘿嘿，本鱼来啦！我是大肥鱼，住在深海里的小鲸鱼～有什么问题尽管问我，答对了要请我吃小鱼干哦！";
+
 /** Model settings: OPENAI_RESPONSES_<SUFFIX>, falling back to the old OPENROUTER_<SUFFIX> names. */
 const LLM_SUFFIXES = ["API_KEY", "BASE_URL", "MODEL", "EXTRA_BODY", "EXTRA_HEADERS", "TIMEOUT_MS"] as const;
 type LlmSuffix = (typeof LLM_SUFFIXES)[number];
@@ -103,6 +107,43 @@ export const config = {
     },
     get timeoutMs() {
       return int("IMAGE_TIMEOUT_MS", 180_000);
+    },
+  },
+
+  /** Speech for send_voice: POST {TTS_BASE_URL}/audio/speech. Hidden when the key is empty. */
+  tts: {
+    get apiKey() {
+      return str("TTS_API_KEY");
+    },
+    get baseUrl() {
+      return str("TTS_BASE_URL", "https://openrouter.ai/api/v1").replace(/\/+$/, "");
+    },
+    get model() {
+      return str("TTS_MODEL", "fish-audio/drama-3");
+    },
+    /** The API's `voice` (a provider voice ID). Empty: the reference audio sets the voice. */
+    get voice() {
+      return str("TTS_VOICE");
+    },
+    /** The voice to clone: a file in the deployment, or an https URL; "none" turns cloning off. */
+    get referenceAudio() {
+      const value = str("TTS_REFERENCE_AUDIO", DEFAULT_VOICE_REFERENCE);
+      return value.toLowerCase() === "none" ? "" : value;
+    },
+    /** What the reference audio says (helps the clone). Defaults to the built-in clip's words when that clip is used. */
+    get referenceText() {
+      return str("TTS_REFERENCE_TEXT", this.referenceAudio === DEFAULT_VOICE_REFERENCE ? DEFAULT_VOICE_REFERENCE_TEXT : "");
+    },
+    /** The API's `instructions`: a standing direction for every line, e.g. "软萌可爱的小女孩". The model can add its own. */
+    get instructions() {
+      return str("TTS_INSTRUCTIONS");
+    },
+    /** Extra request body fields, e.g. {"speed":1.1} or {"provider":{"options":{...}}}. */
+    get extraBody() {
+      return jsonObject("TTS_EXTRA_BODY");
+    },
+    get timeoutMs() {
+      return int("TTS_TIMEOUT_MS", 120_000);
     },
   },
 

@@ -33,6 +33,7 @@
 - **沙盒工作区**：在 Vercel Sandbox 里跑 bash、Python、Node，每个聊天有一块自己的持久盘，能读图、能把文件发回聊天。
 - **联网**：DeepSeek 搜索和网页抓取，另有余额和额度查询工具。
 - **画图、修图**：通过 OpenRouter 的 Image API 生成图片，可以把群友发来的照片当参考图来改，结果直接发回聊天。
+- **发语音**：用固定的萌系嗓音（Fish Audio Drama 3 克隆）把文字念出来，支持用 `[语气]` 指挥演绎，在 QQ 里是能直接播放的语音条。
 - **免费额度就能跑**：Vercel Hobby 加 Supabase、Upstash Vector 的免费版即可运行，资源消耗见[部署文档](docs/deployment.md#免费额度与资源消耗)。
 
 ## 工作原理
@@ -124,7 +125,7 @@ src/
     runner.ts            运行者：一轮接一轮处理待办、选默认回复目标
     lock.ts              运行锁（会话行上的租约）
     outbox.ts            按消息回复，5 次上限，QQ 的 msg_seq
-    context.ts           工具上下文：工具怎么发消息、表情包、文件
+    context.ts           工具上下文：工具怎么发消息、表情包、文件、语音
     handoff.ts           时间不够时接力给 /api/worker
   conversation/          事件流
     events.ts            事件格式、可见窗口
@@ -144,8 +145,12 @@ src/
     account.ts           余额与额度查询
     utility.ts           时间、计算器
     stickers.ts          表情包清单
+    image.ts             画图：generate_image
+    voice.ts             语音：send_voice
     sandbox/             沙盒：workspace.ts 接口与生命周期，vercel.ts 实现，tools.ts 四个工具
   media/images.ts        图片下载、缩小、入库
+  media/voice.ts         语音编码：PCM → SILK（QQ）/ WAV
+assets/voice/            大肥鱼的参考声音（send_voice 克隆用）
   store/                 存储：types.ts 接口，postgres.ts（Supabase），memory.ts（本地与测试）
 supabase/
   schema.sql             表和函数（会话、事件流、回复状态、图片、去重）

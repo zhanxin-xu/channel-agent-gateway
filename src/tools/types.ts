@@ -1,4 +1,4 @@
-import type { Attachment, OutgoingFile } from "../channels/types.js";
+import type { Attachment, OutgoingFile, OutgoingVoice } from "../channels/types.js";
 import type { ImagePart } from "../media/images.js";
 
 /** Something a tool delivers to the chat. */
@@ -6,7 +6,8 @@ export type Outgoing =
   | { kind: "text"; text: string }
   /** An image by public URL. `label` stands in for it in `sent`, and (with the URL) on channels that can't send images. */
   | { kind: "image"; url: string; label: string }
-  | { kind: "file"; file: OutgoingFile };
+  | { kind: "file"; file: OutgoingFile }
+  | { kind: "voice"; voice: OutgoingVoice };
 
 /** Per-run context handed to tools (one agent run may hold several turns). */
 export interface ToolContext {

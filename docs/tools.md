@@ -13,6 +13,7 @@
 | `get_search_balance` | 查询 DeepSeek 余额 | 配置了 `DEEPSEEK_API_KEY` |
 | `get_llm_key_limit` | 查询模型 Key 和画图 Key 的额度和用量（OpenRouter 专用） | 配置了 `OPENAI_RESPONSES_API_KEY` 或 `IMAGE_API_KEY` |
 | `generate_image` | 画图、按参考图改图 | 配置了 `IMAGE_API_KEY`，且沙盒可用 |
+| `send_voice` | 用大肥鱼的声音发一条语音 | 配置了 `TTS_API_KEY` |
 | `remember` / `recall` / `forget` | 长期记忆 | 配置了 Upstash Vector |
 | `bash` / `read_file` / `write_file` / `send_file` / `save_attachment` | 沙盒工作区 | 部署在 Vercel 上，或本地有 `VERCEL_OIDC_TOKEN` |
 
@@ -59,6 +60,27 @@
 - **结果**：存到 `/workspace/images/{时间}-{序号}.png`。超过 1920×1080（横竖都算）的会先缩小再保存。同时把一张 1024px 的预览给模型看，确认没问题后再用 `send_file` 发到聊天。
 - **修别人发的照片**：先用 `save_attachment` 把原图存进 `/workspace/inbox/`，再把这个路径填进 `input_references`。
 - **费用**：每次调用都按图收费，工具结果里会带上接口返回的 `cost`。和余额工具一样，群里任何人都能让机器人画图，介意的话不要配置 `IMAGE_API_KEY`。
+
+## 语音
+
+`send_voice` 把一段文字合成语音，当场作为一条语音消息发出去（和 `send_message` 一样算一次回复）。默认通过 OpenRouter 的语音接口（`POST /audio/speech`）调用 Fish Audio Drama 3，配置见[配置参考](configuration.md#语音)。实现见 [`src/tools/voice.ts`](../src/tools/voice.ts)。不依赖沙盒。
+
+| 参数 | 说明 |
+|---|---|
+| `text` | 要说的话，最多 500 字，可以夹带下面的语气指令 |
+| `instructions` | 可选，整条语音的语气，例如 `像在讲睡前故事`。会接在 `TTS_INSTRUCTIONS` 后面一起发给接口 |
+| `reply_to` | 回复哪条消息，同 `send_message` |
+
+- **固定音色**：每次请求都带上仓库里的参考音频 [`assets/voice/dafeiyu.mp3`](../assets/voice/dafeiyu.mp3)（约 10 秒，32 kbps）和它的文字稿，通过接口的 `input_references` 克隆这个声音，所以每条语音都是同一个声音，不需要在 Fish 那边建音色。参考音频要尽量小：同一段声音用 170 KB 的原文件时每次约 $0.002，压到 43 KB 后和不带参考一样（约 $0.00006 一条短句）。
+- **各渠道怎么发**：接口返回单声道 PCM（采样率从响应头读取，Drama 3 是 44.1 kHz）。QQ 在函数里用 [silk-wasm](https://github.com/idranme/silk-wasm) 编成 SILK，以 `file_type: 3` 上传，收到的是能直接点开播放的语音条；Telegram 收到一个 `voice.wav` 文件；HTTP 等同步渠道收到 `[语音] 文字`。
+- **语气写法**（Drama 3 的语法，工具描述里也教了模型）：
+  - `[方括号]` 写在要说的话前面，用大白话描述语气，中英文都行：`[得意地] 本鱼早就算到了！`、`[小声嘀咕] 才不是因为想你呢。`，一直生效到下一个指令。
+  - `[方括号]` 写在发出声音或停顿的位置：`好吧 [叹气] 我输了。`、`[轻笑]`、`[短暂停顿]`。
+  - 成对标签只改包住的几个字：`<whisper>`、`<emphasis>`、`<soft>`、`<fast>`、`<slow>`、`<stress>`、`<forceful>`。
+  - 中途换语言：`<english>…</english>`、`<japanese>…</japanese>` 等（实验性）。
+  - 多音字、人名注音：每个字一组 `<|phoneme_start|>chong2<|phoneme_end|>`，拼音后面带声调数字。
+  - 方括号里的内容不会被念出来；每句最多三个左右，用多了反而不自然。详见 [Fish Audio 的 Drama 3 文档](https://docs.fish.audio/features/text-to-speech/drama-3)。
+- **费用**：按输入文字的字节数计费，OpenRouter 上 Drama 3 是 $2 / 百万 UTF-8 字节，一条短语音不到 0.01 美分。群里任何人都能让机器人发语音，介意的话不要配置 `TTS_API_KEY`。
 
 ## 沙盒工作区
 

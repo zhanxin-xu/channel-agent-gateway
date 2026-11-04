@@ -2,10 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/webhook/[channel].ts": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "{assets/voice/**,node_modules/silk-wasm/lib/silk.wasm}"
     },
     "api/worker.ts": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "{assets/voice/**,node_modules/silk-wasm/lib/silk.wasm}"
     }
   }
 }

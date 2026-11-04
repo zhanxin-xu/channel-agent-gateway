@@ -31,7 +31,8 @@
   "dependencies": {
     "@vercel/functions": "^3.10.6",
     "@vercel/sandbox": "^3.9.1",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "silk-wasm": "^3.7.1"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

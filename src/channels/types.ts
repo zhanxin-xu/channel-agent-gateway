@@ -51,6 +51,13 @@ export interface OutgoingFile {
   data: Buffer;
 }
 
+/** A voice message (send_voice): mono 16-bit little-endian PCM, and the words it says. */
+export interface OutgoingVoice {
+  pcm: Buffer;
+  sampleRate: number;
+  text: string;
+}
+
 export interface ChannelAdapter {
   readonly name: string;
   /** Extra instructions appended to the system prompt, e.g. formatting limits. */
@@ -69,6 +76,11 @@ export interface ChannelAdapter {
   sendImage?(message: InboundMessage, url: string): Promise<void>;
   /** Upload and send a file's bytes (send_file). Adapters without it can't send files. */
   sendFile?(message: InboundMessage, file: OutgoingFile): Promise<void>;
+  /**
+   * Send a voice message the platform plays inline. Adapters without it get a
+   * WAV file through sendFile, or the words as text when they can't send files.
+   */
+  sendVoice?(message: InboundMessage, voice: OutgoingVoice): Promise<void>;
   /** Optional "typing…" indicator shown while the agent runs. */
   typing?(message: InboundMessage): Promise<void>;
 }

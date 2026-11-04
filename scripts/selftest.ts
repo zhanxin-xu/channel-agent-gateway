@@ -153,6 +153,8 @@ async function fakeResponses(body: any) {
     } else if (userText.startsWith("存附件")) {
       const seq = Number(/^存附件\s*(\d+)/.exec(userText)?.[1] ?? 0);
       output = toolOutput ? [textMessage(`结果：${toolOutput.output}`)] : [fnCall("call_sa", "save_attachment", { message: seq })];
+    } else if (userText.startsWith("说句话")) {
+      output = toolOutput ? [textMessage(`结果：${toolOutput.output}`)] : [fnCall("call_v", "send_voice", { text: userText.slice(3).trim() || "你好呀" })];
     } else if (userText.startsWith("读图")) {
       output = toolOutput ? [textMessage("看到了")] : [fnCall("call_r", "read_file", { path: "out/plot.png" })];
     } else if (toolOutput) {
@@ -165,7 +167,7 @@ async function fakeResponses(body: any) {
           : fnCall(`call_${llmCalls}`, "calculate", { expression: "(2+3)*4" }),
       ];
     }
-    const TALK = ["send_message", "send_sticker", "send_file"];
+    const TALK = ["send_message", "send_sticker", "send_file", "send_voice"];
     if (output.length && output.every((o: any) => o.type === "function_call" && TALK.includes(o.name))) {
       output = [...output, fnCall(`call_end${llmCalls}`, "end_turn", {})];
     }
@@ -188,6 +190,14 @@ function respond(body: any, output: unknown[]) {
 let worker: ((request: Request) => Promise<Response>) | undefined;
 /** What the fake image API answers; set by the generate_image test. */
 let imageResponse: (() => Response) | undefined;
+/** Half a second of a 440 Hz tone, as the speech API returns it (mono s16le PCM). */
+function tonePcm(rate = 44100): Buffer {
+  const samples = new Int16Array(rate / 2);
+  for (let i = 0; i < samples.length; i++) samples[i] = Math.round(8000 * Math.sin((2 * Math.PI * 440 * i) / rate));
+  return Buffer.from(samples.buffer);
+}
+/** What the fake speech API answers; PCM at 44.1 kHz unless a test changes it. */
+let ttsResponse = () => new Response(new Uint8Array(tonePcm()), { headers: { "content-type": "audio/pcm;rate=44100;channels=1" } });
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const req = new Request(input, init);
@@ -202,6 +212,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 
   if (url === "https://gw.example.com/api/v1/responses") return fakeResponses(body);
   if (url === "https://img.example.com/api/v1/images") return imageResponse!();
+  if (url === "https://tts.example.com/api/v1/audio/speech") return ttsResponse();
   if (url === "https://img.example.com/api/v1/key") {
     return Response.json({
       data: { label: "sk-or-v1-img...", limit: 2, limit_remaining: 1.88, limit_reset: "daily", usage: 0.12, usage_daily: 0.12, usage_weekly: 0.12, usage_monthly: 0.12 },
@@ -1307,6 +1318,111 @@ await test("generate_image: workspace references become data URLs; results cappe
     imageResponse = undefined;
   }
   assert.ok(!activeTools().some((t) => t.name === "generate_image"), "off without IMAGE_API_KEY");
+});
+
+const TTS_ENV = ["TTS_API_KEY", "TTS_BASE_URL", "TTS_INSTRUCTIONS", "TTS_REFERENCE_AUDIO", "TTS_REFERENCE_TEXT", "TTS_VOICE"];
+function withTts() {
+  process.env.TTS_API_KEY = "tts-key";
+  process.env.TTS_BASE_URL = "https://tts.example.com/api/v1";
+}
+const defaultTts = ttsResponse;
+function resetTts() {
+  for (const name of TTS_ENV) delete process.env[name];
+  ttsResponse = defaultTts;
+}
+
+await test("send_voice: clones the bundled voice clip, asks for PCM, hands the audio to the channel", async () => {
+  assert.ok(!activeTools().some((t) => t.name === "send_voice"), "off without TTS_API_KEY");
+  withTts();
+  process.env.TTS_INSTRUCTIONS = "软萌可爱";
+  try {
+    assert.ok(activeTools().some((t) => t.name === "send_voice"));
+    const sent: any[] = [];
+    const ctx = { ...noCtx, send: async (m: unknown) => (sent.push(m), "sent (reply 1/5)") };
+    const out = await runTool("send_voice", JSON.stringify({ text: "[得意地] 本鱼来啦！", instructions: "困困的" }), ctx);
+    assert.match(out, /^sent \(reply 1\/5\) \(voice message, 0\.5s\)/);
+    const req = calls.find((c) => c.url === "https://tts.example.com/api/v1/audio/speech")!;
+    assert.equal(req.headers.get("authorization"), "Bearer tts-key");
+    assert.equal(req.body.model, "fish-audio/drama-3");
+    assert.equal(req.body.input, "[得意地] 本鱼来啦！", "directions go to the API as written");
+    assert.equal(req.body.response_format, "pcm");
+    assert.equal(req.body.instructions, "软萌可爱；困困的", "standing direction + the model's own");
+    assert.equal(req.body.voice, undefined);
+    const [audio, transcript] = req.body.input_references;
+    assert.equal(audio.type, "input_audio");
+    assert.match(audio.input_audio.data, /^data:audio\/mpeg;base64,/);
+    const clip = await (await import("node:fs/promises")).readFile("assets/voice/dafeiyu.mp3");
+    assert.ok(Buffer.from(audio.input_audio.data.split(",")[1], "base64").equals(clip), "the bundled clip, as is");
+    assert.equal(transcript.type, "text");
+    assert.match(transcript.text, /^嘿嘿，本鱼来啦/);
+    assert.equal(sent[0].kind, "voice");
+    assert.equal(sent[0].voice.sampleRate, 44100, "from the content-type");
+    assert.equal(sent[0].voice.pcm.byteLength, 44100);
+    assert.equal(sent[0].voice.text, "[得意地] 本鱼来啦！");
+
+    process.env.TTS_REFERENCE_AUDIO = "https://cdn.example.com/me.wav";
+    calls.length = 0;
+    await runTool("send_voice", '{"text":"hi"}', ctx);
+    let body = calls.find((c) => c.url.endsWith("/audio/speech"))!.body;
+    assert.deepEqual(body.input_references, [{ type: "input_audio", input_audio: { url: "https://cdn.example.com/me.wav" } }], "a URL is passed on; no transcript for a custom clip");
+
+    process.env.TTS_REFERENCE_AUDIO = "none";
+    process.env.TTS_VOICE = "voice-123";
+    calls.length = 0;
+    await runTool("send_voice", '{"text":"hi"}', ctx);
+    body = calls.find((c) => c.url.endsWith("/audio/speech"))!.body;
+    assert.equal(body.input_references, undefined, "none turns cloning off");
+    assert.equal(body.voice, "voice-123");
+
+    process.env.TTS_REFERENCE_AUDIO = "assets/voice/missing.mp3";
+    assert.match(await runTool("send_voice", '{"text":"hi"}', ctx), /^Error: can't read TTS_REFERENCE_AUDIO assets\/voice\/missing\.mp3/);
+    delete process.env.TTS_REFERENCE_AUDIO;
+    assert.match(await runTool("send_voice", '{"text":"  "}', ctx), /^Error: text is empty/);
+    assert.match(await runTool("send_voice", JSON.stringify({ text: "啊".repeat(501) }), ctx), /^Error: text is 501 characters/);
+    ttsResponse = () => Response.json({ error: { message: "Insufficient credits" } }, { status: 402 });
+    assert.match(await runTool("send_voice", '{"text":"hi"}', ctx), /^Error: speech API HTTP 402: .*Insufficient credits/);
+    ttsResponse = () => new Response(new Uint8Array([0xff, 0xfb, 0x90]), { headers: { "content-type": "audio/mpeg" } });
+    assert.match(await runTool("send_voice", '{"text":"hi"}', ctx), /^Error: speech API returned audio\/mpeg, expected raw PCM/);
+    assert.equal(sent.length, 3, "nothing sent when making the audio failed");
+  } finally {
+    resetTts();
+  }
+});
+
+await test("qq: send_voice → SILK uploaded as file_type 3, then sent as msg_type 7", async () => {
+  withTts();
+  try {
+    await handleWebhook(c2c("msg-v1", "说句话 你好呀"), "qq");
+    await drain();
+    const upload = calls.find((c) => c.url === "https://api.sgroup.qq.com/v2/users/USER1/files")!;
+    assert.equal(upload.body.file_type, 3);
+    assert.equal(upload.body.file_name, "voice.silk");
+    const silk = Buffer.from(upload.body.file_data, "base64");
+    const { getDuration, isSilk } = await import("silk-wasm");
+    assert.ok(isSilk(silk), "a SILK file");
+    assert.ok(Math.abs(getDuration(silk) - 500) <= 40, `about 0.5 s, got ${getDuration(silk)} ms`);
+    assert.deepEqual(sentTo("/v2/users/USER1/messages"), [{ msg_type: 7, media: { file_info: "FILEINFO" }, msg_id: "msg-v1", msg_seq: 1 }]);
+    const result = (await events("qq:c2c:USER1")).filter((e) => e.type === "tool/result" && e.data.callId === "call_v").at(-1)!;
+    assert.match(result.data.output, /voice message, 0\.5s/);
+  } finally {
+    resetTts();
+  }
+});
+
+await test("send_voice elsewhere: Telegram gets a WAV file, the HTTP channel gets the words", async () => {
+  withTts();
+  try {
+    await handleWebhook(tgUpdate(30, 31, "说句话 早上好"), "telegram");
+    await drain();
+    const doc = calls.find((c) => c.url.endsWith("/sendDocument"))!;
+    assert.ok(doc, "sent as a document");
+    assert.match(String(doc.body), /filename="voice\.wav"/);
+    assert.match(String(doc.body), /RIFF[\s\S]{4}WAVEfmt /);
+    const res = await httpCall("说句话 晚安", "voice-http");
+    assert.deepEqual(res.messages, ["[语音] 晚安"]);
+  } finally {
+    resetTts();
+  }
 });
 
 await test("send_file: missing file, size limit, and channels that can't send files", async () => {

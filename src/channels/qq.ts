@@ -9,7 +9,8 @@
  */
 import crypto from "node:crypto";
 import { config } from "../config.js";
-import { chunkText, json, type Attachment, type ChannelAdapter, type InboundMessage, type ReceiveResult } from "./types.js";
+import { pcmToSilk } from "../media/voice.js";
+import { chunkText, json, type Attachment, type ChannelAdapter, type InboundMessage, type OutgoingFile, type ReceiveResult } from "./types.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -361,22 +362,36 @@ export const qqAdapter: ChannelAdapter = {
     }
   },
 
-  // Uploads the bytes directly (file_data, base64, up to 5 MB), then sends msg_type 7.
-  async sendFile(message, file) {
-    const ctx = message.replyContext;
-    const { scope, target, msgId } = ctx;
-    if (scope !== "c2c" && scope !== "group") throw new Error("QQ guild channels can't receive files from bots");
-    const base = v2Base(scope, target!);
-    const res = await qqApi<{ file_info?: string }>(`${base}/files`, {
-      file_type: qqFileType(file.name),
-      file_name: file.name,
-      file_data: file.data.toString("base64"),
-      srv_send_msg: false,
-    });
-    if (!res.file_info) throw new Error(`QQ upload ${base}/files returned no file_info`);
-    await qqApi(`${base}/messages`, { msg_type: 7, media: { file_info: res.file_info }, msg_id: msgId, msg_seq: nextSeq(ctx) });
+  sendFile: uploadAndSend,
+
+  // QQ plays SILK inline as a voice message (file_type 3).
+  async sendVoice(message, voice) {
+    filesTarget(message);
+    const { data } = await pcmToSilk(voice.pcm, voice.sampleRate);
+    await uploadAndSend(message, { name: "voice.silk", data });
   },
 };
+
+/** Where c2c / group files go; guild channels can't take files from bots. */
+function filesTarget(message: InboundMessage): string {
+  const { scope, target } = message.replyContext;
+  if (scope !== "c2c" && scope !== "group") throw new Error("QQ guild channels can't receive files from bots");
+  return v2Base(scope, target!);
+}
+
+/** Upload the bytes directly (file_data, base64, up to 5 MB), then send them as msg_type 7. */
+async function uploadAndSend(message: InboundMessage, file: OutgoingFile): Promise<void> {
+  const ctx = message.replyContext;
+  const base = filesTarget(message);
+  const res = await qqApi<{ file_info?: string }>(`${base}/files`, {
+    file_type: qqFileType(file.name),
+    file_name: file.name,
+    file_data: file.data.toString("base64"),
+    srv_send_msg: false,
+  });
+  if (!res.file_info) throw new Error(`QQ upload ${base}/files returned no file_info`);
+  await qqApi(`${base}/messages`, { msg_type: 7, media: { file_info: res.file_info }, msg_id: ctx.msgId, msg_seq: nextSeq(ctx) });
+}
 
 function v2Base(scope: string, target: string): string {
   return scope === "c2c" ? `/v2/users/${target}` : `/v2/groups/${target}`;
