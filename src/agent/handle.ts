@@ -16,6 +16,7 @@ import { config } from "../config.js";
 import { getStore } from "../store/index.js";
 import { loadImageParts } from "./images.js";
 import { runAgent, type AgentInputItem, type HistoryMessage, type MultimodalUserMessage } from "./loop.js";
+import { closeWorkspace } from "./sandbox.js";
 import { DEFAULT_STICKER_BASE_URL, stickerUrl } from "./stickers.js";
 import { SYSTEM_PROMPT } from "./system-prompt.js";
 import type { ToolContext } from "./tools.js";
@@ -98,6 +99,12 @@ export async function handleMessage(
 
   const ctx: ToolContext = {
     sent: [],
+    chat: {
+      key: `${message.channel}:${message.conversationId}`,
+      scene: message.chatType === "group" ? "群聊" : "私聊",
+      sender: senderLabel(message),
+    },
+    images: [],
     async send(text) {
       await deliver.text(text);
       this.sent.push(text);
@@ -173,6 +180,8 @@ export async function handleMessage(
   } catch (err) {
     console.error(`[handle] agent failed for ${message.channel}:${message.conversationId}`, err);
     if (direct && ctx.sent.length === 0) await ctx.send("抱歉，处理消息时出错了，请稍后再试。").catch(() => {});
+  } finally {
+    await closeWorkspace(ctx);
   }
   return ctx.sent;
 }

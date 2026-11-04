@@ -36,10 +36,13 @@ src/agent/system-prompt.ts # 系统提示词（「大肥鱼」人设），直接
 src/agent/tools.ts         # 工具注册：send_message、get_current_time、calculate，按需扩展
 src/agent/web-tools.ts     # web_search / web_fetch（DeepSeek 工具 API）
 src/agent/account-tools.ts # get_search_balance / get_llm_key_limit
+src/agent/memory.ts        # remember / recall / forget（Upstash Vector，所有聊天共享）
+src/agent/sandbox.ts       # bash / read_file / write_file（Vercel Sandbox，每个聊天一块 Drive）
 src/agent/handle.ts        # 去重、消息头、/reset 命令、历史读写
 src/store/index.ts         # Upstash Redis（REST），未配置时退化为内存
 scripts/dev-server.ts      # 本地开发服务器
 scripts/selftest.ts        # 离线端到端测试（mock fetch）
+scripts/sandbox-smoke.ts   # 用真实的 Vercel Sandbox + Drive 跑一遍工作区工具
 ```
 
 ## 部署
@@ -262,11 +265,35 @@ QQ 消息事件里的 `attachments` 字段会按类型分别处理：
 | `web_search` | 调用 DeepSeek 搜索接口 `POST /v1/tools/search`，支持 `site:`、`lang:`、`after:` 等搜索语法 | 配置了 `DEEPSEEK_API_KEY` |
 | `web_fetch` | 调用 DeepSeek 抓取接口 `POST /v1/tools/fetch`，以 Markdown 返回网页正文（截断到 12k 字符） | 配置了 `DEEPSEEK_API_KEY` |
 | `get_search_balance` | 查询 DeepSeek 账户余额（`GET /user/balance`），区分赠送余额和充值余额，并按 ¥5/千次估算还能搜索多少次 | 配置了 `DEEPSEEK_API_KEY` |
+| `remember` / `recall` / `forget` | 长期记忆：写入一条、按语义检索、按 id 删除（见下） | 配置了 `UPSTASH_VECTOR_REST_URL` 和 `UPSTASH_VECTOR_REST_TOKEN` |
+| `bash` / `write_file` / `read_file` | 在 Linux 沙盒里执行命令、写文件、读文件；读到图片时会直接给模型看（见下） | 部署在 Vercel 上（或本地有 `VERCEL_OIDC_TOKEN`），`SANDBOX_ENABLED=0` 可关闭 |
 | `get_llm_key_limit` | 查询模型 Key 的额度（`GET {OPENROUTER_BASE_URL}/key`）：限额、剩余额度、重置周期，以及今日、本周、本月和累计用量（美元），另外返回最先触发拦截的预算 | 配置了 `OPENROUTER_API_KEY` |
 
 > 余额和额度属于账户信息。机器人如果对外开放（比如进了群），任何人都能问到这些信息。介意的话，在 `src/agent/tools.ts` 里把这两个工具移除即可。
 
 DeepSeek 的这两个接口是普通 HTTP API，所以由本服务作为函数工具来执行，和使用哪个模型无关。计费方式是每 1000 次成功请求 5 元；账号级 QPS 上限为 Search 100、Fetch 25。
+
+### 长期记忆（Upstash Vector）
+
+记忆库只有一个，**所有群和私聊共用**。每条记忆是一句完整的话（比如"#3B6834 叫老王，是前端程序员"），由模型自己决定什么值得记。检索按语义相似度，返回最接近的几条。
+
+- **不用自己接 embedding**：索引创建时选一个 Upstash 自带的 embedding 模型，服务直接发原文（`/upsert-data`、`/query-data`）。中文推荐 **BGE-M3**。
+- **记录来源**：每条记忆的 metadata 里有来源聊天、私聊还是群聊、谁说的、什么时候记的。检索结果会标出是否来自当前聊天。提示词要求模型不要把私聊里记下的事在群里说出来。
+- **开通**：在 Upstash 控制台新建一个 Vector 索引，embedding 模型选 BGE-M3，然后把 `UPSTASH_VECTOR_REST_URL` 和 `UPSTASH_VECTOR_REST_TOKEN` 填到 Vercel 环境变量里。
+- **免费额度**：每天 1 万次查询或写入，总数据 1 GB。和 Redis 的额度分开计算。
+
+### 沙盒工作区（Vercel Sandbox + Drive）
+
+- **每个聊天一块盘**：每个聊天有一块自己的 Vercel Drive（Hobby 默认 1 GiB），挂在 `/workspace`。盘名是聊天 ID 的哈希（`chat-xxxx`）。
+- **沙盒随用随建**：一次 agent 运行里第一次调用工作区工具时才创建沙盒，这次运行的所有工具调用共用它，运行结束就停掉。
+- **哪些东西能留下**：`/workspace` 里的文件下次还在；装的包、`/tmp` 等其他位置，每轮都会清空。沙盒创建时设了 `persistent: false`，停掉时不做快照，不占快照存储。
+- **单条命令限时**：默认 60 秒（`SANDBOX_COMMAND_TIMEOUT_SECONDS`），超时会被 `timeout` 杀掉，已有的输出保留。输出过长时保留开头和结尾。
+- **读图片**：`read_file` 读到 png/jpg/gif/webp 时，图片会作为一条用户消息附在工具结果后面给模型看（`detail: "auto"`），不会存进历史。
+- **同一聊天并发**：同一块盘同一时间只能被一个沙盒读写挂载。同一聊天的两次运行撞上时，后来的会重试几次，还不行就让模型告诉用户稍后再试。
+- **认证**：部署在 Vercel 上时，SDK 自动使用项目的 OIDC token，不用配置。本地运行需要先 `vercel env pull` 拿到 `VERCEL_OIDC_TOKEN`。
+- **区域**：沙盒和盘默认都在 `iad1`，可用 `SANDBOX_REGION` 修改。注意：盘建好以后区域就不能再改。
+- **Hobby 免费额度**：每月 5 个 CPU 小时、420 GB·小时内存、5000 次创建。盘的存储总共 15 GB，不按月重置。超出后创建会暂停到下个周期，**不会扣费**。
+- **风险**：群里任何人都能让机器人执行命令，沙盒默认可以访问外网。沙盒里不放任何密钥，提示词也要求拒绝攻击、挖矿之类的请求。如果需要更严格，可以只对管理员开放。
 
 **添加工具**：在 `src/agent/tools.ts` 的 `tools` 数组中追加 `{ name, description, parameters, run, enabled? }`。
 

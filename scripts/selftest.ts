@@ -19,6 +19,9 @@ process.env.TELEGRAM_WEBHOOK_SECRET = "tg-secret";
 process.env.HTTP_CHANNEL_TOKEN = "http-secret";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.KV_REST_API_URL;
+for (const name of ["UPSTASH_VECTOR_REST_URL", "UPSTASH_VECTOR_REST_TOKEN", "VERCEL", "VERCEL_OIDC_TOKEN", "SANDBOX_ENABLED"]) {
+  delete process.env[name];
+}
 
 // ── Capture waitUntil promises ──
 const pending: Promise<unknown>[] = [];
@@ -87,6 +90,25 @@ function fakeUpstash(url: string, body: any) {
   return Response.json({ result: runRedis(body) });
 }
 
+/** Minimal Upstash Vector emulator: "similarity" is just shared characters with the query. */
+const vectors = new Map<string, { data: string; metadata: unknown }>();
+function fakeVector(url: string, method: string, body: any) {
+  const path = new URL(url).pathname;
+  if (path === "/upsert-data" && method === "POST") {
+    vectors.set(body.id, { data: body.data, metadata: body.metadata });
+    return Response.json({ result: "Success" });
+  }
+  if (path === "/query-data" && method === "POST") {
+    const score = (text: string) => [...new Set(body.data)].filter((ch) => text.includes(ch as string)).length / new Set(body.data).size;
+    const hits = [...vectors].map(([id, v]) => ({ id, score: score(v.data), data: v.data, metadata: v.metadata }));
+    return Response.json({ result: hits.sort((a, b) => b.score - a.score).slice(0, body.topK) });
+  }
+  if (path === "/delete" && method === "DELETE") {
+    return Response.json({ result: { deleted: body.ids.filter((id: string) => vectors.delete(id)).length } });
+  }
+  return Response.json({ error: `unexpected ${method} ${path}`, status: 400 }, { status: 400 });
+}
+
 /**
  * Fake Responses API. First turn asks for a tool, second turn answers in plain
  * text (exercising the fallback). Messages containing "连发" use send_message twice.
@@ -95,8 +117,10 @@ function fakeResponses(body: any) {
   llmCalls++;
   const toolOutput = body.input.findLast((i: any) => i.type === "function_call_output");
   // Drop the "[time｜scene｜sender]" header line the gateway prepends.
-  const lastUser = body.input.findLast((i: any) => i.role === "user");
-  const raw: string = typeof lastUser.content === "string" ? lastUser.content : lastUser.content.find((p: any) => p.type === "input_text").text;
+  const textOf = (m: any): string => (typeof m.content === "string" ? m.content : m.content.find((p: any) => p.type === "input_text").text);
+  // Skip the "（系统提示）" message the loop adds after read_file opens an image.
+  const lastUser = body.input.findLast((i: any) => i.role === "user" && !textOf(i).startsWith("（系统提示）"));
+  const raw = textOf(lastUser);
   const userText = raw.split("\n").slice(1).join("\n");
   let output: unknown[];
   if (userText.includes("表情")) {
@@ -107,6 +131,10 @@ function fakeResponses(body: any) {
     output = toolOutput
       ? [textMessage("这句是收尾文字，不应该被发出去")]
       : [sendCall("call_a", "第一条"), sendCall("call_b", "第二条")];
+  } else if (userText.startsWith("读图")) {
+    output = toolOutput
+      ? [textMessage("看到了")]
+      : [{ type: "function_call", id: "fc_r", call_id: "call_r", name: "read_file", arguments: JSON.stringify({ path: "out/plot.png" }) }];
   } else if (toolOutput) {
     output = [{ type: "reasoning", id: "rs_2", summary: [] }, textMessage(`答案是 ${toolOutput.output}`)];
   } else {
@@ -162,6 +190,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     });
   }
   if (url.startsWith("https://redis.example.com")) return fakeUpstash(url, body);
+  if (url.startsWith("https://vector.example.com/")) return fakeVector(url, req.method, body);
   if (url.startsWith("https://multimedia.nt.qq.com.cn/")) {
     if (url.includes("missing")) return new Response("gone", { status: 404 });
     return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "content-type": "image/png" } });
@@ -180,9 +209,11 @@ const { evaluate, activeTools, runTool } = await import("../src/agent/tools.js")
 const { messageHeader } = await import("../src/agent/handle.js");
 const qqHint = (await import("../src/channels/qq.js")).qqAdapter.promptHint!;
 const { config } = await import("../src/config.js");
+const { setWorkspaceFactory, driveName } = await import("../src/agent/sandbox.js");
 
 /** Tool context for calling tools directly, outside a conversation. */
-const noCtx = { sent: [] as string[], send: async () => {}, sendSticker: async () => {} };
+const testChat = { key: "http:c0", scene: "私聊" as const, sender: "#USER01" };
+const noCtx = { sent: [] as string[], send: async () => {}, sendSticker: async () => {}, chat: testChat, images: [] };
 
 // ── QQ signing helpers (independent of the implementation under test) ──
 function qqKeys(secret: string) {
@@ -393,7 +424,7 @@ await test("http: sticker degrades to a text line; history records it", async ()
 });
 
 await test("send_message: per-turn limit", async () => {
-  const ctx = { sent: ["1", "2", "3", "4", "5"], send: async () => {}, sendSticker: async () => {} };
+  const ctx = { ...noCtx, sent: ["1", "2", "3", "4", "5"] };
   assert.match(await runTool("send_message", '{"text":"6"}', ctx), /^Error: already sent 5 messages/);
   assert.match(await runTool("send_message", '{"text":"  "}', noCtx), /^Error: text is empty/);
 });
@@ -659,6 +690,105 @@ await test("qq group image without @: sampled ambient run sees the pixels, histo
   assert.match(users.at(-1).content[0].text, /\n\[图片\]$/);
   assert.equal(users.at(-1).content[1].type, "input_image");
   assert.ok(users.slice(0, -1).every((u: any) => typeof u.content === "string"), "only the latest message has pixels");
+});
+
+await test("memory: remember / recall / forget on Upstash Vector, shared across chats", async () => {
+  assert.ok(!activeTools().some((t) => t.name === "remember"), "off without credentials");
+  process.env.UPSTASH_VECTOR_REST_URL = "https://vector.example.com/";
+  process.env.UPSTASH_VECTOR_REST_TOKEN = "vec-token";
+  try {
+    const groupCtx = { ...noCtx, chat: { key: "qq:group:G1", scene: "群聊" as const, sender: "老王 #3B6834" } };
+    const saved = await runTool("remember", JSON.stringify({ content: "#3B6834 叫老王，是前端程序员" }), groupCtx);
+    const id = /id (m_\w+)/.exec(saved)![1]!;
+    const upsert = calls.find((c) => c.url === "https://vector.example.com/upsert-data")!;
+    assert.equal(upsert.headers.get("authorization"), "Bearer vec-token");
+    assert.deepEqual({ ...upsert.body.metadata, at: "" }, { at: "", chat: "qq:group:G1", scene: "群聊", by: "老王 #3B6834" });
+    await runTool("remember", JSON.stringify({ content: "这个群在聊考研" }), groupCtx);
+
+    // Another chat sees the same memories, marked as not from here.
+    const hits = JSON.parse(await runTool("recall", JSON.stringify({ query: "老王是做什么的", limit: 1 }), noCtx));
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].memory, "#3B6834 叫老王，是前端程序员");
+    assert.equal(hits[0].scene, "群聊");
+    assert.equal(hits[0].same_chat, false);
+    assert.equal(JSON.parse(await runTool("recall", '{"query":"老王"}', groupCtx))[0].same_chat, true);
+
+    assert.equal(await runTool("forget", JSON.stringify({ ids: [id] }), noCtx), "deleted 1");
+    assert.match(await runTool("remember", JSON.stringify({ content: "x".repeat(501) }), noCtx), /^Error: too long/);
+  } finally {
+    delete process.env.UPSTASH_VECTOR_REST_URL;
+    delete process.env.UPSTASH_VECTOR_REST_TOKEN;
+  }
+});
+
+/** In-memory stand-in for a sandbox with the chat's drive mounted. */
+function fakeWorkspaces() {
+  const opened: string[] = [];
+  let closed = 0;
+  const files = new Map<string, Buffer>();
+  setWorkspaceFactory(async (chatKey) => {
+    opened.push(chatKey);
+    return {
+      async run(command, timeoutSeconds) {
+        if (command === "sleep 999") return { exitCode: 124, output: "partial" };
+        return { exitCode: 0, output: `ran: ${command} (limit ${timeoutSeconds}s)` };
+      },
+      async write(file, content) {
+        files.set(file, Buffer.from(content));
+      },
+      async read(file) {
+        return files.get(file) ?? null;
+      },
+      async close() {
+        closed++;
+      },
+    };
+  });
+  return { opened, files, closed: () => closed };
+}
+
+await test("workspace: bash / write_file / read_file share one sandbox per run", async () => {
+  assert.ok(!activeTools().some((t) => t.name === "bash"), "off without Vercel credentials");
+  process.env.SANDBOX_ENABLED = "1";
+  try {
+    const ws = fakeWorkspaces();
+    const ctx = { ...noCtx, images: [] };
+    assert.equal(await runTool("write_file", '{"path":"notes/a.md","content":"你好"}', ctx), "wrote /workspace/notes/a.md (6 bytes)");
+    assert.equal(await runTool("read_file", '{"path":"/workspace/notes/a.md"}', ctx), "你好");
+    assert.equal(await runTool("bash", '{"command":"ls"}', ctx), "exit 0\nran: ls (limit 60s)");
+    assert.equal(await runTool("bash", '{"command":"sleep 999"}', ctx), "timed out after 60s\npartial");
+    assert.match(await runTool("read_file", '{"path":"nope.txt"}', ctx), /^Error: \/workspace\/nope.txt not found/);
+    ws.files.set("/workspace/a.bin", Buffer.from([1, 0, 2]));
+    assert.match(await runTool("read_file", '{"path":"a.bin"}', ctx), /binary file \(3 bytes\)/);
+    assert.deepEqual(ws.opened, ["http:c0"], "one sandbox for the whole run");
+    assert.match(driveName("qq:group:ABC"), /^chat-[0-9a-f]{20}$/);
+    assert.notEqual(driveName("qq:group:ABC"), driveName("qq:group:ABD"));
+  } finally {
+    delete process.env.SANDBOX_ENABLED;
+  }
+});
+
+await test("workspace: read_file shows an image to the model; the sandbox stops after the run", async () => {
+  process.env.SANDBOX_ENABLED = "1";
+  try {
+    const ws = fakeWorkspaces();
+    ws.files.set("/workspace/out/plot.png", Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const res = await httpCall("读图", "c-img");
+    assert.equal(res.reply, "看到了");
+    const second = llmRequests()[1]!.body.input;
+    const output = second.find((i: any) => i.type === "function_call_output");
+    assert.match(output.output, /image \/workspace\/out\/plot.png \(4 bytes\)/);
+    const shown = second.at(-1);
+    assert.equal(shown.role, "user");
+    assert.deepEqual(shown.content[1], { type: "input_image", image_url: "data:image/png;base64,iVBORw==", detail: "auto" });
+    assert.deepEqual(ws.opened, ["http:c-img"]);
+    assert.equal(ws.closed(), 1, "sandbox stopped when the run ended");
+    // The image isn't kept in history.
+    await httpCall("1+1", "c-img");
+    assert.ok(llmRequests().at(-1)!.body.input.every((i: any) => typeof i.content === "string" || i.type));
+  } finally {
+    delete process.env.SANDBOX_ENABLED;
+  }
 });
 
 await test("unknown channel → 404", async () => {

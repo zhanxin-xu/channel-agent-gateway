@@ -14,7 +14,8 @@ const TIMEOUT_MS = 10_000;
 export interface ImagePart {
   type: "input_image";
   image_url: string;
-  detail: "low";
+  /** "low" for chat images (small fixed cost); files the agent opens on purpose use "auto". */
+  detail: "low" | "auto";
 }
 
 export async function loadImageParts(images: Array<{ url: string; contentType: string }>): Promise<ImagePart[]> {

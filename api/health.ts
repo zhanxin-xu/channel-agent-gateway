@@ -22,6 +22,8 @@ export default {
       extraBody: extraBodyStatus(),
       tools: activeTools().map((t) => t.name),
       store: config.store.url ? "upstash" : "memory",
+      memory: Boolean(config.memory.url && config.memory.token),
+      sandbox: config.sandbox.enabled,
       channels: Object.fromEntries([...channels.values()].map((c) => [c.name, c.isConfigured()])),
     });
   },

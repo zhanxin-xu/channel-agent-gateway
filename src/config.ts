@@ -158,4 +158,39 @@ export const config = {
       return str("UPSTASH_REDIS_REST_TOKEN") || str("KV_REST_API_TOKEN");
     },
   },
+
+  /**
+   * Long-term memory (remember / recall / forget), shared by every chat.
+   * An Upstash Vector index created with a built-in embedding model (e.g. BGE-M3
+   * for Chinese), so the gateway sends raw text. Disabled when empty.
+   */
+  memory: {
+    get url() {
+      return str("UPSTASH_VECTOR_REST_URL").replace(/\/+$/, "");
+    },
+    get token() {
+      return str("UPSTASH_VECTOR_REST_TOKEN");
+    },
+  },
+
+  /**
+   * Vercel Sandbox workspace (bash / read_file / write_file). Each chat gets
+   * its own Drive mounted at /workspace. On Vercel the SDK authenticates with
+   * the project's OIDC token; locally it needs VERCEL_OIDC_TOKEN (`vercel env pull`).
+   */
+  sandbox: {
+    /** On by default where credentials exist; SANDBOX_ENABLED=0 turns it off. */
+    get enabled() {
+      if (/^(0|false|off)$/i.test(str("SANDBOX_ENABLED"))) return false;
+      return Boolean(process.env.VERCEL || str("VERCEL_OIDC_TOKEN") || /^(1|true|on)$/i.test(str("SANDBOX_ENABLED")));
+    },
+    /** Region for sandboxes and their drives (they must match). Default: Vercel's default, iad1. */
+    get region() {
+      return str("SANDBOX_REGION");
+    },
+    /** Per-command time limit. */
+    get commandTimeoutSeconds() {
+      return int("SANDBOX_COMMAND_TIMEOUT_SECONDS", 60);
+    },
+  },
 };

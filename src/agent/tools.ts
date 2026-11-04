@@ -3,6 +3,9 @@
  * definition the model sees, and a `run` function that returns a string.
  */
 import { llmKeyLimit, searchBalance } from "./account-tools.js";
+import type { ImagePart } from "./images.js";
+import { forget, recall, remember } from "./memory.js";
+import { bash, readFile, writeFile } from "./sandbox.js";
 import { isStickerName, STICKER_NAMES, STICKERS, type StickerName } from "./stickers.js";
 import { webFetch, webSearch } from "./web-tools.js";
 
@@ -14,6 +17,10 @@ export interface ToolContext {
   send(text: string): Promise<void>;
   /** Deliver one sticker now (and record it in `sent`). */
   sendSticker(name: StickerName): Promise<void>;
+  /** The chat this run belongs to: memory metadata and the per-chat workspace. */
+  chat: { key: string; scene: "群聊" | "私聊"; sender: string };
+  /** Images a tool wants the model to see; the loop shows them after the step's tool outputs. */
+  images: ImagePart[];
 }
 
 export interface Tool {
@@ -105,7 +112,22 @@ const calculate: Tool = {
   },
 };
 
-const tools: Tool[] = [sendMessage, sendSticker, getCurrentTime, calculate, webSearch, webFetch, searchBalance, llmKeyLimit];
+const tools: Tool[] = [
+  sendMessage,
+  sendSticker,
+  getCurrentTime,
+  calculate,
+  webSearch,
+  webFetch,
+  searchBalance,
+  llmKeyLimit,
+  remember,
+  recall,
+  forget,
+  bash,
+  readFile,
+  writeFile,
+];
 
 export function activeTools(): Tool[] {
   return tools.filter((t) => t.enabled?.() ?? true);

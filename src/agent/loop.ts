@@ -13,6 +13,7 @@
  * reasoning, max_output_tokens, …) can be set from config without code changes.
  */
 import { config } from "../config.js";
+import type { ImagePart } from "./images.js";
 import { activeTools, runTool, type ToolContext } from "./tools.js";
 
 export interface HistoryMessage {
@@ -23,7 +24,7 @@ export interface HistoryMessage {
 /** A user message with images, for the current turn only (history stores text). */
 export interface MultimodalUserMessage {
   role: "user";
-  content: Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string; detail: "low" }>;
+  content: Array<{ type: "input_text"; text: string } | ImagePart>;
 }
 
 export type AgentInputItem = HistoryMessage | MultimodalUserMessage;
@@ -140,6 +141,12 @@ export async function runAgent(opts: {
       const result = await runTool(call.name, call.arguments, opts.ctx);
       console.log(`[agent] tool ${call.name}(${call.arguments}) -> ${result.slice(0, 200)}`);
       input.push({ type: "function_call_output", call_id: call.call_id, output: result });
+    }
+    // Images a tool opened (read_file) go in as a user message after the outputs,
+    // which every Responses API provider accepts; they're not stored in history.
+    if (opts.ctx.images.length) {
+      const images = opts.ctx.images.splice(0);
+      input.push({ role: "user", content: [{ type: "input_text", text: "（系统提示）read_file 打开的图片：" }, ...images] });
     }
 
     // Only talked this step: the turn is done, no need to ask the model again.
