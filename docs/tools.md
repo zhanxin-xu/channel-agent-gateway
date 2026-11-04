@@ -25,6 +25,8 @@
 
 - `get_search_balance`：调用 DeepSeek 的 `GET /user/balance`，区分赠送余额和充值余额，并估算还能搜索多少次。
 - `get_llm_key_limit`：调用 `GET {OPENAI_RESPONSES_BASE_URL}/key`，返回限额、剩余额度、重置周期，以及今日、本周、本月和累计用量。这是 OpenRouter 特有的接口，换成其他服务商时这个工具会返回错误，可以在 `registry.ts` 里移除。
+  - 用量分两笔：`usage` 是从 OpenRouter 余额里扣的钱，`byok_usage` 是走你自己服务商 Key（BYOK）的花费。预算或 Key 限额设成"包含 BYOK"时会把两笔加在一起，所以可能出现 `usage` 为 0、预算却已经花了一部分的情况，工具结果里的 `counts_byok` 字段会标出来。
+  - "今天"按 UTC 计算，北京时间每天早上 8 点重置；每周从周一开始。
 
 这两个工具返回的是账户信息，机器人进群后任何人都能问到。介意的话，在 `registry.ts` 里把它们移除。
 

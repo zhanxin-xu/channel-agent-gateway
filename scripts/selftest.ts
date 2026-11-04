@@ -217,8 +217,13 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
         usage_daily: 0.3,
         usage_weekly: 1.2,
         usage_monthly: 5.5,
+        byok_usage: 3,
+        byok_usage_daily: 0.34,
+        byok_usage_weekly: 1,
+        byok_usage_monthly: 3,
+        include_byok_in_limit: true,
         is_free_tier: false,
-        effective_budget: { scope: "api_key", limit_usd: 20, spend_usd: 5.5, remaining_usd: 14.5, reset_interval: "monthly", resets_at: "2026-12-01T00:00:00Z" },
+        effective_budget: { scope: "api_key", limit_usd: 20, spend_usd: 5.5, remaining_usd: 14.5, reset_interval: "monthly", resets_at: "2026-12-01T00:00:00Z", include_byok: true },
       },
     });
   }
@@ -390,7 +395,12 @@ await test("get_llm_key_limit: {baseUrl}/key with extra headers", async () => {
   assert.equal(req.headers.get("x-title"), "selftest");
   assert.equal(out.limit_remaining, 14.5);
   assert.deepEqual(out.usage, { today: 0.3, this_week: 1.2, this_month: 5.5, all_time: 5.5 });
+  assert.deepEqual(out.byok_usage, { today: 0.34, this_week: 1, this_month: 3, all_time: 3 }, "BYOK spend reported apart from credits");
+  assert.equal(out.limit_counts_byok, true);
   assert.equal(out.effective_budget.remaining, 14.5);
+  assert.equal(out.effective_budget.counts_byok, true);
+  assert.equal(out.effective_budget.reset_interval, "monthly");
+  assert.match(out.note, /00:00 UTC/);
 });
 
 await test("qq: op13 callback validation", async () => {

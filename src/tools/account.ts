@@ -54,18 +54,25 @@ interface Budget {
   remaining_usd: number;
   reset_interval: string | null;
   resets_at: string | null;
+  include_byok?: boolean;
 }
 
+/** OpenRouter's GET /key. `usage*` is spend on OpenRouter credits; `byok_usage*` is spend billed to your own provider keys. */
 interface KeyInfo {
   data: {
     label?: string;
     limit: number | null;
     limit_remaining: number | null;
     limit_reset: string | null;
+    include_byok_in_limit?: boolean;
     usage: number;
     usage_daily: number;
     usage_weekly: number;
     usage_monthly: number;
+    byok_usage?: number;
+    byok_usage_daily?: number;
+    byok_usage_weekly?: number;
+    byok_usage_monthly?: number;
     is_free_tier?: boolean;
     expires_at?: string | null;
     effective_budget?: Budget | null;
@@ -75,24 +82,43 @@ interface KeyInfo {
 export const llmKeyLimit: Tool = {
   name: "get_llm_key_limit",
   description:
-    "Check the model API key's spending limit, remaining credit and usage (today / this week / this month / all time), in USD.",
+    "Check the model API key's spending limit, remaining credit and usage (today / this week / this month / all time), in USD. " +
+    "Spend is split into OpenRouter credits (usage) and your own provider keys (byok_usage); a budget may count both.",
   parameters: { type: "object", properties: {} },
   enabled: () => Boolean(config.llm.apiKey),
   async run() {
     const { baseUrl, apiKey, extraHeaders } = config.llm;
     const { data } = await getJson<KeyInfo>(`${baseUrl}/key`, apiKey, extraHeaders);
     const budget = data.effective_budget;
+    const hasByok = [data.byok_usage, data.byok_usage_daily, data.byok_usage_weekly, data.byok_usage_monthly].some((n) => typeof n === "number");
     return JSON.stringify({
       label: data.label,
       currency: "USD",
       limit: data.limit ?? "unlimited",
       limit_remaining: data.limit_remaining ?? "unlimited",
       limit_reset: data.limit_reset ?? "never",
+      ...(data.include_byok_in_limit === undefined ? {} : { limit_counts_byok: data.include_byok_in_limit }),
+      // Spend on OpenRouter credits only.
       usage: { today: data.usage_daily, this_week: data.usage_weekly, this_month: data.usage_monthly, all_time: data.usage },
+      // Spend billed to your own provider keys (BYOK); not in `usage`.
+      ...(hasByok
+        ? { byok_usage: { today: data.byok_usage_daily ?? 0, this_week: data.byok_usage_weekly ?? 0, this_month: data.byok_usage_monthly ?? 0, all_time: data.byok_usage ?? 0 } }
+        : {}),
       // The budget that blocks requests first (guardrail / workspace / key limit).
       effective_budget: budget
-        ? { scope: budget.scope, limit: budget.limit_usd, spent: budget.spend_usd, remaining: budget.remaining_usd, resets_at: budget.resets_at }
+        ? {
+            scope: budget.scope,
+            limit: budget.limit_usd,
+            spent: budget.spend_usd,
+            remaining: budget.remaining_usd,
+            reset_interval: budget.reset_interval,
+            resets_at: budget.resets_at,
+            ...(budget.include_byok === undefined ? {} : { counts_byok: budget.include_byok }),
+          }
         : null,
+      note:
+        "usage = spend on OpenRouter credits; byok_usage = spend on your own provider keys. A budget or limit that counts BYOK " +
+        "includes both, so it can show spend while usage is 0. Daily / weekly / monthly windows reset at 00:00 UTC (08:00 Beijing), weeks run Monday–Sunday.",
       is_free_tier: data.is_free_tier,
       expires_at: data.expires_at ?? null,
     });
