@@ -103,9 +103,13 @@ export const config = {
     get quality() {
       return str("IMAGE_QUALITY", "low");
     },
-    /** 512 | 768 | 1K | 1.5K | 2K | 4K. Results are also scaled down to fit 1920×1080 (either way round). */
+    /**
+     * 512 | 768 | 1K | 1.5K | 2K | 4K. 512 by default: plenty for a phone screen, and the
+     * output tokens (the bulk of the price) scale with the area. Results are also scaled
+     * down to fit 1920×1080 (either way round).
+     */
     get resolution() {
-      return str("IMAGE_RESOLUTION", "1K");
+      return str("IMAGE_RESOLUTION", "512");
     },
     /** Extra request body fields, e.g. {"provider":{"options":{"openai":{"moderation":"low"}}}}. */
     get extraBody() {
