@@ -287,6 +287,7 @@ const { handleWebhook } = await import("../src/webhook.js");
 const { handleWorker } = await import("../src/worker.js");
 worker = handleWorker;
 const { activeTools, runTool } = await import("../src/tools/registry.js");
+const { callBudgetMs } = await import("../src/agent/budget.js");
 const { evaluate } = await import("../src/tools/utility.js");
 const { messageHeader } = await import("../src/channels/format.js");
 const { getStore, resetStore, storeBackend } = await import("../src/store/index.js");
@@ -303,6 +304,9 @@ const noCtx = {
   sent: [] as string[],
   send: async () => "sent",
   deadline: Number.POSITIVE_INFINITY,
+  callBudgetMs(this: { deadline: number }) {
+    return callBudgetMs(this.deadline);
+  },
   chat: testChat,
   images: [],
   onRunEnd: () => {},
@@ -883,7 +887,8 @@ await test("cost: a silent ambient wake (model only hangs up) is a handful of st
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   console.log(`  silent ambient wake: ${total} store calls ${JSON.stringify(counts)}`);
   assert.equal(counts.ingest, 1, "ingest de-duplicates, logs and takes the lock in one call");
-  assert.ok(total <= 12, `${total} calls`);
+  // 12 for the run itself, plus the hand-off to the worker: the webhook releases the lock, the worker takes it.
+  assert.ok(total <= 14, `${total} calls`);
 });
 
 await test("qq group: one message as both full and @ events → logged once, answered once", async () => {
@@ -1092,26 +1097,125 @@ await test("recovery: a turn cut off mid-tool is closed with interrupted results
   assert.ok(input.some((i: any) => i.type === "function_call_output" && i.call_id === "call_long"), "the request stays valid");
 });
 
-await test("hand-off: out of time with work left → signed call to /api/worker, which carries on", async () => {
-  process.env.AGENT_MAX_DURATION_SECONDS = "100"; // below the time a new turn needs
-  const original = worker!;
-  worker = async (req) => {
-    delete process.env.AGENT_MAX_DURATION_SECONDS; // the fresh function has its full budget
-    return original(req);
-  };
+// ── Runs in the worker: hand-off, pause, interruption ──
+const workerCalls = () => calls.filter((c) => c.url === "https://bot.example.com/api/worker");
+const turnEnds = async (chatKey: string) => (await events(chatKey)).filter((e) => e.type === "turn/end").map((e) => e.data.reason);
+/** Run `fn` with the fake model's fetch wrapped: `onModelCall(n)` runs before the n-th model call (1-based). */
+async function withModelHook(onModelCall: (n: number) => void, fn: () => Promise<void>) {
+  const original = globalThis.fetch;
+  let n = 0;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    if (String(input instanceof Request ? input.url : input).endsWith("/responses")) onModelCall(++n);
+    return original(input, init);
+  }) as typeof fetch;
   try {
-    await handleWebhook(c2c("h1", "接力一下", "HANDOFF"), "qq");
+    await fn();
+  } finally {
+    globalThis.fetch = original;
+    clockOffset = 0;
+  }
+}
+
+await test("worker: the webhook only logs and starts a signed /api/worker run, which answers", async () => {
+  await handleWebhook(c2c("run-w1", "你好", "WORKER"), "qq");
+  await drain();
+  const [start] = workerCalls();
+  assert.deepEqual(start!.body, { chatKey: "qq:c2c:WORKER", ambientClaimed: false });
+  assert.match(start!.headers.get("x-worker-signature")!, /^[0-9a-f]{64}$/);
+  assert.deepEqual(sentTo("/v2/users/WORKER/messages").map((b) => b.msg_id), ["run-w1"], "answered by the worker's run");
+
+  // An ambient message that wins the sampler window passes the claim on.
+  calls.length = 0;
+  await handleWebhook(groupMsg("GWORKER", "run-w2", "路过"), "qq");
+  await drain();
+  assert.deepEqual(workerCalls()[0]!.body, { chatKey: "qq:group:GWORKER", ambientClaimed: true });
+  assert.deepEqual(await turnEnds("qq:group:GWORKER"), ["completed"], "the ambient turn ran in the worker");
+
+  const forged = await handleWorker(new Request("https://bot.example.com/api/worker", { method: "POST", body: '{"chatKey":"qq:c2c:WORKER"}', headers: { "x-worker-signature": "00" } }));
+  assert.equal(forged.status, 401);
+});
+
+await test("worker: unreachable (5xx) → retried, then the webhook runs the agent itself", async () => {
+  const { workerRetry } = await import("../src/runtime/handoff.js");
+  const original = worker!;
+  const waits = workerRetry.waitsMs;
+  workerRetry.waitsMs = [1, 1];
+  worker = async () => new Response("down", { status: 503 });
+  try {
+    await handleWebhook(c2c("run-w3", "你好", "NOWORKER"), "qq");
     await drain();
   } finally {
     worker = original;
+    workerRetry.waitsMs = waits;
+  }
+  assert.equal(workerCalls().length, 3, "one try and two retries");
+  assert.deepEqual(sentTo("/v2/users/NOWORKER/messages").map((b) => b.msg_id), ["run-w3"], "answered by the webhook's own run");
+});
+
+await test("pause: not enough time for the next step → the turn ends paused and a fresh worker continues it", async () => {
+  // The first model call "takes" 201s of the 300: the next step would start with < 100s left.
+  await withModelHook((n) => void (n === 1 && (clockOffset += 201_000)), async () => {
+    await handleWebhook(c2c("run-p1", "算一下", "PAUSE"), "qq");
+    await drain();
+  });
+  assert.equal(workerCalls().length, 2, "webhook → worker, then worker → fresh worker");
+  assert.deepEqual(workerCalls()[1]!.body, { chatKey: "qq:c2c:PAUSE", ambientClaimed: false });
+  assert.deepEqual(await turnEnds("qq:c2c:PAUSE"), ["paused", "completed"]);
+  assert.equal(llmCalls, 2, "no forced wrap-up step: the calculation's result is answered in the fresh function");
+  const resumed = llmRequests()[1]!.body.input.findLast((i: any) => i.role === "developer").content;
+  assert.match(resumed, /^（系统提示）第2轮：接着第1轮继续。上一段在这个函数里的时间用完了；/);
+  assert.deepEqual(sentTo("/v2/users/PAUSE/messages").map((b) => b.content), ["答案是 20"], "one answer, no progress report");
+});
+
+await test("pause: a tool the function has no time left for isn't run; the fresh worker sees why", async () => {
+  // The model call leaves 22s: under the 20s margin + 5s a tool needs.
+  await withModelHook((n) => void (n === 1 && (clockOffset += 278_000)), async () => {
+    await handleWebhook(c2c("run-p2", "算一下", "NOTOOL"), "qq");
+    await drain();
+  });
+  const result = (await events("qq:c2c:NOTOOL")).find((e) => e.type === "tool/result")!;
+  assert.match(result.data.output, /^Error: not run, this function is out of time/);
+  assert.deepEqual(await turnEnds("qq:c2c:NOTOOL"), ["paused", "completed"]);
+});
+
+await test("interrupted: a model call that times out → a fresh worker retries the turn; twice in a row → give up", async () => {
+  const timeout = () => {
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  };
+  await withModelHook((n) => void (n === 1 && timeout()), async () => {
+    await handleWebhook(c2c("run-i1", "你好", "FLAKY"), "qq");
+    await drain();
+  });
+  assert.deepEqual(await turnEnds("qq:c2c:FLAKY"), ["interrupted", "completed"]);
+  assert.match(llmRequests()[0]!.body.input.findLast((i: any) => i.role === "developer").content, /上一段的最后一步被打断了/);
+  assert.equal(sentTo("/v2/users/FLAKY/messages").length, 1, "answered once, by the retry");
+
+  calls.length = 0;
+  await withModelHook(timeout, async () => {
+    await handleWebhook(c2c("run-i2", "你好", "STUCK"), "qq");
+    await drain();
+  });
+  assert.deepEqual(await turnEnds("qq:c2c:STUCK"), ["interrupted", "interrupted"]);
+  assert.equal(workerCalls().length, 2, "no third function");
+  assert.deepEqual(sentTo("/v2/users/STUCK/messages").map((b) => b.content), ["这件事每次做到一半都超时了，我先停在这里。可以把它拆小一点再让我做。"]);
+  const session = await getStore().open("qq:c2c:STUCK", -1);
+  assert.equal(session.session!.cursor, 0, "given up: the message counts as handled");
+});
+
+await test("budget: a model call may take what's left of the function, minus the hand-off margin", async () => {
+  process.env.AGENT_MAX_DURATION_SECONDS = "150";
+  const original = AbortSignal.timeout;
+  const timeouts: number[] = [];
+  AbortSignal.timeout = (ms: number) => (timeouts.push(ms), original.call(AbortSignal, ms));
+  try {
+    await handleWebhook(c2c("run-b1", "你好", "BUDGET"), "qq");
+    await drain();
+  } finally {
+    AbortSignal.timeout = original;
     delete process.env.AGENT_MAX_DURATION_SECONDS;
   }
-  const handOff = calls.find((c) => c.url === "https://bot.example.com/api/worker")!;
-  assert.deepEqual(handOff.body, { chatKey: "qq:c2c:HANDOFF" });
-  assert.match(handOff.headers.get("x-worker-signature")!, /^[0-9a-f]{64}$/);
-  assert.deepEqual(sentTo("/v2/users/HANDOFF/messages").map((b) => b.msg_id), ["h1"], "answered by the worker's run");
-  const forged = await handleWorker(new Request("https://bot.example.com/api/worker", { method: "POST", body: '{"chatKey":"qq:c2c:HANDOFF"}', headers: { "x-worker-signature": "00" } }));
-  assert.equal(forged.status, 401);
+  // 150s - 20s margin, a little less for the time already spent (well under the 280s default cap).
+  assert.ok(timeouts.some((ms) => ms > 125_000 && ms <= 130_000), JSON.stringify(timeouts));
 });
 
 // ── Tools ──
@@ -1220,14 +1324,14 @@ await test("workspace: read_file shows an image to the model, kept in the log; t
   }
 });
 
-await test("workspace: bash time limit shrinks near the function's deadline, leaving 15s to reply", async () => {
+await test("workspace: bash time limit shrinks to the run's time budget (20s before the deadline)", async () => {
   process.env.SANDBOX_ENABLED = "1";
   try {
     fakeWorkspaces();
     const at = (seconds: number) => ({ ...noCtx, images: [], deadline: Date.now() + seconds * 1000 });
     assert.equal(await runTool("bash", '{"command":"ls"}', at(300)), "exit 0\nran: ls (limit 60s)");
-    assert.match(await runTool("bash", '{"command":"ls"}', at(40)), /\(limit 19s\)$|\(limit 20s\)$/);
-    assert.match(await runTool("bash", '{"command":"ls"}', at(20)), /^Error: no time left in this turn/);
+    assert.match(await runTool("bash", '{"command":"ls"}', at(45)), /\(limit 19s\)$|\(limit 20s\)$/, "45s left - 20s margin - 5s kill grace");
+    assert.match(await runTool("bash", '{"command":"ls"}', at(25)), /^Error: no time left in this function/);
   } finally {
     delete process.env.SANDBOX_ENABLED;
   }

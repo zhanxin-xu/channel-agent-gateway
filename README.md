@@ -25,7 +25,7 @@
 - **多渠道接入**：QQ（单聊、群聊、频道，Ed25519 验签）、Telegram、通用 HTTP。所有渠道实现同一个适配器接口，新增渠道只需要写一个对象。目前只有 QQ 在真实环境里跑过，Telegram 和 HTTP 只有离线测试，见[渠道接入](docs/channels.md)。
 - **事件流架构**：参照 DeepSeek dsh 的会话日志，每个聊天一条只追加的事件流，消息、模型输出（含思维链）、工具调用和结果全部入库，模型输入从中推导，提示词缓存持续命中。上下文到 20 万 token 自动压缩。
 - **一个聊天一个 agent**：收消息和跑 agent 解耦。几个人同时发消息只会有一个 agent 来回答；回复过程中来的新消息，下一步就能看到。
-- **为 Serverless 设计**：先回执、后处理（`waitUntil`），平台重推靠共享存储去重；临近函数 300 秒时限时自动收尾或接力给新的函数实例，函数中途被杀也能从事件流恢复。
+- **为 Serverless 设计**：先回执、后处理（`waitUntil`），平台重推靠共享存储去重；agent 都在内部的 worker 函数里跑，每次模型和工具调用都按剩余时间限时，时间不够就把这一轮交给新的函数接着做，函数中途被杀也能从事件流恢复。
 - **任意 Responses API 模型**：直接调用 `POST /responses`，默认走 OpenRouter。请求体可以透传任意参数，比如锁定供应商、设置推理强度。
 - **像真人一样聊天**：用 `send_message` 分几条连发、用 `reply_to` 回复指定的消息，用 `end_turn` 主动挂断，会发表情包；在群里能旁观没 @ 它的消息，自己判断要不要插话。
 - **看图、听语音**：图片缩小后入库，以前的图片也能再看；QQ 语音使用平台自带的转写文字。
@@ -46,9 +46,10 @@
          │ waitUntil
          ▼
  去重 → 写入事件流 → 要不要唤起？ ── 已有 agent 在跑：结束
-                         │ 抢到锁
+                         │ 抢到锁 → POST /api/worker（签名）
                          ▼
-          每一步：读事件流 → 调用模型 → 输出和工具结果写回事件流
+ /api/worker：每一步：读事件流 → 调用模型 → 输出和工具结果写回事件流
+                         │ 时间不够：这一轮交给新的 /api/worker 接着做
                          │
       OpenRouter Responses API · Supabase · Upstash Vector · Vercel Sandbox
 ```
@@ -109,31 +110,32 @@ npm run typecheck
 ```
 api/
   webhook/[channel].ts   Vercel Function 入口：POST /api/webhook/{qq|telegram|http}
-  worker.ts              POST /api/worker：时间不够时的接力（内部，带签名）
+  worker.ts              POST /api/worker：agent 在这里运行（内部，带签名）
   health.ts              GET /api/health：配置自检
 src/
   webhook.ts             路由：选择适配器 → 验签解析 → 回执 → 后台处理
-  worker.ts              接力请求的验签与处理
+  worker.ts              worker 请求的验签与启动运行
   config.ts              环境变量
   channels/              消息通道
     types.ts             适配器接口
     qq.ts / telegram.ts / http.ts
     format.ts            消息头：模型看到的"第N条｜时间｜场景｜发送人"
   runtime/               运行时：谁、什么时候跑 agent
-    ingress.ts           入口：去重、写入、按需抢锁（一个事务）
+    ingress.ts           入口：去重、写入、按需抢锁（一个事务），再交给 worker
     sampler.ts           采样器：@ 必唤起，普通群消息每个窗口最多一次
     runner.ts            运行者：一轮接一轮处理待办、选默认回复目标
     lock.ts              运行锁（会话行上的租约）
     outbox.ts            按消息回复，5 次上限，QQ 的 msg_seq
     context.ts           工具上下文：工具怎么发消息、表情包、文件、语音
-    handoff.ts           时间不够时接力给 /api/worker
+    handoff.ts           启动 /api/worker 运行（入口交给它，时间不够时交给新的它）
   conversation/          事件流
     events.ts            事件格式、可见窗口
     derive.ts            从事件流推导模型输入
-    recovery.ts          崩溃恢复：补完被打断的一轮
+    recovery.ts          崩溃恢复：补完被打断的一轮，找出要接着跑的一轮
     session.ts           持锁期间的内存视图
   agent/                 模型这一侧
     loop.ts              一轮 agent loop
+    budget.ts            时间预算：什么时候交接、每次调用能用多久
     model.ts             Responses API 请求
     compaction.ts        上下文压缩
     system-prompt.ts     人设

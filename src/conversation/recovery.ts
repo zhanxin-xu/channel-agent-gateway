@@ -1,5 +1,31 @@
 import { isEvent, type NewEvent, type SessionEvent } from "./events.js";
 
+/** A turn the next run should continue (it ended "paused" or "interrupted"). */
+export interface UnfinishedTurn {
+  turn: number;
+  trigger: "direct" | "ambient";
+  /**
+   * Interrupted turns in a row at the end of the log. A paused turn finished
+   * its steps (progress), so it ends the count.
+   */
+  interruptions: number;
+}
+
+/**
+ * The turn to continue, when the last turn ended unfinished: "paused" (out of
+ * time at a step boundary) or "interrupted" (cut off mid-step). Continuations
+ * keep the original trigger, so an ambient turn stays ambient.
+ */
+export function unfinishedTurn(events: SessionEvent[]): UnfinishedTurn | undefined {
+  const ends = events.filter((e): e is SessionEvent<"turn/end"> => isEvent(e, "turn/end"));
+  const last = ends.at(-1);
+  if (!last || (last.data.reason !== "paused" && last.data.reason !== "interrupted")) return undefined;
+  const start = events.findLast((e): e is SessionEvent<"turn/start"> => isEvent(e, "turn/start") && e.data.turn === last.data.turn);
+  let interruptions = 0;
+  for (let i = ends.length - 1; i >= 0 && ends[i]!.data.reason === "interrupted"; i--) interruptions++;
+  return { turn: last.data.turn, trigger: start?.data.trigger ?? "direct", interruptions };
+}
+
 /**
  * Close a turn the previous run never finished (the function was killed):
  * give every unanswered tool call an "interrupted" result and end the turn.

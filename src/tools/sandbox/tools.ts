@@ -13,8 +13,7 @@ const MAX_TEXT_CHARS = 12_000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 /** QQ's direct (non-chunked) upload limit; also plenty for chat. */
 const MAX_SEND_BYTES = 5 * 1024 * 1024;
-/** Time left for the model to reply after a command, and for `timeout -k` to kill it. */
-const REPLY_RESERVE_MS = 15_000;
+/** `timeout -k` sends KILL this long after TERM; the command's limit leaves room for it. */
 const KILL_GRACE_SECONDS = 5;
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -34,12 +33,9 @@ function clip(text: string, max: number): string {
   return `${text.slice(0, head)}\n…[${text.length - max} characters cut]…\n${text.slice(text.length - (max - head))}`;
 }
 
-/**
- * A command's time limit: the configured one, cut short near the function's
- * deadline so the model still has REPLY_RESERVE_MS to answer afterwards.
- */
+/** A command's time limit: the configured one, cut to the run's time budget (and the kill grace). */
 export function commandLimitSeconds(ctx: ToolContext): number {
-  const left = Math.floor((ctx.deadline - Date.now() - REPLY_RESERVE_MS) / 1000) - KILL_GRACE_SECONDS;
+  const left = Math.floor(ctx.callBudgetMs() / 1000) - KILL_GRACE_SECONDS;
   return Math.min(config.sandbox.commandTimeoutSeconds, left);
 }
 
@@ -67,7 +63,7 @@ export const bash: Tool = {
     const command = String(args.command ?? "");
     if (!command.trim()) throw new Error("command is empty");
     const limit = commandLimitSeconds(ctx);
-    if (limit < 5) throw new Error("no time left in this turn to run commands; tell them what you have so far");
+    if (limit < 5) throw new Error("no time left in this function to run commands; the turn continues in a fresh function, run it again there");
     const { exitCode, output } = await (await workspaceFor(ctx)).run(command, limit);
     const status = exitCode === 124 ? `timed out after ${limit}s` : `exit ${exitCode ?? "?"}`;
     return `${status}\n${clip(output, MAX_OUTPUT_CHARS) || "(no output)"}`;
@@ -166,8 +162,8 @@ async function download(ctx: ToolContext, a: Attachment, file: string): Promise<
     errors.push(`sandbox: ${exitCode === 124 ? "timed out" : output.trim().split("\n").at(-1) || `exit ${exitCode}`}`);
   }
   try {
-    const left = ctx.deadline - Date.now() - REPLY_RESERVE_MS;
-    if (left < 5_000) throw new Error("no time left in this turn");
+    const left = ctx.callBudgetMs();
+    if (left < 5_000) throw new Error("no time left in this function");
     const res = await fetch(a.url, { signal: AbortSignal.timeout(Math.min(left, 290_000)) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const bytes = new Uint8Array(await res.arrayBuffer());

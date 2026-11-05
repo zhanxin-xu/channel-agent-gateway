@@ -1,42 +1,60 @@
-/** Handing a run over to /api/worker (worker.ts) before this function runs out of time. */
+/**
+ * Starting a run in a fresh function: a signed POST to /api/worker (worker.ts).
+ * The webhook starts every run of an async channel this way, and a run that is
+ * out of time hands its chat over the same way, so all agent work happens in
+ * the worker with a whole function to itself.
+ *
+ * The caller releases the chat's lock first and the worker takes it again. If
+ * a webhook grabs it in between, that run carries on instead: either way one
+ * run continues from the log, and the other finds the chat busy.
+ */
 import crypto from "node:crypto";
 import { config } from "../config.js";
-import type { ChatMeta } from "./types.js";
 
-/** Signature of a hand-off request body. */
+export interface WorkerRequest {
+  chatKey: string;
+  /** The sampler window was already claimed for this run (an ambient message woke it). */
+  ambientClaimed?: boolean;
+}
+
+/** Signature of a worker request body. */
 export function workerSignature(body: string): string {
   return crypto.createHmac("sha256", config.workerSecret).update(body).digest("hex");
 }
 
-/** Ask /api/worker to carry on in a fresh function (this one is about to run out of time). */
-export async function handOff(meta: ChatMeta, chatKey: string): Promise<void> {
-  if (!meta.origin) {
-    console.warn(`[handoff] ${chatKey}: out of time with work left, but no origin to hand off to`);
-    return;
-  }
-  const body = JSON.stringify({ chatKey });
-  // There are ~2 minutes left, so a network blip or a 5xx gets two more tries. A 4xx won't get better.
-  for (const [attempt, wait] of [[1, 1000], [2, 3000], [3, 0]] as const) {
+/** Waits before each retry: a network error or a 5xx is worth one, a 4xx isn't. Exported for tests. */
+export const workerRetry = { waitsMs: [1_000, 3_000] };
+
+/** Ask /api/worker to run a chat. True once it accepted. */
+export async function startWorker(origin: string, request: WorkerRequest): Promise<boolean> {
+  const body = JSON.stringify(request);
+  const { chatKey } = request;
+  for (let attempt = 1; ; attempt++) {
     try {
-      const res = await fetch(`${meta.origin}/api/worker`, {
+      const res = await fetch(`${origin}/api/worker`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-worker-signature": workerSignature(body) },
         body,
         signal: AbortSignal.timeout(10_000),
       });
+      if (res.ok) {
+        console.log(`[handoff] ${chatKey}: started in the worker (HTTP ${res.status})`);
+        return true;
+      }
       if (res.status < 500) {
-        if (res.ok) console.log(`[handoff] ${chatKey}: handed off to the worker (HTTP ${res.status})`);
-        else console.error(`[handoff] ${chatKey}: the worker refused the hand-off (HTTP ${res.status})`);
-        return;
+        console.error(`[handoff] ${chatKey}: the worker refused (HTTP ${res.status})`);
+        return false;
       }
       throw new Error(`HTTP ${res.status}`);
     } catch (err) {
-      if (!wait) {
-        console.error(`[handoff] ${chatKey}: hand-off failed after ${attempt} attempts`, err);
-        return;
+      const wait = workerRetry.waitsMs[attempt - 1];
+      const reason = err instanceof Error ? err.message : String(err);
+      if (wait === undefined) {
+        console.error(`[handoff] ${chatKey}: couldn't reach the worker after ${attempt} attempts (${reason})`);
+        return false;
       }
-      console.warn(`[handoff] ${chatKey}: attempt ${attempt} failed (${err instanceof Error ? err.message : String(err)}), retrying`);
-      await new Promise((r) => setTimeout(r, wait));
+      console.warn(`[handoff] ${chatKey}: attempt ${attempt} failed (${reason}), retrying`);
+      await new Promise((resolve) => setTimeout(resolve, wait));
     }
   }
 }

@@ -20,8 +20,14 @@ export interface ToolContext {
    * deliver this kind of message (files).
    */
   send(message: Outgoing, replyTo?: number): Promise<string>;
-  /** When the function will be killed (epoch ms). Long-running tools stop early enough for a reply. */
+  /** When the function will be killed (epoch ms). */
   deadline: number;
+  /**
+   * How long a call started now may take (ms): until the run's hand-off margin
+   * before the deadline (agent/budget.ts). Every tool that waits on something
+   * slow caps its timeout with this.
+   */
+  callBudgetMs(): number;
   /** The chat this run belongs to: memory metadata and the per-chat workspace. */
   chat: { key: string; scene: "群聊" | "私聊"; sender: string };
   /** Images a tool wants the model to see; the loop shows them after the step's tool outputs. */

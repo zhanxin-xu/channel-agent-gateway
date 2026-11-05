@@ -3,6 +3,7 @@
  * run ends. Tools say what to deliver (text, an image URL, a file); this is
  * where that becomes a channel call.
  */
+import { callBudgetMs } from "../agent/budget.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import type { Session } from "../conversation/session.js";
 import { pcmToWav } from "../media/voice.js";
@@ -42,6 +43,7 @@ export function makeToolContext(
   const ctx: ToolContext = {
     sent: [],
     deadline,
+    callBudgetMs: () => callBudgetMs(deadline),
     chat: { key: chatKey, scene: meta.chatType === "group" ? "群聊" : "私聊", sender: "?" },
     images: [],
     async send(message, replyTo) {

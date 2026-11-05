@@ -12,25 +12,35 @@
  *
  * Every request sets tool_choice "required", so the model always acts through
  * a tool. The turn ends when the model calls end_turn (usually alongside its
- * last message), or after the last step: when the step budget runs out or the
- * function is close to its time limit, a note tells the model to wrap up and
- * tool_choice forces a send_message. Every call in a step runs, in order,
- * wherever end_turn sits among them; the turn ends after the step, unless a
- * message failed to send (before the last step), so the model can react. When
- * the failure was the platform being unreachable, the turn ends anyway: a retry
- * would only wait out the same timeout.
+ * last message), or after the last step: when the step budget runs out, a note
+ * tells the model to wrap up and tool_choice forces a send_message. Every call
+ * in a step runs, in order, wherever end_turn sits among them; the turn ends
+ * after the step, unless a message failed to send (before the last step), so
+ * the model can react. When the failure was the platform being unreachable,
+ * the turn ends anyway: a retry would only wait out the same timeout.
+ *
+ * Time (agent/budget.ts): every model and tool call must end before the
+ * function's hand-off margin. When the run can continue in a fresh function
+ * (`continuable`), a step doesn't start without enough time left: the turn
+ * ends "paused", and a model call that times out or fails transiently ends it
+ * "interrupted"; either way the runner hands the chat over and the next run
+ * continues the turn from the log (`resume`). A run that can't continue (sync
+ * channels) gets a forced last step instead, like the step budget.
  *
  * The request body is `{ model, ...OPENAI_RESPONSES_EXTRA_BODY, instructions, input,
  * tools, tool_choice }`, so any provider-specific parameter (provider routing,
  * reasoning, max_output_tokens, …) can be set from config without code changes.
  */
 import { config } from "../config.js";
-import { compactIfNeeded } from "./compaction.js";
 import { messageLabel, type NewEvent, type OutputItem, type SessionEvent, type TurnEndReason } from "../conversation/events.js";
+import type { UnfinishedTurn } from "../conversation/recovery.js";
 import type { Session } from "../conversation/session.js";
+import { LockLostError } from "../store/types.js";
 import { activeTools, runTool, sayTool, toolNames } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
-import { createResponse, outputText, type ResponsesResult } from "./model.js";
+import { callBudgetMs, LAST_STEP_MIN_MS, MIN_CALL_MS, NEW_STEP_MIN_MS, timeLeftMs } from "./budget.js";
+import { compactIfNeeded } from "./compaction.js";
+import { createResponse, ModelCallError, outputText, type ResponsesResult } from "./model.js";
 
 type FunctionCall = Extract<OutputItem, { type: "function_call" }>;
 const isFunctionCall = (item: OutputItem): item is FunctionCall => item.type === "function_call";
@@ -39,8 +49,9 @@ export function toolDefinitions() {
   return activeTools().map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters }));
 }
 
-/** Time kept for the last step (one model call plus sending) before the function's deadline. */
-export const LAST_STEP_RESERVE_MS = 90_000;
+/** A tool call the function had no time left for. */
+const NO_TIME_FOR_TOOL =
+  "Error: not run, this function is out of time. The turn continues in a fresh function in a moment; call it again there.";
 
 const describe = (m: SessionEvent<"user/message">) =>
   `${messageLabel(m.seq)}（${m.data.sender}${m.data.mentioned ? "，@你" : ""}）`;
@@ -69,6 +80,13 @@ export interface TurnOptions {
   canReply(): Promise<boolean>;
   /** The platform couldn't be reached this run: the turn ends after the step instead of letting the model retry. */
   unreachable?(): boolean;
+  /**
+   * Whether the run can hand this turn to a fresh function when time runs out
+   * (async channels). If not, the step before the deadline is a forced last step.
+   */
+  continuable: boolean;
+  /** This turn continues an unfinished one (see unfinishedTurn). */
+  resume?: UnfinishedTurn;
 }
 
 export interface TurnResult {
@@ -92,10 +110,14 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   const usage = { input: 0, cached: 0, reasoning: 0 };
   let handledUpTo = o.pending.at(-1)!.seq;
 
-  const start =
-    `（系统提示）第${turn}轮开始。待处理的消息：${listMessages(o.pending)}。` +
-    `发消息默认回复${messageLabel(o.main.seq)}，要回复别的消息用 reply_to。` +
-    (o.trigger === "ambient" ? ambientGuidance([...hangups].join(" / ")) : "");
+  const replyNote = `发消息默认回复${messageLabel(o.main.seq)}，要回复别的消息用 reply_to。`;
+  const start = o.resume
+    ? `（系统提示）第${turn}轮：接着第${o.resume.turn}轮继续。` +
+      (o.resume.interruptions ? "上一段的最后一步被打断了，那一步没有结果；" : "上一段在这个函数里的时间用完了；") +
+      `现在换了一个新的函数接着跑。待处理的消息：${listMessages(o.pending)}。` +
+      `先看上面已经做了什么、发了什么，从停下的地方接着做，不要重复已经发过的消息。${replyNote}`
+    : `（系统提示）第${turn}轮开始。待处理的消息：${listMessages(o.pending)}。${replyNote}` +
+      (o.trigger === "ambient" ? ambientGuidance([...hangups].join(" / ")) : "");
   // Events are written in a few batches per step (each batch is one store call).
   let opening: NewEvent[] = [
     { type: "turn/start", data: { turn, trigger: o.trigger } },
@@ -118,8 +140,13 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
       handledUpTo = arrived.at(-1)!.seq;
     }
 
-    // The last step starts early enough to finish before the function is killed.
-    const outOfTime = ctx.deadline - Date.now() < LAST_STEP_RESERVE_MS;
+    // Not enough time for another step here: a fresh function carries on (or, if it can't, this step is the last).
+    const left = timeLeftMs(ctx.deadline);
+    if (o.continuable && left < NEW_STEP_MIN_MS) {
+      await session.append(...opening, turnEnd("paused"));
+      return result(step - 1, "paused");
+    }
+    const outOfTime = !o.continuable && left < LAST_STEP_MIN_MS;
     const lastStep = step >= config.agent.maxSteps || outOfTime;
     if (lastStep) {
       if (!(await o.canReply())) {
@@ -141,24 +168,31 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
 
     let response: ResponsesResult;
     try {
-      response = await createResponse({
-        model,
-        ...extraBody,
-        instructions: o.systemPrompt,
-        input: await session.input(),
-        tools,
-        // Every step acts through a tool: talk, or hang up.
-        // The last step must say something: whoever is waiting hears the result or where it got stuck.
-        tool_choice: lastStep ? { type: "function", name: say } : "required",
-      });
+      response = await createResponse(
+        {
+          model,
+          ...extraBody,
+          instructions: o.systemPrompt,
+          input: await session.input(),
+          tools,
+          // Every step acts through a tool: talk, or hang up.
+          // The last step must say something: whoever is waiting hears the result or where it got stuck.
+          tool_choice: lastStep ? { type: "function", name: say } : "required",
+        },
+        { timeoutMs: callBudgetMs(ctx.deadline) },
+      );
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
+      // A timeout or a provider hiccup: a fresh function retries the step. Anything else fails the turn.
+      const interrupted = o.continuable && err instanceof ModelCallError && err.transient;
       await session.append(
         { type: "assistant/attempt", data: { turn, step, error } },
         { type: "step/end", data: { turn, step } },
-        turnEnd("error", error),
+        turnEnd(interrupted ? "interrupted" : "error", error),
       );
-      throw err;
+      if (!interrupted) throw err;
+      console.warn(`[agent] turn ${turn} step ${step} interrupted: ${error}`);
+      return result(step, "interrupted");
     }
 
     const output = response.output ?? [];
@@ -191,7 +225,8 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     const results: NewEvent[] = [];
     for (const call of calls) {
       if (hangups.has(call.name)) continue;
-      const output = await runTool(call.name, call.arguments, ctx);
+      // Tools keep to the time budget themselves; this catches the step that used it all up.
+      const output = callBudgetMs(ctx.deadline) < MIN_CALL_MS ? NO_TIME_FOR_TOOL : await runTool(call.name, call.arguments, ctx);
       console.log(`[agent] tool ${call.name}(${call.arguments}) -> ${output.slice(0, 200)}`);
       sendFailed ||= talks.has(call.name) && output.startsWith("Error:");
       results.push({ type: "tool/result", data: { turn, step, callId: call.call_id, output } });
@@ -218,7 +253,21 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     );
     if (done) return result(step, reason);
 
-    // Unhandled messages and the ones this turn may still reply to stay verbatim.
-    await compactIfNeeded(session, { systemPrompt: o.systemPrompt, tools, inputTokens: u.input_tokens ?? 0, keepFrom: o.pending[0]!.seq });
+    // Unhandled messages and the ones this turn may still reply to stay verbatim. Compaction is an
+    // optimization: when it fails, or there's no time for it here, a later step does it.
+    if (!o.continuable || timeLeftMs(ctx.deadline) >= NEW_STEP_MIN_MS) {
+      try {
+        await compactIfNeeded(session, {
+          systemPrompt: o.systemPrompt,
+          tools,
+          inputTokens: u.input_tokens ?? 0,
+          keepFrom: o.pending[0]!.seq,
+          timeoutMs: callBudgetMs(ctx.deadline),
+        });
+      } catch (err) {
+        if (err instanceof LockLostError) throw err;
+        console.warn(`[compaction] ${session.chatKey}: skipped (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
   }
 }

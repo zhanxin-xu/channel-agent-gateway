@@ -1,11 +1,13 @@
 /**
- * Hand-off endpoint (`POST /api/worker`): a run that is about to hit the
- * function's time limit with messages still waiting asks a fresh function to
- * carry on. The request is signed with WORKER_SECRET (see runtime/handoff.ts).
+ * Worker endpoint (`POST /api/worker`): where async channels' runs happen.
+ * The webhook starts a run here after logging a message, and a run that is
+ * out of time hands the chat over to a fresh call here. The request is signed
+ * with WORKER_SECRET (see runtime/handoff.ts).
  */
 import crypto from "node:crypto";
 import { waitUntil } from "@vercel/functions";
-import { workerSignature } from "./runtime/handoff.js";
+import { config } from "./config.js";
+import { workerSignature, type WorkerRequest } from "./runtime/handoff.js";
 import { runChat, type ChatMeta } from "./runtime/runner.js";
 import { channels } from "./channels/index.js";
 import { json } from "./channels/types.js";
@@ -13,6 +15,8 @@ import { getStore } from "./store/index.js";
 import { publicOrigin } from "./webhook.js";
 
 export async function handleWorker(request: Request): Promise<Response> {
+  // The function's clock started with this request.
+  const deadline = Date.now() + config.agent.maxDurationSeconds * 1000;
   if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
   const body = await request.text();
   const signature = Buffer.from(request.headers.get("x-worker-signature") ?? "");
@@ -21,7 +25,7 @@ export async function handleWorker(request: Request): Promise<Response> {
     return json({ error: "bad signature" }, 401);
   }
 
-  const { chatKey } = JSON.parse(body) as { chatKey?: string };
+  const { chatKey, ambientClaimed } = JSON.parse(body) as Partial<WorkerRequest>;
   const { session } = chatKey ? await getStore().open(chatKey, Number.MAX_SAFE_INTEGER) : { session: null };
   if (!session) return json({ error: "unknown chat" }, 404);
   const meta: ChatMeta = {
@@ -31,9 +35,11 @@ export async function handleWorker(request: Request): Promise<Response> {
     origin: publicOrigin(request),
   };
   const adapter = channels.get(meta.channel);
-  if (!adapter?.send) return json({ error: `channel "${meta.channel}" can't continue in the background` }, 400);
+  if (!adapter?.send) return json({ error: `channel "${meta.channel}" can't run in the background` }, 400);
 
-  console.log(`[worker] continuing ${chatKey}`);
-  waitUntil(runChat(adapter, meta).catch((err) => console.error(`[worker] ${chatKey} failed`, err)));
+  console.log(`[worker] running ${chatKey}`);
+  waitUntil(
+    runChat(adapter, meta, { ambientClaimed: ambientClaimed === true, deadline }).catch((err) => console.error(`[worker] ${chatKey} failed`, err)),
+  );
   return json({ ok: true }, 202);
 }

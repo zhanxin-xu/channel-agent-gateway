@@ -70,8 +70,12 @@ export const config = {
     get extraHeaders() {
       return jsonObject(llmEnv("EXTRA_HEADERS")) as Record<string, string>;
     },
+    /**
+     * Upper bound for one model call. Inside a run a call also ends when the
+     * function's time budget does (agent/budget.ts), whichever comes first.
+     */
     get timeoutMs() {
-      return int(llmEnv("TIMEOUT_MS"), 120_000);
+      return int(llmEnv("TIMEOUT_MS"), 280_000);
     },
     /** Old OPENROUTER_* names still in use (shown by /api/health so they can be renamed). */
     get legacyEnv(): string[] {
@@ -187,7 +191,7 @@ export const config = {
     },
     /**
      * The function's time limit; keep in sync with maxDuration in vercel.json.
-     * When less than 90s is left, the next step is the last (see runTurn).
+     * Runs plan their steps and calls around it (agent/budget.ts).
      */
     get maxDurationSeconds() {
       return int("AGENT_MAX_DURATION_SECONDS", 300);

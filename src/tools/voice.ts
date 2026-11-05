@@ -16,8 +16,6 @@ import type { Tool } from "./types.js";
 
 /** Long text makes a long, slow message; chat voice should be short. */
 const MAX_TEXT_CHARS = 500;
-/** Leave this much of the function's time for the model to reply. */
-const REPLY_RESERVE_MS = 15_000;
 /** When the API doesn't say (it normally does: "audio/pcm;rate=44100;channels=1"). */
 const DEFAULT_SAMPLE_RATE = 44_100;
 const AUDIO_TYPES: Record<string, string> = {
@@ -221,8 +219,8 @@ export const sendVoice: Tool = {
       speed = Number(args.speed);
       if (!(speed >= MIN_SPEED && speed <= MAX_SPEED)) throw new Error(`speed is ${MIN_SPEED} to ${MAX_SPEED}`);
     }
-    const left = ctx.deadline - Date.now() - REPLY_RESERVE_MS;
-    if (left < 10_000) throw new Error("not enough time left in this turn to make a voice message; reply in text");
+    const left = ctx.callBudgetMs();
+    if (left < 10_000) throw new Error("not enough time left in this function to make a voice message; the turn continues in a fresh function, try again there");
 
     const kind = kindOf(model);
     const sing = mode === "sing";

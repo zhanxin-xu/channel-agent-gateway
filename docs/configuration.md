@@ -15,7 +15,7 @@
 | `OPENAI_RESPONSES_MODEL` | `openai/gpt-6-luna` | 模型 ID，格式以服务商为准（OpenRouter 是 `厂商/模型`） |
 | `OPENAI_RESPONSES_EXTRA_BODY` | 空 | JSON 对象，原样合并进每次请求的请求体，见下文 |
 | `OPENAI_RESPONSES_EXTRA_HEADERS` | 空 | JSON 对象，作为额外的请求头，例如 `{"X-Title":"my-bot"}` |
-| `OPENAI_RESPONSES_TIMEOUT_MS` | `120000` | 单次模型请求的超时时间（毫秒） |
+| `OPENAI_RESPONSES_TIMEOUT_MS` | `280000` | 单次模型请求的超时上限（毫秒）。运行中还会按函数剩余时间缩短（剩余时间减 20 秒），取两者较小的 |
 
 `OPENAI_RESPONSES_EXTRA_BODY` 的常见写法（`provider` 是 OpenRouter 特有的参数）：
 
@@ -36,7 +36,7 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 |---|---|---|
 | `AGENT_TIMEZONE` | `Asia/Shanghai` | 消息头里时间使用的时区 |
 | `AGENT_MAX_STEPS` | `40` | 一轮最多调用模型的次数（旁观轮次也一样；不插话时只用 1 次） |
-| `AGENT_MAX_DURATION_SECONDS` | `300` | 函数的时间上限，要和 `vercel.json` 的 `maxDuration` 保持一致。剩余不到 90 秒时，下一步就是最后一步 |
+| `AGENT_MAX_DURATION_SECONDS` | `300` | 函数的时间上限，要和 `vercel.json` 的 `maxDuration` 保持一致。剩余不到 100 秒时不开新的一步，交给新的 worker 接着做，见[步数与时间](agent.md#步数与时间) |
 | `AGENT_CONTEXT_TOKENS` | `200000` | 上下文预算（token）。请求输入超过它的 80% 时，较早的对话会被压缩成摘要，见[上下文压缩](agent.md#上下文压缩) |
 | `AGENT_AMBIENT_INTERVAL_SECONDS` | `10` | 群里没 @ 的消息，每个群每隔多少秒最多唤起一次 agent；`0` 表示只记录、不唤起 |
 
@@ -74,7 +74,7 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 | `SANDBOX_ENABLED` | 自动 | 部署在 Vercel 上或本地有 `VERCEL_OIDC_TOKEN` 时自动启用；设为 `0` 关闭，设为 `1` 强制启用 |
 | `SANDBOX_REGION` | `iad1` | 沙盒和工作区盘所在的区域。盘建好以后区域不能再改，请在第一次使用前设置 |
 | `SANDBOX_COMMAND_TIMEOUT_SECONDS` | `60` | 单条 `bash` 命令的时间上限，临近函数时限时会自动缩短 |
-| `WORKER_SECRET` | 由其他密钥派生 | 接力请求 `/api/worker` 的签名密钥。不设置时用模型 Key 和渠道密钥派生；建议设成一个随机字符串 |
+| `WORKER_SECRET` | 由其他密钥派生 | 请求 `/api/worker` 的签名密钥。不设置时用模型 Key 和渠道密钥派生；建议设成一个随机字符串 |
 | `STICKER_BASE_URL` | 梗鲸 CDN | 表情包图片的根地址，自托管时修改 |
 
 ## 画图

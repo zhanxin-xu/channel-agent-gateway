@@ -7,7 +7,7 @@
  * for whatever model the agent uses. Enabled only when DEEPSEEK_API_KEY is set.
  */
 import { config } from "../config.js";
-import type { Tool } from "./types.js";
+import type { Tool, ToolContext } from "./types.js";
 
 const MAX_FETCH_CHARS = 12_000;
 const MAX_RESULT_CHARS = 1_500;
@@ -24,13 +24,14 @@ interface SearchResult {
   authority?: number;
 }
 
-async function deepseek<T>(path: string, body: unknown): Promise<T> {
+/** DeepSeek's tool API. A call gives up after 30s, or sooner when the run's time budget is shorter. */
+async function deepseek<T>(path: string, body: unknown, ctx: ToolContext): Promise<T> {
   const { apiKey, baseUrl } = config.deepseek;
   const res = await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(Math.min(30_000, ctx.callBudgetMs())),
   });
   const text = await res.text();
   if (!res.ok) {
@@ -61,10 +62,10 @@ export const webSearch: Tool = {
     required: ["query"],
   },
   enabled,
-  async run(args) {
+  async run(args, ctx) {
     const query = String(args.query ?? "").slice(0, 128);
     const count = Math.min(Math.max(Number(args.count) || 5, 1), 20);
-    const data = await deepseek<{ results?: SearchResult[] }>("/v1/tools/search", { query, count });
+    const data = await deepseek<{ results?: SearchResult[] }>("/v1/tools/search", { query, count }, ctx);
     const results = (data.results ?? []).map((r) => ({
       title: r.title,
       url: r.url,
@@ -87,10 +88,10 @@ export const webFetch: Tool = {
     required: ["url"],
   },
   enabled,
-  async run(args) {
+  async run(args, ctx) {
     const url = String(args.url ?? "");
     if (!/^https?:\/\//i.test(url)) throw new Error("url must start with http:// or https://");
-    const data = await deepseek<{ title?: string; content?: string }>("/v1/tools/fetch", { url });
+    const data = await deepseek<{ title?: string; content?: string }>("/v1/tools/fetch", { url }, ctx);
     const content = data.content ?? "";
     return JSON.stringify({
       url,

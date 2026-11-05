@@ -49,7 +49,7 @@ function cutPoints(events: SessionEvent[]): number[] {
 
 export async function compactIfNeeded(
   session: Session,
-  o: { systemPrompt: string; tools: unknown[]; inputTokens: number; keepFrom: number },
+  o: { systemPrompt: string; tools: unknown[]; inputTokens: number; keepFrom: number; timeoutMs?: number },
 ): Promise<boolean> {
   const budget = config.agent.contextTokens;
   if (o.inputTokens < budget * TRIGGER_RATIO) return false;
@@ -75,14 +75,17 @@ export async function compactIfNeeded(
   // The head of the last request: the previous summary plus everything before the cut.
   const head = session.events.filter((e) => e.seq < cut || e === previous);
   const started = Date.now();
-  const response = await createResponse({
-    model: config.llm.model,
-    ...config.llm.extraBody,
-    instructions: o.systemPrompt,
-    input: [...(await session.input(head)), { role: "user", content: COMPACTION_INSTRUCTION }],
-    tools: o.tools,
-    tool_choice: "none",
-  });
+  const response = await createResponse(
+    {
+      model: config.llm.model,
+      ...config.llm.extraBody,
+      instructions: o.systemPrompt,
+      input: [...(await session.input(head)), { role: "user", content: COMPACTION_INSTRUCTION }],
+      tools: o.tools,
+      tool_choice: "none",
+    },
+    { timeoutMs: o.timeoutMs },
+  );
   const text = outputText(response.output ?? []);
   if (!text) {
     console.warn(`[compaction] ${session.chatKey}: empty summary, skipped`);

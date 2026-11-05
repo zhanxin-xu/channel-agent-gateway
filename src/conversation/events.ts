@@ -33,7 +33,14 @@ export interface Usage {
 }
 
 /** "unreachable": the platform couldn't be reached, so the turn stopped instead of retrying (runtime/outbox.ts). */
-export type TurnEndReason = "completed" | "max-steps" | "out-of-time" | "error" | "interrupted" | "unreachable";
+/**
+ * Why a turn ended. "paused" and "interrupted" leave the turn unfinished: the
+ * next run continues it (see unfinishedTurn in recovery.ts).
+ *   - paused: stopped at a step boundary, out of time in this function.
+ *   - interrupted: cut off mid-step, by a call that ran out of time or failed
+ *     transiently, or by the function being killed (recoverOpenTurn).
+ */
+export type TurnEndReason = "completed" | "max-steps" | "out-of-time" | "error" | "paused" | "interrupted" | "unreachable";
 
 export interface EventMap {
   /** A message from the chat. `header` is the context line without its "第N条" id, which comes from `seq`. */

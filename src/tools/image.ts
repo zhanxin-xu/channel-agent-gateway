@@ -15,8 +15,6 @@ const OUTDIR = `${WORKDIR}/images`;
 /** Results larger than 1080p (either orientation) are scaled down to fit. */
 const MAX_LONG = 1920;
 const MAX_SHORT = 1080;
-/** Leave this much of the function's time for the model to reply. */
-const REPLY_RESERVE_MS = 15_000;
 /** What the model is shown of a result (it is saved at full size). */
 const PREVIEW_SIDE = 1024;
 
@@ -99,8 +97,8 @@ export const generateImage: Tool = {
       throw new Error(`aspect_ratio is one of ${ASPECT_RATIOS.join(", ")}`);
     }
 
-    const left = ctx.deadline - Date.now() - REPLY_RESERVE_MS;
-    if (left < 20_000) throw new Error("not enough time left in this turn to generate an image; reply first");
+    const left = ctx.callBudgetMs();
+    if (left < 20_000) throw new Error("not enough time left in this function to generate an image; the turn continues in a fresh function, try again there");
 
     const { apiKey, baseUrl, model, quality, resolution, extraBody, timeoutMs } = config.image;
     const body = {
