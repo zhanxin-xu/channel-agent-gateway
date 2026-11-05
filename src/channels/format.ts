@@ -2,8 +2,11 @@
 import { config } from "../config.js";
 import type { InboundMessage } from "./types.js";
 
-const shortId = (m: InboundMessage) => `#${m.userId.slice(-6).toUpperCase() || "?"}`;
-export const senderLabel = (m: InboundMessage) => (m.senderName ? `${m.senderName} ${shortId(m)}` : shortId(m));
+/** How the model knows a person: "#" + the last 6 characters of their platform id, e.g. "#3B6834". */
+export const shortId = (userId: string) => `#${userId.slice(-6).toUpperCase() || "?"}`;
+/** A person as the model reads them: "老王 #3B6834", or just the short id. */
+export const personLabel = (userId: string, name?: string) => (name ? `${name} ${shortId(userId)}` : shortId(userId));
+export const senderLabel = (m: InboundMessage) => personLabel(m.userId, m.senderName);
 
 /**
  * The context line of a message, kept in the log; the model sees it as

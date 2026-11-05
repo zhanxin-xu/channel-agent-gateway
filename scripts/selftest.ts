@@ -156,6 +156,9 @@ async function fakeResponses(body: any) {
     } else if (userText.startsWith("断网")) {
       // A model that keeps trying: two messages every step, whatever happened before.
       output = [fnCall(`call_n${llmCalls}a`, "send_message", { text: "第一句" }), fnCall(`call_n${llmCalls}b`, "send_message", { text: "第二句" })];
+    } else if (userText.startsWith("艾特")) {
+      // Says the rest of the message back, so a test can put @#ID in it.
+      output = toolOutput ? [] : [sendCall("call_at", userText.slice(2).trim())];
     } else if (userText.startsWith("说句话")) {
       output = toolOutput ? [textMessage(`结果：${toolOutput.output}`)] : [fnCall("call_v", "send_voice", { text: userText.slice(3).trim() || "你好呀" })];
     } else if (userText.startsWith("读图")) {
@@ -311,6 +314,7 @@ const noCtx = {
   images: [],
   onRunEnd: () => {},
   attachments: (_seq: number) => undefined as Array<{ name: string; url: string; contentType: string }> | undefined,
+  people: () => [] as Array<{ userId: string; name?: string; lastSeen: number }>,
 };
 
 /** A chat's events as stored. */
@@ -412,12 +416,12 @@ await test("config: old OPENROUTER_* names still work; the new names win", () =>
 await test("DeepSeek-backed tools only enabled with DEEPSEEK_API_KEY", () => {
   assert.deepEqual(
     activeTools().map((t) => t.name),
-    ["send_message", "send_sticker", "end_turn", "get_current_time", "calculate", "web_search", "web_fetch", "get_search_balance", "get_llm_key_limit"],
+    ["send_message", "send_sticker", "end_turn", "chat_members", "get_current_time", "calculate", "web_search", "web_fetch", "get_search_balance", "get_llm_key_limit"],
   );
   process.env.DEEPSEEK_API_KEY = "";
   assert.deepEqual(
     activeTools().map((t) => t.name),
-    ["send_message", "send_sticker", "end_turn", "get_current_time", "calculate", "get_llm_key_limit"],
+    ["send_message", "send_sticker", "end_turn", "chat_members", "get_current_time", "calculate", "get_llm_key_limit"],
   );
   process.env.DEEPSEEK_API_KEY = "ds-key";
 });
@@ -989,6 +993,63 @@ await test("qq voice/video/file: voice uses QQ's transcript, others become place
   );
   await drain();
   assert.match(llmRequests()[0]!.body.input[0].content, /\n\[语音\] 你好呀\n\[视频\]\n\[文件：报告\.pdf\]$/);
+});
+
+await test("qq mentions: others become \"@昵称 #ID\", the bot's own @ is dropped, and the log keeps who was mentioned", async () => {
+  await handleWebhook(
+    qqRequest({
+      op: 0,
+      t: "GROUP_AT_MESSAGE_CREATE",
+      d: {
+        id: "men-1",
+        content: '<@BOTSELF> 你看<@MEMBERAB2C08>凶巴巴的，<qqbot-at-user id="NEWBIE999999" /> 也来 <qqbot-at-everyone />',
+        group_openid: "GMENTION",
+        author: { member_openid: "MOMMA0000001", username: "党国华" },
+        mentions: [
+          { scope: "single", id: "BOTSELF", member_openid: "BOTSELF", is_you: true, bot: true, username: "大肥鱼" },
+          { scope: "single", id: "MEMBERAB2C08", member_openid: "MEMBERAB2C08", is_you: false, bot: false, username: "坏坏" },
+        ],
+      },
+    }),
+    "qq",
+  );
+  await drain();
+  const msg = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "user");
+  assert.match(textOf(msg), /\]\n你看@坏坏 #AB2C08凶巴巴的，@#999999 也来 @全体成员$/);
+  const stored = (await events("qq:group:GMENTION")).find((e) => e.type === "user/message")!;
+  assert.equal(stored.data.userId, "MOMMA0000001");
+  assert.deepEqual(stored.data.mentions, [{ userId: "MEMBERAB2C08", name: "坏坏" }, { userId: "NEWBIE999999" }], "not the bot");
+});
+
+await test("@#ID: in a group it becomes a real QQ mention of someone the log knows; otherwise it stays as text", async () => {
+  const said = (id: string, text: string, author: Record<string, unknown>) =>
+    qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id, content: text, group_openid: "GAT", author } });
+  await handleWebhook(said("at-1", " 路过", { member_openid: "MEMBERAB2C08", username: "坏坏" }), "qq");
+  await drain();
+  calls.length = 0;
+  await handleWebhook(said("at-2", " 艾特 @#ab2c08 有人找你，@#000000 你也来", { member_openid: "MOMMA0000001", username: "党国华" }), "qq");
+  await drain();
+  assert.deepEqual(sentTo("/v2/groups/GAT/messages").map((b) => b.content), ['<qqbot-at-user id="MEMBERAB2C08" /> 有人找你，@#000000 你也来']);
+  const sent = (await events("qq:group:GAT")).findLast((e) => e.type === "tool/result" && e.data.callId === "call_at")!;
+  assert.match(sent.data.output, /^sent as a reply/);
+
+  calls.length = 0;
+  await handleWebhook(c2c("at-3", "艾特 @#AB2C08 在吗", "PRIVATEAT"), "qq");
+  await drain();
+  assert.deepEqual(sentTo("/v2/users/PRIVATEAT/messages").map((b) => b.content), ["@#AB2C08 在吗"], "no mentions in a private chat");
+});
+
+await test("chat_members: who the log has seen, most recent first, with nickname, #ID and when", async () => {
+  const at = (iso: string) => Date.parse(iso);
+  const ctx = {
+    ...noCtx,
+    people: () => [
+      { userId: "MEMBERAB2C08", name: "坏坏", lastSeen: at("2026-11-05T12:03:00Z") },
+      { userId: "NEWBIE999999", lastSeen: at("2026-11-05T11:58:00Z") },
+    ],
+  };
+  assert.equal(await runTool("chat_members", "{}", ctx), "2 人：\n坏坏 #AB2C08（最后出现 11/05 20:03）\n#999999（最后出现 11/05 19:58）");
+  assert.equal(await runTool("chat_members", "{}", noCtx), "nobody yet");
 });
 
 await test("qq quote: the quoted message (text and picture) is shown and its picture can be saved", async () => {

@@ -1,4 +1,5 @@
 import type { Attachment, OutgoingFile, OutgoingVoice } from "../channels/types.js";
+import type { ChatPerson } from "../conversation/people.js";
 import type { ImagePart } from "../media/images.js";
 
 /** Something a tool delivers to the chat. */
@@ -36,6 +37,8 @@ export interface ToolContext {
   onRunEnd(fn: () => Promise<void> | void): void;
   /** The attachments of message `seq` (its 第N条 number): [] when it has none, undefined when there's no such message. */
   attachments(seq: number): Attachment[] | undefined;
+  /** Everyone this chat's log has seen (wrote or was @-mentioned), most recently seen first. */
+  people(): ChatPerson[];
 }
 
 /**

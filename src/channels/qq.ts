@@ -11,7 +11,8 @@ import crypto from "node:crypto";
 import { config } from "../config.js";
 import { pcmToSilk } from "../media/voice.js";
 import { ChannelUnreachableError, platformFetch } from "./net.js";
-import { chunkText, json, type Attachment, type ChannelAdapter, type InboundMessage, type OutgoingFile, type ReceiveResult } from "./types.js";
+import { personLabel } from "./format.js";
+import { chunkText, json, type Attachment, type ChannelAdapter, type InboundMessage, type OutgoingFile, type Person, type ReceiveResult } from "./types.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -156,8 +157,8 @@ interface QQMessageEvent {
   /** When the user sent it, e.g. "2026-11-03T20:43:00+08:00". */
   timestamp?: string;
   author?: { id?: string; user_openid?: string; member_openid?: string; username?: string; bot?: boolean };
-  /** Present on some group payloads; `is_you` marks a mention of this bot. */
-  mentions?: Array<{ is_you?: boolean }>;
+  /** Who the message @-mentions: `is_you` marks this bot; scope "all" is @全体成员. */
+  mentions?: QQMention[];
   /** Images, voice (with QQ's own transcript), video, files. URLs may start with "//". */
   attachments?: Array<{ content_type?: string; url?: string; filename?: string; asr_refer_text?: string }>;
   group_openid?: string;
@@ -172,6 +173,16 @@ interface QQMessageEvent {
   message_type?: number;
   message_scene?: { ext?: unknown };
   msg_elements?: QQQuotedElement[];
+}
+
+interface QQMention {
+  scope?: string;
+  id?: string;
+  member_openid?: string;
+  user_openid?: string;
+  username?: string;
+  bot?: boolean;
+  is_you?: boolean;
 }
 
 interface QQQuotedElement {
@@ -196,8 +207,7 @@ function quotedElement(d: QQMessageEvent): QQQuotedElement | undefined {
 function quotedAuthor(a: QQQuotedElement["author"]): string {
   if (a?.bot) return "你";
   const openid = a?.member_openid ?? a?.user_openid ?? a?.id ?? "";
-  const id = openid ? `#${openid.slice(-6).toUpperCase()}` : "";
-  return [a?.username, id].filter(Boolean).join(" ") || "某人";
+  return openid ? personLabel(openid, a?.username) : a?.username || "某人";
 }
 
 /**
@@ -215,7 +225,7 @@ function quoteOf(d: QQMessageEvent) {
     return undefined;
   }
   const parsed = parseAttachments(q.attachments);
-  let text = cleanContent(q.content);
+  let text = renderMentions(q.content).text;
   if (text.length > MAX_QUOTE_CHARS) text = `${text.slice(0, MAX_QUOTE_CHARS)}…`;
   const body = [text, ...parsed.images.map(() => "[图片]"), ...parsed.notes].filter(Boolean).join("\n") || "（内容没收到）";
   console.log(`[qq] ${d.id}: quotes ${q.author?.bot ? "the bot" : "a member"} (${text.length} chars, ${parsed.attachments.length} attachment(s))`);
@@ -229,9 +239,32 @@ function mentionsBot(d: QQMessageEvent): boolean {
   return Boolean(appId) && new RegExp(`<@!?${appId}>`).test(d.content ?? "");
 }
 
-/** Strip channel-style mentions (`<@!123>`) and surrounding whitespace. */
-function cleanContent(content: string | undefined): string {
-  return (content ?? "").replace(/<@!?\w+>/g, "").trim();
+/** A mention in the text: `<qqbot-at-user id="…" />`, or the older `<@…>` / `<@!…>`. */
+const MENTION_TAG = /<qqbot-at-user id="(\w+)"\s*\/>|<@!?(\w+)>/g;
+const EVERYONE_TAG = /<qqbot-at-everyone\s*\/>/g;
+
+/**
+ * Mentions as the model reads people: "@昵称 #3B6834" (names from the
+ * `mentions` list), "@全体成员". Mentions of this bot are dropped: the message
+ * header already says "@你". Also returns the people mentioned.
+ */
+function renderMentions(content: string | undefined, mentions: QQMention[] = []): { text: string; people: Person[] } {
+  const byId = new Map<string, QQMention>();
+  for (const m of mentions) for (const id of [m.id, m.member_openid, m.user_openid]) if (id) byId.set(id, m);
+  const people: Person[] = [];
+  const text = (content ?? "")
+    .replace(MENTION_TAG, (_tag, tagged: string | undefined, legacy: string | undefined) => {
+      const id = (tagged ?? legacy)!;
+      const m = byId.get(id);
+      if (m?.is_you || id === config.qq.appId) return "";
+      if (m?.bot) return `@${m.username || "机器人"}`;
+      const userId = m?.member_openid ?? m?.user_openid ?? id;
+      people.push({ userId, ...(m?.username ? { name: m.username } : {}) });
+      return `@${personLabel(userId, m?.username)}`;
+    })
+    .replace(EVERYONE_TAG, "@全体成员")
+    .trim();
+  return { text, people };
 }
 
 /**
@@ -279,7 +312,8 @@ function toInbound(t: string, d: QQMessageEvent): InboundMessage | undefined {
 }
 
 function parseEvent(t: string, d: QQMessageEvent): InboundMessage | undefined {
-  const base = { channel: "qq", eventId: d.id, text: cleanContent(d.content) };
+  const { text, people } = renderMentions(d.content, d.mentions);
+  const base = { channel: "qq", eventId: d.id, text, ...(people.length ? { mentions: people } : {}) };
   switch (t) {
     case "C2C_MESSAGE_CREATE": {
       const openid = d.author?.user_openid ?? "";
@@ -339,6 +373,8 @@ const ACK = () => json({ op: OP_HTTP_CALLBACK_ACK, d: 0 });
 export const qqAdapter: ChannelAdapter = {
   name: "qq",
   promptHint: "This is QQ: reply in plain text, no Markdown syntax. Keep replies under 1500 characters.",
+  /** bot-docs text-chain.md: works in group messages (and text sub-channels). */
+  mentionTag: (userId) => `<qqbot-at-user id="${userId}" />`,
   /** Passive replies: 5 per inbound message (bot-docs send.md). */
   maxRepliesPerMessage: 5,
 

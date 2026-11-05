@@ -1,4 +1,5 @@
-/** Talking and hanging up: send_message, send_sticker, end_turn, and the reply rules they share. */
+/** Talking and hanging up: send_message, send_sticker, end_turn, chat_members, and the reply rules they share. */
+import { personLabel } from "../channels/format.js";
 import { config } from "../config.js";
 import { DEFAULT_STICKER_BASE_URL, isStickerName, STICKER_NAMES, STICKERS, stickerUrl } from "./stickers.js";
 import type { Tool } from "./types.js";
@@ -48,6 +49,33 @@ export const sendSticker: Tool = {
     const name = String(args.name ?? "");
     if (!isStickerName(name)) throw new Error(`unknown sticker "${name}"`);
     return `${await ctx.send({ kind: "image", url: stickerUrl(config.stickerBaseUrl || DEFAULT_STICKER_BASE_URL, name), label: `[表情包：${name}]` }, replyTo(args))}. If you're done, call end_turn (in the same step as your last message).`;
+  },
+};
+
+/** Most people chat_members lists. */
+const MAX_MEMBERS = 50;
+
+export const chatMembers: Tool = {
+  name: "chat_members",
+  description:
+    "Who has been in this chat lately: everyone who wrote or was @-mentioned in the conversation you can still see, " +
+    "most recently seen first, as \"nickname #ID\" with when they were last seen. QQ doesn't give bots the member list, " +
+    "so people who never spoke aren't here. Use it to find someone's #ID, e.g. to @ them: write @#ID in send_message.",
+  parameters: { type: "object", properties: {} },
+  run(_args, ctx) {
+    const people = ctx.people();
+    if (!people.length) return "nobody yet";
+    const when = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: config.agent.timezone,
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    const lines = people.slice(0, MAX_MEMBERS).map((p) => `${personLabel(p.userId, p.name)}（最后出现 ${when.format(p.lastSeen)}）`);
+    const more = people.length > MAX_MEMBERS ? `\n……还有 ${people.length - MAX_MEMBERS} 人` : "";
+    return `${people.length} 人：\n${lines.join("\n")}${more}`;
   },
 };
 

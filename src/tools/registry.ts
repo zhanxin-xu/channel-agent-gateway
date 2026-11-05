@@ -4,7 +4,7 @@
  * sees, and a `run` function that returns a string.
  */
 import { llmKeyLimit, searchBalance } from "./account.js";
-import { endTurn, sendMessage, sendSticker } from "./chat.js";
+import { chatMembers, endTurn, sendMessage, sendSticker } from "./chat.js";
 import { generateImage } from "./image.js";
 import { forget, recall, remember } from "./memory.js";
 import { bash, readFile, saveAttachment, sendFile, writeFile } from "./sandbox/tools.js";
@@ -18,6 +18,7 @@ const tools: Tool[] = [
   sendSticker,
   sendVoice,
   endTurn,
+  chatMembers,
   getCurrentTime,
   calculate,
   webSearch,

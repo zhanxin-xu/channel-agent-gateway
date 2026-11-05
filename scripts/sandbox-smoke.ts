@@ -18,6 +18,7 @@ const newCtx = (): ToolContext => ({
   send: async () => "sent",
   deadline: Date.now() + 300_000,
   callBudgetMs: () => 280_000,
+  people: () => [],
   chat,
   images: [],
   onRunEnd: () => {},

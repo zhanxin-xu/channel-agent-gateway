@@ -7,6 +7,7 @@
 | `send_message` | 发一条消息 | 始终启用 |
 | `send_sticker` | 发一张表情包 | 始终启用 |
 | `end_turn` | 挂断，结束这一轮 | 始终启用 |
+| `chat_members` | 列出这个聊天最近出现过的人（昵称、#编号、最后出现时间），用来查编号、@ 人 | 始终启用 |
 | `get_current_time` | 查询当前时间（可指定时区） | 始终启用 |
 | `calculate` | 四则运算、取模、乘方 | 始终启用 |
 | `web_search` / `web_fetch` | 联网搜索、抓取网页正文 | 配置了 `DEEPSEEK_API_KEY` |

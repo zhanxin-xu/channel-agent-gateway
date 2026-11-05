@@ -17,7 +17,7 @@
  * supabase/schema.sql). Webhooks only append; reading, recovery and trimming
  * happen in the single agent run that holds the chat's lock (see runtime/runner.ts).
  */
-import type { Attachment } from "../channels/types.js";
+import type { Attachment, Person } from "../channels/types.js";
 
 /** A Responses API output item, stored and replayed untouched. */
 export type OutputItem =
@@ -49,6 +49,10 @@ export interface EventMap {
     header: string;
     text: string;
     sender: string;
+    /** The sender's platform id, for the chat's roster and for @-ing them; not model-visible. */
+    userId?: string;
+    /** Other people the message @-mentioned (already shown in `text`); not model-visible. */
+    mentions?: Person[];
     /** A DM, or a group message that @-mentions the bot. */
     mentioned: boolean;
     /** Store keys of the images, shrunk to what the model looks at. */

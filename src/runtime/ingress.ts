@@ -56,6 +56,8 @@ export async function handleMessage(
           header: messageHeader(message),
           text: message.text,
           sender: senderLabel(message),
+          ...(message.userId ? { userId: message.userId } : {}),
+          ...(message.mentions?.length ? { mentions: message.mentions } : {}),
           mentioned: direct,
           ...(images.keys.length ? { images: images.keys } : {}),
           ...(images.failed ? { imagesFailed: images.failed } : {}),

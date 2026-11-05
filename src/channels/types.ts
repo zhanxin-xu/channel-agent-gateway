@@ -1,4 +1,10 @@
 /** A user message normalized from any channel. */
+/** Someone in a chat: their platform id, and their display name when known. */
+export interface Person {
+  userId: string;
+  name?: string;
+}
+
 export interface InboundMessage {
   channel: string;
   /** Unique per delivery; used to drop webhook retries. */
@@ -15,6 +21,8 @@ export interface InboundMessage {
   userId: string;
   /** Display name when the platform provides one. */
   senderName?: string;
+  /** Other people this message @-mentions (the text shows them as "@昵称 #ID"). */
+  mentions?: Person[];
   /** Message text. Voice/video/file attachments appear here as "[语音] …", "[视频]", "[文件：…]". */
   text: string;
   /** Images attached to the message (stored with it and shown to the model). */
@@ -81,6 +89,12 @@ export interface ChannelAdapter {
    * WAV file through sendFile, or the words as text when they can't send files.
    */
   sendVoice?(message: InboundMessage, voice: OutgoingVoice): Promise<void>;
+  /**
+   * The markup that @-mentions a person in a group message's text. The agent
+   * writes "@#3B6834" and the gateway swaps in this tag; without it the text
+   * stays as written.
+   */
+  mentionTag?(userId: string): string;
   /** Optional "typing…" indicator shown while the agent runs. */
   typing?(message: InboundMessage): Promise<void>;
 }
