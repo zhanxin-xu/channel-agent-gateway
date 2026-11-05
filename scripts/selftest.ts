@@ -156,6 +156,8 @@ async function fakeResponses(body: any) {
     } else if (userText.startsWith("断网")) {
       // A model that keeps trying: two messages every step, whatever happened before.
       output = [fnCall(`call_n${llmCalls}a`, "send_message", { text: "第一句" }), fnCall(`call_n${llmCalls}b`, "send_message", { text: "第二句" })];
+    } else if (userText.startsWith("引用")) {
+      output = toolOutput ? [] : [sendCall("call_quote", "收到", { quote: true })];
     } else if (userText.startsWith("艾特")) {
       // Says the rest of the message back, so a test can put @#ID in it.
       output = toolOutput ? [] : [sendCall("call_at", userText.slice(2).trim())];
@@ -1055,6 +1057,47 @@ await test("@#ID: in a group, a Markdown message with a real QQ mention; plain \
   await handleWebhook(c2c("at-4", "艾特 @#AB2C08 在吗", "PRIVATEAT"), "qq");
   await drain();
   assert.deepEqual(sentTo("/v2/users/PRIVATEAT/messages").map((b) => b.content), ["@#AB2C08 在吗"], "no mentions in a private chat");
+});
+
+await test("quote: the model can make a reply quote the message it answers; QQ refusing the quote doesn't lose the reply", async () => {
+  const msg = (id: string, text: string, ext?: string[]) =>
+    qqRequest({
+      op: 0,
+      t: "GROUP_AT_MESSAGE_CREATE",
+      d: { id, content: text, group_openid: "GQUOTED", author: { member_openid: "MQ" }, ...(ext ? { message_scene: { source: "default", ext } } : {}) },
+    });
+  await handleWebhook(msg("q-1", " 引用一下", ["msg_idx=REFIDX_q1"]), "qq");
+  await drain();
+  let [reply] = sentTo("/v2/groups/GQUOTED/messages");
+  assert.deepEqual(reply.message_reference, { message_id: "REFIDX_q1" }, "quoted by the message's msg_idx");
+  assert.equal(reply.msg_id, "q-1");
+
+  calls.length = 0;
+  await handleWebhook(msg("q-2", " 表情", ["msg_idx=REFIDX_q2"]), "qq");
+  await drain();
+  assert.ok(sentTo("/v2/groups/GQUOTED/messages").every((b) => b.message_reference === undefined), "not asked: no quote");
+
+  calls.length = 0;
+  await handleWebhook(msg("q-3", " 引用一下"), "qq");
+  await drain();
+  [reply] = sentTo("/v2/groups/GQUOTED/messages");
+  assert.equal(reply.message_reference, undefined, "no msg_idx to point at: sent without");
+
+  calls.length = 0;
+  qqReply = (body) => (body?.message_reference ? Response.json({ code: 11255, message: "invalid reference" }, { status: 400 }) : undefined);
+  try {
+    await handleWebhook(msg("q-4", " 引用一下", ["msg_idx=REFIDX_q4"]), "qq");
+    await drain();
+  } finally {
+    qqReply = undefined;
+  }
+  assert.deepEqual(
+    sentTo("/v2/groups/GQUOTED/messages").map((b) => [b.content, b.message_reference?.message_id ?? null, b.msg_seq]),
+    [["收到", "REFIDX_q4", 1], ["收到", null, 2]],
+    "refused with the quote, sent again without it (next msg_seq)",
+  );
+  const tool = activeTools().find((t) => t.name === "send_message")!;
+  assert.ok((tool.parameters as any).properties.quote, "send_message offers quote");
 });
 
 await test("chat roster: senders logged before ids were kept still count, by #ID and nickname", async () => {

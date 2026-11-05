@@ -67,6 +67,10 @@ QQ 频道（`AT_MESSAGE_CREATE` / `DIRECT_MESSAGE_CREATE`）只按官方文档�
 - **@ 别人**：消息里的 @ 标记（`<@openid>` 或 `<qqbot-at-user id="…" />`）换成模型认得的写法：`@昵称 #编号`（昵称取自事件的 `mentions` 列表），`<qqbot-at-everyone />` 换成 `@全体成员`；@ 机器人自己的标记去掉，消息头里已经有"@你"。被 @ 的人和发送人的 openid 一起记进事件流（模型看不到），用来认人。
 - **机器人 @ 别人**：模型在群消息里写 `@#编号`（比如 `@#AB2C08`）。QQ 群里只有 **Markdown 消息**能 @ 人（[文本交互](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/text-chain.html)：群聊 @用户 只支持 Markdown，id 填 `member_openid`；普通文本里的标签会原样显示），所以带 @ 的这条消息改用 `msg_type: 2` 发，`@#编号` 换成 `<qqbot-at-user id="member_openid" />`，其余文字转义掉 Markdown 符号（`*`、`_`、`` ` ``、`[`、行首的 `#`、`-` 等）。群聊 Markdown 从 2026-04-23 起所有机器人都能发，不用申请。QQ 拒收 Markdown 时退回普通文本，@ 写成 `@昵称`；QQ 连不上时不重发，免得发两遍。只有这个群的事件流里出现过、而且记下了完整 openid 的人能被真的 @；只知道昵称的（升级前的旧消息）写成 `@昵称`，完全没见过的编号原样发出。私聊里不转换。要查编号用 `chat_members` 工具。QQ 不给机器人群成员列表，所以没说过话的人查不到。
 
+### 引用回复
+
+发消息的工具（`send_message`、`send_sticker`、`send_voice`、`send_file`）都有 `quote` 参数，由模型决定要不要引用：设为 `true` 时，这条回复在 QQ 里显示成引用框，引用的就是 `reply_to` 那条消息。实现是在发送时加 `message_reference: { message_id: "REFIDX_…" }`，`REFIDX_…` 取自那条消息事件里 `message_scene.ext` 的 `msg_idx=…`，收消息时存进回复上下文。QQ 文档里没写这个字段，用法参照 NoneBot 的 QQ 适配器；QQ 拒收带引用的回复时，去掉引用再发一次，消息不会丢。长文本拆成几段时只有第一段带引用；升级前收到的消息没存 `msg_idx`，引用不了，照常回复。
+
 ### 被动回复规则
 
 机器人的回复都是被动回复：带上用户消息的 `msg_id`，`msg_seq` 依次递增。平台规则如下：

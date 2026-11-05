@@ -4,7 +4,7 @@ import type { Attachment } from "../../channels/types.js";
 import { config } from "../../config.js";
 import { messageLabel } from "../../conversation/events.js";
 import type { ImagePart } from "../../media/images.js";
-import { REPLY_TO, replyTo } from "../chat.js";
+import { QUOTE, REPLY_TO, replyTo, sendOptions } from "../chat.js";
 import type { Tool, ToolContext } from "../types.js";
 import { WORKDIR, workspaceFor } from "./workspace.js";
 
@@ -229,7 +229,7 @@ export const sendFile: Tool = {
     "mp3/wav/silk as voice, anything else as a file attachment. At most 5 MB.",
   parameters: {
     type: "object",
-    properties: { path: { type: "string", description: `File path (relative paths are under ${WORKDIR}).` }, reply_to: REPLY_TO },
+    properties: { path: { type: "string", description: `File path (relative paths are under ${WORKDIR}).` }, reply_to: REPLY_TO, quote: QUOTE },
     required: ["path"],
   },
   enabled,
@@ -240,7 +240,7 @@ export const sendFile: Tool = {
     if (data.byteLength > MAX_SEND_BYTES) {
       throw new Error(`${file} is ${data.byteLength} bytes, over the 5 MB limit; compress or split it`);
     }
-    const status = await ctx.send({ kind: "file", file: { name: path.posix.basename(file), data } }, replyTo(args));
+    const status = await ctx.send({ kind: "file", file: { name: path.posix.basename(file), data } }, replyTo(args), sendOptions(args));
     return `${status}. If you're done, call end_turn (in the same step as your last message).`;
   },
 };

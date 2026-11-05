@@ -20,7 +20,7 @@ export interface ToolContext {
    * Throws when that message can't take more replies, or the channel can't
    * deliver this kind of message (files).
    */
-  send(message: Outgoing, replyTo?: number): Promise<string>;
+  send(message: Outgoing, replyTo?: number, opts?: { quote?: boolean }): Promise<string>;
   /** When the function will be killed (epoch ms). */
   deadline: number;
   /**

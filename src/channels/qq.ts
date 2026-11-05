@@ -204,10 +204,15 @@ interface QQQuotedElement {
 /** Longest quoted text shown to the model. */
 const MAX_QUOTE_CHARS = 500;
 
+/** A "key=value" entry of `message_scene.ext` (e.g. msg_idx, ref_msg_idx). */
+function sceneExt(d: QQMessageEvent, key: string): string | undefined {
+  const ext = Array.isArray(d.message_scene?.ext) ? d.message_scene.ext : [];
+  return ext.find((v): v is string => typeof v === "string" && v.startsWith(`${key}=`))?.slice(key.length + 1) || undefined;
+}
+
 /** The message this one quotes (a reply in QQ's UI), if any. */
 function quotedElement(d: QQMessageEvent): QQQuotedElement | undefined {
-  const ext = Array.isArray(d.message_scene?.ext) ? d.message_scene.ext : [];
-  const ref = ext.find((v): v is string => typeof v === "string" && v.startsWith("ref_msg_idx="))?.slice("ref_msg_idx=".length);
+  const ref = sceneExt(d, "ref_msg_idx");
   if (!ref || !Array.isArray(d.msg_elements)) return undefined;
   return d.msg_elements.find((e) => e?.msg_idx === ref);
 }
@@ -323,6 +328,9 @@ function toInbound(t: string, d: QQMessageEvent): InboundMessage | undefined {
 function parseEvent(t: string, d: QQMessageEvent): InboundMessage | undefined {
   const { text, people } = renderMentions(d.content, d.mentions);
   const base = { channel: "qq", eventId: d.id, text, ...(people.length ? { mentions: people } : {}) };
+  // What a reply quoting this message points at (see replyV2).
+  const refIdx = sceneExt(d, "msg_idx");
+  const quotable: Record<string, string> = refIdx ? { refIdx } : {};
   switch (t) {
     case "C2C_MESSAGE_CREATE": {
       const openid = d.author?.user_openid ?? "";
@@ -331,7 +339,7 @@ function parseEvent(t: string, d: QQMessageEvent): InboundMessage | undefined {
         conversationId: `c2c:${openid}`,
         chatType: "private",
         userId: openid,
-        replyContext: { scope: "c2c", target: openid, msgId: d.id },
+        replyContext: { scope: "c2c", target: openid, msgId: d.id, ...quotable },
       };
     }
     // GROUP_AT_MESSAGE_CREATE: someone @-ed the bot. GROUP_MESSAGE_CREATE: every
@@ -349,7 +357,7 @@ function parseEvent(t: string, d: QQMessageEvent): InboundMessage | undefined {
         mode: mentioned ? "direct" : "ambient",
         userId: d.author?.member_openid ?? "",
         senderName: d.author?.username || undefined,
-        replyContext: { scope: "group", target: group, msgId: d.id },
+        replyContext: { scope: "group", target: group, msgId: d.id, ...quotable },
       };
     }
     case "AT_MESSAGE_CREATE": {
@@ -430,17 +438,19 @@ export const qqAdapter: ChannelAdapter = {
   async send(message, text) {
     const ctx = message.replyContext;
     const { scope, target, msgId } = ctx;
-    for (const content of chunkText(text, MAX_CHUNK)) {
-      const seq = nextSeq(ctx);
+    for (const [i, content] of chunkText(text, MAX_CHUNK).entries()) {
       switch (scope) {
         case "c2c":
         case "group":
-          await qqApi(`${v2Base(scope, target!)}/messages`, { content, msg_type: 0, msg_id: msgId, msg_seq: seq });
+          // Only the first piece of a long text quotes.
+          await replyV2(i === 0 ? message : { ...message, quote: false }, { content, msg_type: 0 });
           break;
         case "channel":
+          nextSeq(ctx);
           await qqApi(`/channels/${target}/messages`, { content, msg_id: msgId });
           break;
         case "dm":
+          nextSeq(ctx);
           await qqApi(`/dms/${target}/messages`, { content, msg_id: msgId });
           break;
       }
@@ -454,13 +464,11 @@ export const qqAdapter: ChannelAdapter = {
    * "@昵称" instead, so the message still arrives.
    */
   async sendMentions(message, parts) {
-    const ctx = message.replyContext;
-    const { scope, target, msgId } = ctx;
     const plain = partsToText(parts);
-    if (scope !== "group" || plain.length > MAX_CHUNK) return qqAdapter.send!(message, plain);
+    if (message.replyContext.scope !== "group" || plain.length > MAX_CHUNK) return qqAdapter.send!(message, plain);
     const content = parts.map((p) => (typeof p === "string" ? escapeMarkdown(p) : `<qqbot-at-user id="${p.mention.userId}" />`)).join("");
     try {
-      await qqApi(`${v2Base(scope, target!)}/messages`, { msg_type: 2, markdown: { content }, msg_id: msgId, msg_seq: nextSeq(ctx) });
+      await replyV2(message, { msg_type: 2, markdown: { content } });
     } catch (err) {
       // QQ unreachable: the outbox stops the run; a retry here could post the message twice.
       if (unreachableReason(err)) throw err;
@@ -475,9 +483,8 @@ export const qqAdapter: ChannelAdapter = {
     switch (scope) {
       case "c2c":
       case "group": {
-        const base = v2Base(scope, target!);
-        const fileInfo = await uploadImage(base, url);
-        await qqApi(`${base}/messages`, { msg_type: 7, media: { file_info: fileInfo }, msg_id: msgId, msg_seq: nextSeq(ctx) });
+        const fileInfo = await uploadImage(v2Base(scope, target!), url);
+        await replyV2(message, { msg_type: 7, media: { file_info: fileInfo } });
         break;
       }
       // Guild channels take the image URL directly.
@@ -511,7 +518,6 @@ function filesTarget(message: InboundMessage): string {
 
 /** Upload the bytes directly (file_data, base64, up to 5 MB), then send them as msg_type 7. */
 async function uploadAndSend(message: InboundMessage, file: OutgoingFile): Promise<void> {
-  const ctx = message.replyContext;
   const base = filesTarget(message);
   const res = await qqApi<{ file_info?: string }>(`${base}/files`, {
     file_type: qqFileType(file.name),
@@ -520,7 +526,7 @@ async function uploadAndSend(message: InboundMessage, file: OutgoingFile): Promi
     srv_send_msg: false,
   });
   if (!res.file_info) throw new Error(`QQ upload ${base}/files returned no file_info`);
-  await qqApi(`${base}/messages`, { msg_type: 7, media: { file_info: res.file_info }, msg_id: ctx.msgId, msg_seq: nextSeq(ctx) });
+  await replyV2(message, { msg_type: 7, media: { file_info: res.file_info } });
 }
 
 /**
@@ -533,6 +539,32 @@ function escapeMarkdown(text: string): string {
     .replace(/[\\`*_~[\]]/g, "\\$&")
     .replace(/^(\s*)([#>+-])/gm, "$1\\$2")
     .replace(/^(\s*\d+)\./gm, "$1\\.");
+}
+
+/**
+ * A passive reply in a v2 chat (c2c or group): the message's msg_id and the
+ * next msg_seq, plus, when the agent asked to quote (message.quote), a
+ * message_reference to the message's msg_idx, which QQ shows as a 回复 box.
+ * The quote isn't in QQ's docs (NoneBot sends it the same way), so if QQ
+ * refuses a quoted reply, it goes again without the quote.
+ */
+async function replyV2(message: InboundMessage, body: Record<string, unknown>): Promise<void> {
+  const ctx = message.replyContext;
+  const path = `${v2Base(ctx.scope!, ctx.target!)}/messages`;
+  const post = (quote: boolean) =>
+    qqApi(path, { ...body, msg_id: ctx.msgId, msg_seq: nextSeq(ctx), ...(quote ? { message_reference: { message_id: ctx.refIdx } } : {}) });
+  if (!message.quote || !ctx.refIdx) {
+    await post(false);
+    return;
+  }
+  try {
+    await post(true);
+  } catch (err) {
+    // QQ unreachable: the outbox stops the run; resending could post the message twice.
+    if (unreachableReason(err)) throw err;
+    console.warn(`[qq] quoted reply refused, sending it without the quote: ${err instanceof Error ? err.message : String(err)}`);
+    await post(false);
+  }
 }
 
 function v2Base(scope: string, target: string): string {

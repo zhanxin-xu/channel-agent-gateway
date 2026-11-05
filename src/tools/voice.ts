@@ -10,7 +10,7 @@
  */
 import { config } from "../config.js";
 import { bundledDataUrl } from "../media/assets.js";
-import { REPLY_TO, replyTo } from "./chat.js";
+import { QUOTE, REPLY_TO, replyTo, sendOptions } from "./chat.js";
 import type { Tool } from "./types.js";
 
 /** Long text makes a long, slow message; chat voice should be short. */
@@ -175,6 +175,7 @@ export const sendVoice: Tool = {
         voice: { type: "string", enum: voiceChoices(), description: `Whose voice. Default ${voiceChoices()[0]}.` },
         speed: { type: "number", minimum: MIN_SPEED, maximum: MAX_SPEED, description: "Optional speaking rate, 1 = normal (not every model honors it)." },
         reply_to: REPLY_TO,
+        quote: QUOTE,
       },
       required: ["text"],
     };
@@ -237,7 +238,7 @@ export const sendVoice: Tool = {
     if (pcm.byteLength < 2) throw new Error("speech API returned no audio");
     const seconds = (pcm.byteLength / 2 / sampleRate).toFixed(1);
 
-    const status = await ctx.send({ kind: "voice", voice: { pcm, sampleRate, text } }, replyTo(args));
+    const status = await ctx.send({ kind: "voice", voice: { pcm, sampleRate, text } }, replyTo(args), sendOptions(args));
     const how = [sing ? "sung" : "spoken", `model=${model}`, `voice=${voice}`, ...(speed !== undefined ? [`speed=${speed}`] : []), `${seconds}s`];
     return `${status} (voice message: ${how.join(", ")}). If you're done, call end_turn (in the same step as your last message).`;
   },

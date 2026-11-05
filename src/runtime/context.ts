@@ -53,9 +53,10 @@ export function makeToolContext(
     callBudgetMs: () => callBudgetMs(deadline),
     chat: { key: chatKey, scene: meta.chatType === "group" ? "群聊" : "私聊", sender: "?" },
     images: [],
-    async send(message, replyTo) {
+    async send(message, replyTo, opts) {
       if (message.kind === "file" && (collect || !adapter.sendFile)) throw new Error(`the ${adapter.name} channel can't send files`);
-      const status = await outbox.deliver(replyTo ?? turnState.main, (msg) => deliver(message, msg));
+      // The copy keeps the same replyContext object: the adapter's updates to it (QQ's msg_seq) are saved.
+      const status = await outbox.deliver(replyTo ?? turnState.main, (msg) => deliver(message, opts?.quote ? { ...msg, quote: true } : msg));
       this.sent.push(
         message.kind === "text"
           ? message.text

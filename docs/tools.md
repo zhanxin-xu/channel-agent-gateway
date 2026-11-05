@@ -76,6 +76,7 @@
 | `voice` | `dafeiyu`（默认，克隆大肥鱼）、`dafeiyu_sing`（配置了唱歌参考音频才有）、`none`（不克隆，演别的角色） |
 | `speed` | 可选，0.5–2，Fish 认，Seed 忽略（不会发给它） |
 | `reply_to` | 回复哪条消息，同 `send_message` |
+| `quote` | 显示成引用 `reply_to` 那条消息，同 `send_message` |
 
 工具描述是按配置现拼的：只教当前配置的那个语音模型的写法（`text` 和 `instructions` 怎么写、唱歌怎么写），只列出可用的音色。效果不好时（群友说不像、像念的），描述让模型换音色或写法再试，而不是原样重发；好用的组合可以用 `remember` 记下来。工具结果会写明这次用了什么，例如 `voice message: sung, model=…, voice=dafeiyu, 9.4s`，日志里能看出用的哪个模型。
 
@@ -108,7 +109,7 @@
 | `bash` | 在工作目录 `/workspace` 执行命令，返回 stdout 和 stderr，过长时保留开头和结尾 |
 | `write_file` | 写入文本文件，自动创建上级目录 |
 | `read_file` | 读取文件；读到 png/jpg/gif/webp 时，会把图片直接给模型看 |
-| `send_file` | 把工作区里的文件发到聊天，最大 5 MB，和 `send_message` 一样可以用 `reply_to`，计入那条消息的 5 次回复 |
+| `send_file` | 把工作区里的文件发到聊天，最大 5 MB，和 `send_message` 一样可以用 `reply_to` 和 `quote`，计入那条消息的 5 次回复 |
 | `save_attachment` | 把某条消息里别人发来的图片或文件的**原件**存进 `/workspace/inbox/`，文件名是 `{消息编号}-{原文件名}`。参数是消息编号（第N条的 N），可选 `index` 只存第几个附件，默认全部 |
 
 - **用到才创建**：一轮回复里第一次调用工作区工具时才创建沙盒，这一轮的所有调用共用它，结束后立即停止。只聊天不用工具的轮次不会创建沙盒。

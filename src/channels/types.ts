@@ -41,6 +41,8 @@ export interface InboundMessage {
    * (QQ's msg_seq) and the update is saved for the next reply.
    */
   replyContext: Record<string, string>;
+  /** Outgoing only: show the reply as a quote of this message, where the platform can (QQ's 回复 box). */
+  quote?: boolean;
 }
 
 export type ReceiveResult =
