@@ -51,6 +51,7 @@
 |---|---|
 | `prompt` | 要画什么，或者要怎么改参考图 |
 | `input_references` | 参考图，最多 16 张。填**工作区里的路径**（相对路径在 `/workspace` 下，比如 `inbox/632-photo.jpg`），工具读出文件转成 data URL 再发给接口；也可以直接填 https 链接 |
+| `include_self` | 画里有大肥鱼自己时设为 `true`：她的形象图作为第一张参考图一起发过去（算在 16 张里）。配置了形象图才有这个参数 |
 | `aspect_ratio` | `auto`、`1:1`、`3:2`、`2:3`、`4:3`、`3:4`、`16:9`、`9:16`、`21:9` |
 | `background` | `auto`、`transparent`、`opaque` |
 | `n` | 生成几张，1–10，默认 1 |
@@ -59,6 +60,7 @@
 
 - **结果**：存到 `/workspace/images/{时间}-{序号}.png`。超过 1920×1080（横竖都算）的会先缩小再保存。同时把一张 1024px 的预览给模型看，确认没问题后再用 `send_file` 发到聊天。
 - **修别人发的照片**：先用 `save_attachment` 把原图存进 `/workspace/inbox/`，再把这个路径填进 `input_references`。
+- **自拍长得一样**：仓库里有一张大肥鱼的形象图 [`assets/persona/dafeiyu.webp`](../assets/persona/dafeiyu.webp)（768px，约 90 KB）。`include_self` 时它排在参考图第一张，提示词末尾再加一句英文，告诉图像模型"第一张参考图就是她本人，保持脸、浅蓝长发和呆毛、鲸鱼鳍耳朵、鲸鱼发夹、蓝眼睛，姿势、场景、衣服按要求画"。人设里也写了她的长相，并告诉模型画自己时要打开 `include_self`，别凭空描述长相。换形象就替换这张图，或者用 `IMAGE_SELF_REFERENCE` 指向别的文件或链接。
 - **费用**：每次调用都按图收费，工具结果里会带上接口返回的 `cost`。和余额工具一样，群里任何人都能让机器人画图，介意的话不要配置 `IMAGE_API_KEY`。
 
 ## 语音

@@ -90,6 +90,7 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 | `IMAGE_RESOLUTION` | `1K` | 对应接口的 `resolution`：`512`、`768`、`1K`、`1.5K`、`2K`、`4K`。不管设成多少，结果都会再缩到 1920×1080 以内（横竖都算）再保存 |
 | `IMAGE_EXTRA_BODY` | 空 | JSON 对象，合并进请求体，例如 `{"provider":{"options":{"openai":{"moderation":"low"}}}}` |
 | `IMAGE_TIMEOUT_MS` | `180000` | 单次请求的超时时间（毫秒），临近函数时限时会自动缩短 |
+| `IMAGE_SELF_REFERENCE` | `assets/persona/dafeiyu.webp` | 大肥鱼的形象图：部署里的文件路径或 https 链接，画她自己时作为参考图（`include_self`）。填 `none` 关闭。放进仓库的新文件要在 `vercel.json` 的 `includeFiles` 里能匹配到（现在整个 `assets/` 都会打包），体积尽量小 |
 
 ## 语音
 

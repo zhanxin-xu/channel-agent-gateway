@@ -2,10 +2,15 @@
  * generate_image: OpenRouter's Image API (POST {IMAGE_BASE_URL}/images).
  * Results are saved to the workspace (so send_file can deliver them) and shown
  * to the model. Reference images are workspace paths, turned into data URLs here.
+ *
+ * `include_self` puts the persona's own picture (IMAGE_SELF_REFERENCE) first
+ * among the references, so every selfie shows the same character instead of
+ * one the model reinvents from words each time.
  */
 import path from "node:path";
 import sharp from "sharp";
 import { config } from "../config.js";
+import { bundledDataUrl } from "../media/assets.js";
 import type { ImagePart } from "../media/images.js";
 import { WORKDIR, workspaceFor } from "./sandbox/workspace.js";
 import type { Tool, ToolContext } from "./types.js";
@@ -27,14 +32,32 @@ const MEDIA_TYPES: Record<string, string> = {
   ".gif": "image/gif",
 };
 const EXTENSIONS: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" };
+const MAX_REFERENCES = 16;
+/** Tells the image model who the first reference is (it reads prompts best in English). */
+const SELF_NOTE =
+  "The first reference image is the character herself: draw the same girl, keeping her face, light-blue long hair " +
+  "with the ahoge, whale-fin ears, whale hair clip and blue eyes, whatever the pose, scene or outfit asked for.";
+
+type ImageReference = { type: "image_url"; image_url: { url: string } };
 
 interface ImagesResponse {
   data?: Array<{ b64_json?: string; media_type?: string }>;
   usage?: { cost?: number };
 }
 
+/** The persona's picture as a reference: an https URL as-is, or a bundled file as a data URL. */
+async function selfReference(): Promise<ImageReference> {
+  const image = config.image.selfImage;
+  if (/^https?:\/\//i.test(image)) return { type: "image_url", image_url: { url: image } };
+  try {
+    return { type: "image_url", image_url: { url: await bundledDataUrl(image) } };
+  } catch (err) {
+    throw new Error(`can't read IMAGE_SELF_REFERENCE ${image}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /** A reference for `input_references`: an http(s) URL as-is, or a workspace file as a data URL. */
-async function reference(ctx: ToolContext, ref: string): Promise<{ type: "image_url"; image_url: { url: string } }> {
+async function reference(ctx: ToolContext, ref: string): Promise<ImageReference> {
   if (/^https?:\/\//i.test(ref)) return { type: "image_url", image_url: { url: ref } };
   const file = path.posix.resolve(WORKDIR, ref);
   const bytes = await (await workspaceFor(ctx)).read(file);
@@ -64,33 +87,49 @@ const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace("T", "
 
 export const generateImage: Tool = {
   name: "generate_image",
-  description:
-    "Generate or edit images with an image model. With input_references (images in your workspace, e.g. a photo saved with " +
-    "save_attachment) it edits / restyles them; without, it draws from the prompt alone. Results are saved under " +
-    `${OUTDIR}/ and shown to you; check them, then send with send_file. Each call costs money: make one good prompt ` +
-    "(describe subject, style, lighting, composition; say what to keep when editing) rather than many tries.",
-  parameters: {
-    type: "object",
-    properties: {
-      prompt: { type: "string", description: "What to draw, or how to change the reference images." },
-      input_references: {
-        type: "array",
-        items: { type: "string" },
-        maxItems: 16,
-        description: `Reference images: workspace paths (relative paths are under ${WORKDIR}, e.g. "inbox/632-photo.jpg") or https URLs.`,
+  get description() {
+    return (
+      "Generate or edit images with an image model. With input_references (images in your workspace, e.g. a photo saved with " +
+      "save_attachment) it edits / restyles them; without, it draws from the prompt alone. Results are saved under " +
+      `${OUTDIR}/ and shown to you; check them, then send with send_file. Each call costs money: make one good prompt ` +
+      "(describe subject, style, lighting, composition; say what to keep when editing) rather than many tries." +
+      (config.image.selfImage
+        ? " Whenever you are in the picture (a selfie, you doing something, you with someone), set include_self: your own " +
+          "picture goes along as the first reference, so you look like yourself every time. Describe the scene, pose, " +
+          "expression and outfit, not your face or hair: those come from the picture."
+        : "")
+    );
+  },
+  get parameters() {
+    return {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "What to draw, or how to change the reference images." },
+        input_references: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: MAX_REFERENCES,
+          description: `Reference images: workspace paths (relative paths are under ${WORKDIR}, e.g. "inbox/632-photo.jpg") or https URLs.`,
+        },
+        ...(config.image.selfImage
+          ? { include_self: { type: "boolean", description: "You (大肥鱼) are in the picture: add your own picture as the first reference." } }
+          : {}),
+        aspect_ratio: { type: "string", enum: ASPECT_RATIOS, description: "Default: auto (follows the reference, or square)." },
+        background: { type: "string", enum: ["auto", "transparent", "opaque"] },
+        n: { type: "integer", minimum: 1, maximum: 10, description: "How many images. Default 1." },
       },
-      aspect_ratio: { type: "string", enum: ASPECT_RATIOS, description: "Default: auto (follows the reference, or square)." },
-      background: { type: "string", enum: ["auto", "transparent", "opaque"] },
-      n: { type: "integer", minimum: 1, maximum: 10, description: "How many images. Default 1." },
-    },
-    required: ["prompt"],
+      required: ["prompt"],
+    };
   },
   enabled: () => Boolean(config.image.apiKey) && config.sandbox.enabled,
   async run(args, ctx) {
     const prompt = String(args.prompt ?? "").trim();
     if (!prompt) throw new Error("prompt is empty");
     const refs = Array.isArray(args.input_references) ? args.input_references.map(String) : [];
-    if (refs.length > 16) throw new Error("at most 16 input_references");
+    const self = args.include_self === true && Boolean(config.image.selfImage);
+    if (refs.length + (self ? 1 : 0) > MAX_REFERENCES) {
+      throw new Error(`at most ${MAX_REFERENCES} reference images${self ? ", your own picture included" : ""}`);
+    }
     const n = args.n === undefined || args.n === null ? undefined : Number(args.n);
     if (n !== undefined && !(Number.isInteger(n) && n >= 1 && n <= 10)) throw new Error("n is 1 to 10");
     if (args.aspect_ratio !== undefined && !ASPECT_RATIOS.includes(String(args.aspect_ratio))) {
@@ -101,13 +140,14 @@ export const generateImage: Tool = {
     if (left < 20_000) throw new Error("not enough time left in this function to generate an image; the turn continues in a fresh function, try again there");
 
     const { apiKey, baseUrl, model, quality, resolution, extraBody, timeoutMs } = config.image;
+    const references = [...(self ? [await selfReference()] : []), ...(await Promise.all(refs.map((r) => reference(ctx, r))))];
     const body = {
       model,
       quality,
       resolution,
       ...extraBody,
-      prompt,
-      ...(refs.length ? { input_references: await Promise.all(refs.map((r) => reference(ctx, r))) } : {}),
+      prompt: self ? `${prompt}\n\n${SELF_NOTE}` : prompt,
+      ...(references.length ? { input_references: references } : {}),
       ...(args.aspect_ratio !== undefined ? { aspect_ratio: String(args.aspect_ratio) } : {}),
       ...(args.background !== undefined ? { background: String(args.background) } : {}),
       ...(n !== undefined ? { n } : {}),

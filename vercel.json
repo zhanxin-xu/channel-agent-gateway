@@ -3,11 +3,11 @@
   "functions": {
     "api/webhook/[channel].ts": {
       "maxDuration": 300,
-      "includeFiles": "{assets/voice/**,node_modules/silk-wasm/lib/silk.wasm}"
+      "includeFiles": "{assets/**,node_modules/silk-wasm/lib/silk.wasm}"
     },
     "api/worker.ts": {
       "maxDuration": 300,
-      "includeFiles": "{assets/voice/**,node_modules/silk-wasm/lib/silk.wasm}"
+      "includeFiles": "{assets/**,node_modules/silk-wasm/lib/silk.wasm}"
     }
   }
 }

@@ -1496,6 +1496,28 @@ await test("generate_image: workspace references become data URLs; results cappe
     assert.equal(ctx.images.length, 1, "shown to the model");
     assert.match(ctx.images[0]!.image_url, /^data:image\/jpeg;base64,/);
 
+    // include_self: the persona's own picture goes first, and the image model is told who it is.
+    calls.length = 0;
+    const tool = activeTools().find((t) => t.name === "generate_image")!;
+    assert.ok((tool.parameters as any).properties.include_self, "offered while a self picture is configured");
+    assert.match(tool.description, /set include_self/);
+    await runTool("generate_image", JSON.stringify({ prompt: "在海边自拍，比个耶", include_self: true, input_references: ["https://example.com/beach.png"] }), ctx);
+    let body = calls.find((c) => c.url.endsWith("/images"))!.body;
+    const picture = await (await import("node:fs/promises")).readFile("assets/persona/dafeiyu.webp");
+    assert.equal(body.input_references[0].image_url.url, `data:image/webp;base64,${picture.toString("base64")}`, "the bundled picture, as is");
+    assert.deepEqual(body.input_references[1], { type: "image_url", image_url: { url: "https://example.com/beach.png" } });
+    assert.match(body.prompt, /^在海边自拍，比个耶\n\nThe first reference image is the character herself/);
+    calls.length = 0;
+    await runTool("generate_image", '{"prompt":"一只猫"}', ctx);
+    body = calls.find((c) => c.url.endsWith("/images"))!.body;
+    assert.equal(body.input_references, undefined, "not in the picture: no reference");
+    assert.equal(body.prompt, "一只猫");
+    const sixteen = JSON.stringify({ prompt: "x", include_self: true, input_references: Array.from({ length: 16 }, (_, i) => `https://e.com/${i}.png`) });
+    assert.match(await runTool("generate_image", sixteen, ctx), /^Error: at most 16 reference images, your own picture included/);
+    process.env.IMAGE_SELF_REFERENCE = "none";
+    assert.equal((activeTools().find((t) => t.name === "generate_image")!.parameters as any).properties.include_self, undefined, "none turns it off");
+    delete process.env.IMAGE_SELF_REFERENCE;
+
     assert.match(await runTool("generate_image", '{"prompt":"x","input_references":["nope.png"]}', ctx), /^Error: reference \/workspace\/nope.png not found/);
     assert.match(await runTool("generate_image", '{"prompt":"x","n":11}', ctx), /^Error: n is 1 to 10/);
     imageResponse = () => Response.json({ error: { message: "rejected by the safety system" } }, { status: 400 });

@@ -152,7 +152,9 @@ src/
     sandbox/             沙盒：workspace.ts 接口与生命周期，vercel.ts 实现，tools.ts 四个工具
   media/images.ts        图片下载、缩小、入库
   media/voice.ts         语音编码：PCM → SILK（QQ）/ WAV
+  media/assets.ts        读取随部署打包的文件（参考声音、形象图）
 assets/voice/            大肥鱼的参考声音（send_voice 克隆用）
+assets/persona/          大肥鱼的形象图（画她自己时作为参考图）
   store/                 存储：types.ts 接口，postgres.ts（Supabase），memory.ts（本地与测试）
 supabase/
   schema.sql             表和函数（会话、事件流、回复状态、图片、去重）

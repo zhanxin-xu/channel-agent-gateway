@@ -8,9 +8,8 @@
  * speaking or singing, and the speed. The description teaches that model's
  * syntax and its singing recipe.
  */
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { config } from "../config.js";
+import { bundledDataUrl } from "../media/assets.js";
 import { REPLY_TO, replyTo } from "./chat.js";
 import type { Tool } from "./types.js";
 
@@ -18,13 +17,6 @@ import type { Tool } from "./types.js";
 const MAX_TEXT_CHARS = 500;
 /** When the API doesn't say (it normally does: "audio/pcm;rate=44100;channels=1"). */
 const DEFAULT_SAMPLE_RATE = 44_100;
-const AUDIO_TYPES: Record<string, string> = {
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".ogg": "audio/ogg",
-  ".m4a": "audio/mp4",
-  ".flac": "audio/flac",
-};
 const MIN_SPEED = 0.5;
 const MAX_SPEED = 2;
 
@@ -98,21 +90,6 @@ function voiceChoices(): string[] {
 
 type ReferencePart = { type: "input_audio"; input_audio: { data?: string; url?: string } } | { type: "text"; text: string };
 
-/** Reference clips as data URLs, read once per instance. */
-const clipCache = new Map<string, Promise<string>>();
-
-function clipDataUrl(file: string): Promise<string> {
-  let hit = clipCache.get(file);
-  if (!hit) {
-    hit = readFile(path.resolve(process.cwd(), file)).then(
-      (bytes) => `data:${AUDIO_TYPES[path.extname(file).toLowerCase()] ?? "audio/mpeg"};base64,${bytes.toString("base64")}`,
-    );
-    hit.catch(() => clipCache.delete(file));
-    clipCache.set(file, hit);
-  }
-  return hit;
-}
-
 /** `input_references` for a clip (and what it says), or undefined for no clip. */
 async function references(clip: string, transcript: string, setting: string): Promise<ReferencePart[] | undefined> {
   if (!clip) return undefined;
@@ -121,7 +98,7 @@ async function references(clip: string, transcript: string, setting: string): Pr
     audio = { type: "input_audio", input_audio: { url: clip } };
   } else {
     try {
-      audio = { type: "input_audio", input_audio: { data: await clipDataUrl(clip) } };
+      audio = { type: "input_audio", input_audio: { data: await bundledDataUrl(clip) } };
     } catch (err) {
       throw new Error(`can't read ${setting} ${clip}: ${err instanceof Error ? err.message : String(err)}`);
     }

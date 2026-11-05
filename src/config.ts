@@ -31,6 +31,8 @@ function jsonObject(name: string): Record<string, unknown> {
 
 /** 大肥鱼's voice: a short clip in the repo (bundled via vercel.json includeFiles), cloned by send_voice. */
 export const DEFAULT_VOICE_REFERENCE = "assets/voice/dafeiyu.mp3";
+/** What 大肥鱼 looks like: a picture in the repo (bundled via vercel.json includeFiles), the reference when she draws herself. */
+export const DEFAULT_SELF_IMAGE = "assets/persona/dafeiyu.webp";
 const DEFAULT_VOICE_REFERENCE_TEXT = "嘿嘿，本鱼来啦！我是大肥鱼，住在深海里的小鲸鱼～有什么问题尽管问我，答对了要请我吃小鱼干哦！";
 
 /** Model settings: OPENAI_RESPONSES_<SUFFIX>, falling back to the old OPENROUTER_<SUFFIX> names. */
@@ -111,6 +113,15 @@ export const config = {
     },
     get timeoutMs() {
       return int("IMAGE_TIMEOUT_MS", 180_000);
+    },
+    /**
+     * A picture of the persona (a file in the deployment, or an https URL),
+     * sent as a reference whenever generate_image draws her (include_self), so
+     * she looks the same every time. "none" turns it off.
+     */
+    get selfImage() {
+      const value = str("IMAGE_SELF_REFERENCE", DEFAULT_SELF_IMAGE);
+      return value.toLowerCase() === "none" ? "" : value;
     },
   },
 
