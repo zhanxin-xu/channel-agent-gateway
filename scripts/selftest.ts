@@ -1233,9 +1233,12 @@ await test("reply window closed: the send is refused with guidance, and later tu
   const opening = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "developer").content;
   assert.match(opening, /之前有 2 条消息因为回复窗口关了没发出去：「红温了」「气死我了」。如果还用得上，这一轮回复时补上。/);
 
-  // Once a message gets through, the reminder stops.
+  // Once a message gets through, the reminder stops. (One at a time: a message that lands
+  // mid-turn would become the fake model's latest and change what it does.)
   calls.length = 0;
   await handleWebhook(at("late-3", " 表情", minutesAgo(0)), "qq");
+  await drain();
+  assert.equal(sentTo("/v2/groups/GLATE/messages").length, 2, "the sticker and the text got through");
   await handleWebhook(at("late-4", " 路过", minutesAgo(0)), "qq");
   await drain();
   assert.doesNotMatch(llmRequests().at(-1)!.body.input.findLast((i: any) => i.role === "developer").content, /没发出去/);
