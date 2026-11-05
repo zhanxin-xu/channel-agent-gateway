@@ -10,8 +10,54 @@ const window_ = (p, a, b, f = 0.04) => Math.min(seg(p, a, a + f), 1 - seg(p, b -
 
 const show = (el, v) => {
   el.style.opacity = v;
-  el.style.visibility = v > 0.002 ? "visible" : "hidden";
 };
+
+/* ══════════════════════════════════════════════════════════════
+   The take. One sticky stage; everything below is a pure function
+   of the scroll progress p ∈ [0, 1] through #take.
+   Demand-driven rAF interpolation: runs ONLY while scrolling in #take,
+   stops completely when idle or past #take (0% idle CPU/GPU).
+   ══════════════════════════════════════════════════════════════ */
+const take = $("#take"), stage = $("#stage");
+const hero = $("#hero"), orb = $("#orb"), bIn = $("#b-in"), log = $("#log"), logLines = $$("li", log);
+const tools = $("#tools"), toolEls = $$(".tool", tools), outs = [$("#b-out-1"), $("#b-out-2"), $("#b-out-3")];
+const caps = [0, 1, 2, 3].map((i) => $(`#cap-${i}`)), statement = $("#statement"), rail = $("#rail"), railDots = $$("span", rail);
+
+const T = {               // timeline (fractions of the take)
+  hero: [0, 0.13],        // hero copy fades, orb slides to centre
+  inb: [0.09, 0.23],      // user message travels into the orb
+  cap0: [0.10, 0.28],
+  log: [0.25, 0.43],      // event lines appear one after another
+  cap1: [0.27, 0.47],
+  tools: [0.45, 0.63],    // tool chips orbit
+  cap2: [0.47, 0.67],
+  outs: [0.65, 0.85],     // replies fly out
+  cap3: [0.67, 0.87],
+  end: [0.87, 1],         // orb rises, statement appears
+};
+
+let mobile = false, R = 90, offIn = { x: 0, y: 0 }, offOuts = [], orbHero = { x: 0, y: 0 }, toolAngles = [];
+let takeTop = 0, takeRange = 1;
+
+function measure() {
+  const vw = innerWidth, vh = innerHeight, sy = scrollY;
+  mobile = vw <= 900;
+  R = Math.round(clamp(vw * 0.11, 56, 96));
+  const sr = stage.getBoundingClientRect();
+  const tr = take.getBoundingClientRect();
+  const o = { x: sr.left + sr.width * (mobile ? 0.5 : 0.62), y: sr.top + sr.height * (mobile ? 0.44 : 0.5) };
+  const c = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+  const bi = c(bIn);
+  offIn = { x: o.x - bi.x, y: o.y - bi.y };
+  offOuts = outs.map((el) => { const r = c(el); return { x: o.x - r.x, y: o.y - r.y }; });
+  orbHero = mobile ? { x: 0, y: sr.height * 0.3 } : { x: Math.min(vw * 0.16, 300), y: 0 };
+  toolAngles = toolEls.map((el) => parseFloat(el.style.getPropertyValue("--a")) || 0);
+  takeTop = tr.top + sy;
+  takeRange = Math.max(1, tr.height - sr.height);
+}
+
+// Measure layout FIRST while the initial layout tree is clean (before .split mutates DOM) -> 0ms forced reflow
+if (!reduced) measure();
 
 /* ── split text: every <br>-separated line rises out of its own clip ── */
 for (const node of $$(".split")) {
@@ -53,59 +99,15 @@ if (typed) {
   const text = typed.dataset.text;
   if (reduced) typed.textContent = text;
   else {
-    typed.textContent = "";
     new IntersectionObserver((entries, obs) => {
       if (!entries.some((e) => e.isIntersecting)) return;
       obs.disconnect();
+      typed.textContent = "";
       let i = 0;
       const step = () => { typed.textContent = text.slice(0, ++i); if (i < text.length) setTimeout(step, 70 + Math.random() * 90); };
-      setTimeout(step, 500);
+      setTimeout(step, 250);
     }, { threshold: 0.6 }).observe(typed);
   }
-}
-
-/* ══════════════════════════════════════════════════════════════
-   The take. One sticky stage; everything below is a pure function
-   of the scroll progress p ∈ [0, 1] through #take.
-   Demand-driven rAF interpolation: runs ONLY while scrolling in #take,
-   stops completely when idle or past #take (0% idle CPU/GPU).
-   ══════════════════════════════════════════════════════════════ */
-const take = $("#take"), stage = $("#stage");
-const hero = $("#hero"), orb = $("#orb"), bIn = $("#b-in"), log = $("#log"), logLines = $$("li", log);
-const tools = $("#tools"), toolEls = $$(".tool", tools), outs = [$("#b-out-1"), $("#b-out-2"), $("#b-out-3")];
-const caps = [0, 1, 2, 3].map((i) => $(`#cap-${i}`)), statement = $("#statement"), rail = $("#rail"), railDots = $$("span", rail);
-
-const T = {               // timeline (fractions of the take)
-  hero: [0, 0.13],        // hero copy fades, orb slides to centre
-  inb: [0.09, 0.23],      // user message travels into the orb
-  cap0: [0.10, 0.28],
-  log: [0.25, 0.43],      // event lines appear one after another
-  cap1: [0.27, 0.47],
-  tools: [0.45, 0.63],    // tool chips orbit
-  cap2: [0.47, 0.67],
-  outs: [0.65, 0.85],     // replies fly out
-  cap3: [0.67, 0.87],
-  end: [0.87, 1],         // orb rises, statement appears
-};
-
-let mobile = false, R = 90, offIn = { x: 0, y: 0 }, offOuts = [], orbHero = { x: 0, y: 0 }, toolAngles = [];
-let takeTop = 0, takeRange = 1;
-
-function measure() {
-  mobile = innerWidth <= 900;
-  R = Math.round(clamp(innerWidth * 0.11, 56, 96));
-  document.documentElement.style.setProperty("--R", R + "px");
-  // Rest positions are laid out by CSS; travel offsets are measured once with transforms cleared.
-  for (const el of [orb, bIn, ...outs]) el.style.transform = "";
-  const c = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
-  const o = c(orb);
-  offIn = { x: o.x - c(bIn).x, y: o.y - c(bIn).y };
-  offOuts = outs.map((el) => ({ x: o.x - c(el).x, y: o.y - c(el).y }));
-  orbHero = mobile ? { x: 0, y: innerHeight * 0.3 } : { x: Math.min(innerWidth * 0.16, 300), y: 0 };
-  toolAngles = toolEls.map((el) => parseFloat(el.style.getPropertyValue("--a")) || 0);
-  const tr = take.getBoundingClientRect();
-  takeTop = tr.top + scrollY;
-  takeRange = Math.max(1, take.offsetHeight - stage.offsetHeight);
 }
 
 function render(p) {
@@ -222,17 +224,12 @@ if (!reduced) {
     }
   };
 
-  measure();
   targetP = curP = getTargetP();
   render(curP);
 
   addEventListener("scroll", onScroll, { passive: true });
   addEventListener("resize", () => {
-    measure();
-    targetP = curP = getTargetP();
-    render(curP);
-  });
-  addEventListener("load", () => {
+    for (const el of [bIn, ...outs]) el.style.transform = "";
     measure();
     targetP = curP = getTargetP();
     render(curP);

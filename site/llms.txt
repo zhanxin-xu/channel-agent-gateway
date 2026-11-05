@@ -1,0 +1,37 @@
+# Serverless Agent Gateway (serverless-agent-gateway)
+
+> 部署在 Vercel Functions 上的免服务器多渠道 AI 机器人网关。支持 QQ（单聊、群聊、频道，Ed25519 验签）、Telegram Bot 与通用 HTTP Webhook 接入，基于只追加事件流（Append-only Event Log）驱动带工具调用的 Agent Loop，自带联网搜索、Upstash Vector 跨群长期记忆、Vercel Sandbox 持久化 Linux 代码沙盒、表情包与语音回复。有消息才运行，零部署与存储费用。
+
+- 官网：https://serverless-agent.cnday.cn/
+- 源码仓库：https://github.com/zhanxin-xu/serverless-agent-gateway
+- 开源协议：MIT License
+- 运行环境：Vercel Functions / Node.js 24 / TypeScript 5.9
+
+## 核心架构与特性
+
+- **多渠道统一接入**：QQ、Telegram、HTTP 实现统一渠道适配器接口（`src/channels/`），Webhook 验签后立即返回 200 回执，通过 `waitUntil` 在后台运行 Agent。
+- **只追加事件流（Event Log）**：每个聊天一条只追加的事件流（消息、含思维链的模型输出、工具调用与结果全量入库），模型输入从事件流推导，线上一轮对话提示词缓存命中率达 97.8% 以上；达到 20 万 token 自动压缩上下文摘要。
+- **一个聊天一个 Agent**：基于 Supabase 会话行租约锁（`src/runtime/lock.ts`），收消息与跑 Agent 解耦；临近 300 秒函数时限自动收尾或签名接力给 `/api/worker` 新实例，支持崩溃恢复。
+- **任意 Responses API 模型**：直接调用 `POST /responses`，默认走 OpenRouter，支持透传供应商路由与推理强度参数。
+- **内置全能工具**：
+  - 群聊交互：`send_message`（分条连发、`reply_to` 指定回复）、`send_sticker`（表情包）、`send_voice`（语音合成）、`end_turn`（主动挂断）
+  - 联网与视觉：网页搜索与抓取、图片压缩入库与多轮识图、generate_image 画图/修图
+  - 跨群长期记忆：基于 Upstash Vector 的语义检索，记录每条记忆来源
+  - 沙盒工作区：基于 Vercel Sandbox 运行 bash / Python / Node，每个聊天拥有独立持久盘
+
+## 快速开始与最小环境变量
+
+1. 部署：运行 `npx vercel` 或通过 Vercel 一键克隆部署。
+2. 必需环境变量：
+   - `OPENAI_RESPONSES_API_KEY`：兼容 OpenAI Responses API 的密钥（默认 OpenRouter）
+   - `QQ_APP_ID` / `QQ_APP_SECRET`（或 Telegram / HTTP 渠道凭据）
+   - `SUPABASE_URL` / `SUPABASE_SECRET_KEY`（执行 `supabase/schema.sql` 初始化表结构）
+3. 健康检查：访问 `GET /api/health` 确认存储、渠道和模型就绪。
+
+## 文档索引
+
+- [部署指南](https://github.com/zhanxin-xu/serverless-agent-gateway/blob/main/docs/deployment.md)：Vercel 部署、Supabase 与 Upstash 存储配置、中国大陆自定义域名绑定、免费额度与资源消耗
+- [渠道接入](https://github.com/zhanxin-xu/serverless-agent-gateway/blob/main/docs/channels.md)：QQ、Telegram、HTTP 配置方法，QQ 被动回复规则与群聊全量消息权限，新增渠道开发指南
+- [Agent 与对话](https://github.com/zhanxin-xu/serverless-agent-gateway/blob/main/docs/agent.md)：事件流格式、会话行租约锁、主动挂断机制、300s 跨实例接力、上下文自动压缩与崩溃恢复
+- [内置工具](https://github.com/zhanxin-xu/serverless-agent-gateway/blob/main/docs/tools.md)：联网、Upstash Vector 长期记忆、Vercel Sandbox 沙盒工作区、表情包与语音合成，新增工具指南
+- [配置参考](https://github.com/zhanxin-xu/serverless-agent-gateway/blob/main/docs/configuration.md)：全部环境变量说明及默认值
