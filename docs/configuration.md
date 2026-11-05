@@ -85,7 +85,7 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 |---|---|---|
 | `IMAGE_API_KEY` | 空 | 图像接口的 API Key，不设置时不启用画图。和模型 Key 是分开的，用同一个 OpenRouter Key 也可以 |
 | `IMAGE_BASE_URL` | `https://openrouter.ai/api/v1` | 请求发到 `{IMAGE_BASE_URL}/images` |
-| `IMAGE_MODEL` | `openai/gpt-image-2.5-sunburst` | 图像模型 |
+| `IMAGE_MODEL` | `openai/gpt-image-2.6-sunburst` | 图像模型 |
 | `IMAGE_QUALITY` | `low` | 对应接口的 `quality`：`auto`、`low`、`medium`、`high`、`xhigh`、`max`。只能在这里设，模型不能自己调高，因为它决定价格 |
 | `IMAGE_RESOLUTION` | `1K` | 对应接口的 `resolution`：`512`、`768`、`1K`、`1.5K`、`2K`、`4K`。不管设成多少，结果都会再缩到 1920×1080 以内（横竖都算）再保存 |
 | `IMAGE_EXTRA_BODY` | 空 | JSON 对象，合并进请求体，例如 `{"provider":{"options":{"openai":{"moderation":"low"}}}}` |

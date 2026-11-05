@@ -91,7 +91,7 @@ export const config = {
       return str("IMAGE_BASE_URL", "https://openrouter.ai/api/v1").replace(/\/+$/, "");
     },
     get model() {
-      return str("IMAGE_MODEL", "openai/gpt-image-2.5-sunburst");
+      return str("IMAGE_MODEL", "openai/gpt-image-2.6-sunburst");
     },
     /** auto | low | medium | high | xhigh | max. Set here, not by the model: it drives the price. */
     get quality() {

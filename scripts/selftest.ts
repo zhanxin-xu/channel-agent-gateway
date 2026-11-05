@@ -1312,7 +1312,7 @@ await test("generate_image: workspace references become data URLs; results cappe
     );
     const req = calls.find((c) => c.url === "https://img.example.com/api/v1/images")!;
     assert.equal(req.headers.get("authorization"), "Bearer img-key");
-    assert.equal(req.body.model, "openai/gpt-image-2.5-sunburst");
+    assert.equal(req.body.model, "openai/gpt-image-2.6-sunburst");
     assert.equal(req.body.quality, "low");
     assert.equal(req.body.resolution, "1K");
     assert.equal(req.body.aspect_ratio, "3:2");

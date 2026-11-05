@@ -45,7 +45,7 @@
 
 ## 画图
 
-`generate_image` 调用 OpenRouter 的 Image API（`POST /images`），默认模型 `openai/gpt-image-2.5-sunburst`，配置见[配置参考](configuration.md#画图)。实现见 [`src/tools/image.ts`](../src/tools/image.ts)。
+`generate_image` 调用 OpenRouter 的 Image API（`POST /images`），默认模型 `openai/gpt-image-2.6-sunburst`，配置见[配置参考](configuration.md#画图)。实现见 [`src/tools/image.ts`](../src/tools/image.ts)。
 
 | 参数 | 说明 |
 |---|---|
