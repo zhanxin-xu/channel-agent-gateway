@@ -207,11 +207,18 @@ function quotedAuthor(a: QQQuotedElement["author"]): string {
  */
 function quoteOf(d: QQMessageEvent) {
   const q = quotedElement(d);
-  if (!q) return undefined;
+  if (!q) {
+    // The format is undocumented: say so when QQ marks a reply but it isn't where we look.
+    if (d.message_type === 103) {
+      console.warn(`[qq] ${d.id}: a reply, but no quoted message found (ext=${JSON.stringify(d.message_scene?.ext)}, elements=${d.msg_elements?.length ?? 0})`);
+    }
+    return undefined;
+  }
   const parsed = parseAttachments(q.attachments);
   let text = cleanContent(q.content);
   if (text.length > MAX_QUOTE_CHARS) text = `${text.slice(0, MAX_QUOTE_CHARS)}…`;
   const body = [text, ...parsed.images.map(() => "[图片]"), ...parsed.notes].filter(Boolean).join("\n") || "（内容没收到）";
+  console.log(`[qq] ${d.id}: quotes ${q.author?.bot ? "the bot" : "a member"} (${text.length} chars, ${parsed.attachments.length} attachment(s))`);
   return { line: `[引用 ${quotedAuthor(q.author)} 的消息：${body}]`, ...parsed };
 }
 
