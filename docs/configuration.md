@@ -99,8 +99,7 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 |---|---|---|
 | `TTS_API_KEY` | 空 | 语音接口的 API Key，不设置时不启用语音。用同一个 OpenRouter Key 也可以 |
 | `TTS_BASE_URL` | `https://openrouter.ai/api/v1` | 请求发到 `{TTS_BASE_URL}/audio/speech` |
-| `TTS_MODELS` | `fish-audio/drama-3,bytedance-seed/seed-audio-1-0` | 模型可以选的语音模型，逗号分隔，第一个是默认。只想用一个就只填一个。要支持 `pcm` 输出，克隆声音还要支持 `input_references` |
-| `TTS_MODEL` | 空 | 旧写法：只设它（不设 `TTS_MODELS`）时，只能用这一个模型 |
+| `TTS_MODEL` | `fish-audio/drama-3` | 语音模型，模型调用工具时不能改。已适配 `fish-audio/drama-3` 和 `bytedance-seed/seed-audio-1-0`（工具描述会教对应的写法）；换别的模型要确认它支持 `pcm` 输出，克隆声音还要支持 `input_references` |
 | `TTS_VOICE` | 空 | 对应接口的 `voice`，填服务商的音色 ID。只在不克隆（模型选了音色 `none`，或没有参考音频）时发送 |
 | `TTS_REFERENCE_AUDIO` | `assets/voice/dafeiyu.mp3` | 要克隆的声音：部署里的文件路径（相对项目根目录），或 https 链接；填 `none` 不克隆。放进仓库的新文件要在 `vercel.json` 的 `includeFiles` 里能匹配到，体积尽量小（单声道、32 kbps 左右的 mp3 就够） |
 | `TTS_REFERENCE_TEXT` | 内置参考音频的文字稿 | 参考音频说的话，有助于克隆。换了参考音频要一起改，不填就不发 |

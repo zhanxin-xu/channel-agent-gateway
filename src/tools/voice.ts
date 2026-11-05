@@ -4,9 +4,9 @@
  * reference clip on every request (`input_references`), so it stays the same
  * voice without an account-side voice.
  *
- * The model picks the speech model (from TTS_MODELS), the reference voice,
- * speaking or singing, and the speed; the description teaches each model's
- * syntax and the singing recipe that goes with it.
+ * The speech model is set by TTS_MODEL; the agent picks the reference voice,
+ * speaking or singing, and the speed. The description teaches that model's
+ * syntax and its singing recipe.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -43,9 +43,7 @@ interface ModelKind {
 }
 
 const FISH: ModelKind = {
-  about:
-    "Fish Audio Drama 3: the default. Cheapest (about $0.0001 a sentence), most faithful to the cloned voice, " +
-    "with the richest inline control. Singing comes out closer to a lilting recitation than a real melody.",
+  about: "Fish Audio Drama 3. Singing comes out closer to a lilting recitation than a real melody.",
   syntax:
     "Directions inside `text` (not read out):\n" +
     "  - [方括号] before the words it applies to: how to say them, in plain words, Chinese or English, like briefing a voice actor: " +
@@ -67,9 +65,7 @@ const FISH: ModelKind = {
 };
 
 const SEED: ModelKind = {
-  about:
-    "ByteDance Seed Audio 1.0: about 1–2 US cents per 10 seconds (100× Fish), freer and more varied delivery, " +
-    "the better choice for singing and for performances Fish can't pull off. The clone is a little looser.",
+  about: "ByteDance Seed Audio 1.0: freer, more varied delivery; the clone is a little looser.",
   syntax:
     "Write `text` as plain words to be spoken or sung, no [brackets] or <tags> (they may be read out). " +
     "Put all direction in `instructions`, as a description of the performance: " +
@@ -160,7 +156,7 @@ function toMono(pcm: Buffer, channels: number): Buffer {
 }
 
 function description(): string {
-  const models = config.tts.models;
+  const kind = kindOf(config.tts.model);
   const voices = voiceChoices();
   const voiceLines = [
     voices.includes("dafeiyu") ? '"dafeiyu" (default): your own voice, cloned from a short clip of you talking.' : "",
@@ -173,15 +169,14 @@ function description(): string {
     "(it counts as a reply like send_message). Use it when a voice fits: they ask to hear you, a greeting, a joke, " +
     "a cheer, a short story, a few lines of a song. Not for every reply, and not for links, code, lists or long explanations " +
     "(send those as text). Keep it short. Write it the way it should sound: numbers, units and symbols as words, no emoji or markdown.\n\n" +
-    `Models (\`model\`, default ${models[0]}):\n` +
-    models.map((m) => `- ${m}: ${kindOf(m).about}\n  ${kindOf(m).syntax}`).join("\n") +
-    "\n\nVoices (`voice`):\n" +
+    `The speech model is ${kind.about}\n${kind.syntax}\n\n` +
+    "Voices (`voice`):\n" +
     voiceLines.map((l) => `- ${l}`).join("\n") +
     "\n\nSinging: `mode: \"sing\"`, lyrics in `text`, the style in `instructions` (\"温柔的摇篮曲\", \"摇滚，很有劲\"). " +
     "The tool adds each model's singing cues for you. It's a cappella with a melody the model makes up: a few lines, not a whole song. " +
     "Short lines, held notes marked with ～ (小鲸鱼～游呀游～). A public-domain tune can anchor the melody (\"用《小星星》的旋律\"). " +
     "Sing words you make up or that they wrote; for a well-known song, write your own playful words instead of its lyrics.\n\n" +
-    "When it doesn't land (they say it sounds off, or like reading), try another model, voice or wording instead of resending the same thing; " +
+    "When it doesn't land (they say it sounds off, or like reading), try another voice or wording instead of resending the same thing; " +
     "if a combination works well for someone, remember it."
   );
 }
@@ -202,7 +197,6 @@ export const sendVoice: Tool = {
           description: "Optional: the delivery of the whole message (\"困得迷迷糊糊\"), the singing style, or with voice \"none\" the character's voice.",
         },
         mode: { type: "string", enum: ["speak", "sing"], description: "speak (default) or sing `text` as lyrics." },
-        model: { type: "string", enum: config.tts.models, description: `Speech model. Default ${config.tts.model}.` },
         voice: { type: "string", enum: voiceChoices(), description: `Whose voice. Default ${voiceChoices()[0]}.` },
         speed: { type: "number", minimum: MIN_SPEED, maximum: MAX_SPEED, description: "Optional speaking rate, 1 = normal (not every model honors it)." },
         reply_to: REPLY_TO,
@@ -216,9 +210,7 @@ export const sendVoice: Tool = {
     if (!text) throw new Error("text is empty");
     if (text.length > MAX_TEXT_CHARS) throw new Error(`text is ${text.length} characters; keep a voice message under ${MAX_TEXT_CHARS}, send the rest as text`);
 
-    const { apiKey, baseUrl, models, voice: providerVoice, instructions: standing, extraBody, timeoutMs } = config.tts;
-    const model = args.model === undefined || args.model === null || args.model === "" ? models[0]! : String(args.model);
-    if (!models.includes(model)) throw new Error(`model is one of ${models.join(", ")}`);
+    const { apiKey, baseUrl, model, voice: providerVoice, instructions: standing, extraBody, timeoutMs } = config.tts;
     const voices = voiceChoices();
     const voice = args.voice === undefined || args.voice === null || args.voice === "" ? voices[0]! : String(args.voice);
     if (!voices.includes(voice)) throw new Error(`voice is one of ${voices.join(", ")}`);

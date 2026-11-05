@@ -1379,7 +1379,7 @@ await test("generate_image: workspace references become data URLs; results cappe
   assert.ok(!activeTools().some((t) => t.name === "generate_image"), "off without IMAGE_API_KEY");
 });
 
-const TTS_ENV = ["TTS_API_KEY", "TTS_BASE_URL", "TTS_INSTRUCTIONS", "TTS_REFERENCE_AUDIO", "TTS_REFERENCE_TEXT", "TTS_VOICE", "TTS_MODEL", "TTS_MODELS", "TTS_SING_REFERENCE_AUDIO", "TTS_SING_REFERENCE_TEXT"];
+const TTS_ENV = ["TTS_API_KEY", "TTS_BASE_URL", "TTS_INSTRUCTIONS", "TTS_REFERENCE_AUDIO", "TTS_REFERENCE_TEXT", "TTS_VOICE", "TTS_MODEL", "TTS_SING_REFERENCE_AUDIO", "TTS_SING_REFERENCE_TEXT"];
 function withTts() {
   process.env.TTS_API_KEY = "tts-key";
   process.env.TTS_BASE_URL = "https://tts.example.com/api/v1";
@@ -1419,11 +1419,11 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
     assert.equal(sent[0].voice.pcm.byteLength, 44100);
     assert.equal(sent[0].voice.text, "[得意地] 本鱼来啦！");
 
-    // The schema offers the configured models and voices.
+    // The model is configuration, not a parameter; the schema offers the voices.
     const schema = activeTools().find((t) => t.name === "send_voice")!;
-    assert.deepEqual((schema.parameters as any).properties.model.enum, ["fish-audio/drama-3", "bytedance-seed/seed-audio-1-0"]);
+    assert.equal((schema.parameters as any).properties.model, undefined, "the agent can't pick the model");
     assert.deepEqual((schema.parameters as any).properties.voice.enum, ["dafeiyu", "none"], "no singing clip configured");
-    assert.match(schema.description, /bytedance-seed\/seed-audio-1-0: ByteDance Seed Audio/);
+    assert.match(schema.description, /The speech model is Fish Audio Drama 3/);
 
     // Singing with Fish: [唱歌] before, ♪ after, a singing instruction and a default style.
     calls.length = 0;
@@ -1434,11 +1434,13 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
     assert.equal(speech.speed, 1.2, "Fish takes speed");
     assert.equal(sent[1].voice.text, "小鲸鱼～游呀游～", "the lyrics as written");
 
-    // Singing with Seed: plain lyrics, its own recipe and the model's style; no speed; stereo PCM folded to mono.
+    // TTS_MODEL=Seed: its syntax in the description; singing with plain lyrics, its own recipe and the model's style; no speed; stereo PCM folded to mono.
+    process.env.TTS_MODEL = "bytedance-seed/seed-audio-1-0";
+    assert.match(activeTools().find((t) => t.name === "send_voice")!.description, /The speech model is ByteDance Seed Audio/);
     ttsResponse = () => new Response(new Uint8Array(Buffer.concat([Buffer.alloc(4 * 24000, 0)])), { headers: { "content-type": "audio/pcm;rate=24000;channels=2" } });
     calls.length = 0;
     assert.match(
-      await runTool("send_voice", JSON.stringify({ text: "睡吧～", mode: "sing", model: "bytedance-seed/seed-audio-1-0", instructions: "温柔的摇篮曲", speed: 1.2 }), ctx),
+      await runTool("send_voice", JSON.stringify({ text: "睡吧～", mode: "sing", instructions: "温柔的摇篮曲", speed: 1.2 }), ctx),
       /sung, model=bytedance-seed\/seed-audio-1-0, voice=dafeiyu, speed=1\.2, 1\.0s/,
     );
     speech = calls.find((c) => c.url.endsWith("/audio/speech"))!.body;
@@ -1450,6 +1452,7 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
     assert.equal(sent[2].voice.sampleRate, 24000);
     assert.equal(sent[2].voice.pcm.byteLength, 2 * 24000, "stereo folded to one channel");
     ttsResponse = defaultTts;
+    delete process.env.TTS_MODEL;
 
     // Another character: no clone, no standing direction, the character in instructions.
     calls.length = 0;
@@ -1459,7 +1462,9 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
     assert.equal(speech.instructions, "低沉沙哑的大叔");
 
     // Only what's offered.
-    assert.match(await runTool("send_voice", JSON.stringify({ text: "hi", model: "openai/gpt-audio" }), ctx), /^Error: model is one of fish-audio\/drama-3, bytedance-seed\/seed-audio-1-0/);
+    calls.length = 0;
+    await runTool("send_voice", JSON.stringify({ text: "hi", model: "openai/gpt-audio" }), ctx);
+    assert.equal(calls.find((c) => c.url.endsWith("/audio/speech"))!.body.model, "fish-audio/drama-3", "a model argument is ignored");
     assert.match(await runTool("send_voice", JSON.stringify({ text: "hi", voice: "dafeiyu_sing" }), ctx), /^Error: voice is one of dafeiyu, none/);
     assert.match(await runTool("send_voice", JSON.stringify({ text: "hi", mode: "rap" }), ctx), /^Error: mode is/);
     assert.match(await runTool("send_voice", JSON.stringify({ text: "hi", speed: 5 }), ctx), /^Error: speed is 0\.5 to 2/);
@@ -1473,9 +1478,6 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
     assert.deepEqual(speech.input_references, [{ type: "input_audio", input_audio: { url: "https://cdn.example.com/sing.mp3" } }, { type: "text", text: "啦啦啦" }]);
     delete process.env.TTS_SING_REFERENCE_AUDIO;
     delete process.env.TTS_SING_REFERENCE_TEXT;
-    process.env.TTS_MODELS = "fish-audio/drama-3";
-    assert.deepEqual((activeTools().find((t) => t.name === "send_voice")!.parameters as any).properties.model.enum, ["fish-audio/drama-3"], "TTS_MODELS narrows the list");
-    delete process.env.TTS_MODELS;
 
     process.env.TTS_REFERENCE_AUDIO = "https://cdn.example.com/me.wav";
     calls.length = 0;
@@ -1500,7 +1502,7 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
     assert.match(await runTool("send_voice", '{"text":"hi"}', ctx), /^Error: speech API HTTP 402: .*Insufficient credits/);
     ttsResponse = () => new Response(new Uint8Array([0xff, 0xfb, 0x90]), { headers: { "content-type": "audio/mpeg" } });
     assert.match(await runTool("send_voice", '{"text":"hi"}', ctx), /^Error: speech API returned audio\/mpeg, expected raw PCM/);
-    assert.equal(sent.length, 7, "nothing sent when making the audio failed");
+    assert.equal(sent.length, 8, "nothing sent when making the audio failed");
   } finally {
     resetTts();
   }

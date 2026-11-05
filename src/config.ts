@@ -118,22 +118,9 @@ export const config = {
     get baseUrl() {
       return str("TTS_BASE_URL", "https://openrouter.ai/api/v1").replace(/\/+$/, "");
     },
-    /** The default speech model. */
+    /** The speech model (set here, not chosen by the agent). */
     get model() {
-      return this.models[0]!;
-    },
-    /**
-     * The speech models send_voice may choose from (comma-separated), the
-     * first being the default. TTS_MODEL alone means just that one.
-     */
-    get models(): string[] {
-      const list = str("TTS_MODELS")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (list.length) return [...new Set(list)];
-      const single = str("TTS_MODEL");
-      return single ? [single] : ["fish-audio/drama-3", "bytedance-seed/seed-audio-1-0"];
+      return str("TTS_MODEL", "fish-audio/drama-3");
     },
     /** The API's `voice` (a provider voice ID). Empty: the reference audio sets the voice. */
     get voice() {

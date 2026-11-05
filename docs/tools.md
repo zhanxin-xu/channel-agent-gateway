@@ -63,19 +63,20 @@
 
 ## 语音
 
-`send_voice` 把一段文字说出来或唱出来，当场作为一条语音消息发出去（和 `send_message` 一样算一次回复）。通过 OpenRouter 的语音接口（`POST /audio/speech`）调用，默认 Fish Audio Drama 3，也可以让模型改用字节 Seed Audio 1.0，配置见[配置参考](configuration.md#语音)。实现见 [`src/tools/voice.ts`](../src/tools/voice.ts)。不依赖沙盒。
+`send_voice` 把一段文字说出来或唱出来，当场作为一条语音消息发出去（和 `send_message` 一样算一次回复）。通过 OpenRouter 的语音接口（`POST /audio/speech`）调用，模型由 `TTS_MODEL` 决定（默认 Fish Audio Drama 3，也可以配成字节 Seed Audio 1.0），模型自己不能选，配置见[配置参考](configuration.md#语音)。实现见 [`src/tools/voice.ts`](../src/tools/voice.ts)。不依赖沙盒。
 
 | 参数 | 说明 |
 |---|---|
 | `text` | 要说或唱的内容，最多 500 字，按所选模型的写法（Fish 可以夹带下面的语气指令） |
 | `instructions` | 可选，整条语音的语气，例如 `像在讲睡前故事`；唱歌时是风格（`温柔的摇篮曲`）；音色选 `none` 时用来描述角色的声音。会接在 `TTS_INSTRUCTIONS` 后面一起发给接口（`none` 时不带 `TTS_INSTRUCTIONS`） |
 | `mode` | `speak`（默认）或 `sing`：把 `text` 当歌词唱 |
-| `model` | `TTS_MODELS` 里的一个，默认第一个 |
 | `voice` | `dafeiyu`（默认，克隆大肥鱼）、`dafeiyu_sing`（配置了唱歌参考音频才有）、`none`（不克隆，演别的角色） |
 | `speed` | 可选，0.5–2，Fish 认，Seed 忽略（不会发给它） |
 | `reply_to` | 回复哪条消息，同 `send_message` |
 
-工具描述是按配置现拼的：只列出允许的模型和音色，每个模型写明它擅长什么、大概多少钱、`text` 和 `instructions` 怎么写，以及唱歌怎么写。效果不好时（群友说不像、像念的），描述让模型换模型、音色或写法再试，而不是原样重发；好用的组合可以用 `remember` 记下来。工具结果会写明这次用了什么，例如 `voice message: sung, model=…, voice=dafeiyu, 9.4s`。
+工具描述是按配置现拼的：只教当前配置的那个语音模型的写法（`text` 和 `instructions` 怎么写、唱歌怎么写），只列出可用的音色。效果不好时（群友说不像、像念的），描述让模型换音色或写法再试，而不是原样重发；好用的组合可以用 `remember` 记下来。工具结果会写明这次用了什么，例如 `voice message: sung, model=…, voice=dafeiyu, 9.4s`，日志里能看出用的哪个模型。
+
+两个模型的区别（在 `TTS_MODEL` 里选）：
 
 | 模型 | 特点 | 价格（实测） |
 |---|---|---|
