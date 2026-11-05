@@ -63,16 +63,29 @@
 
 ## 语音
 
-`send_voice` 把一段文字合成语音，当场作为一条语音消息发出去（和 `send_message` 一样算一次回复）。默认通过 OpenRouter 的语音接口（`POST /audio/speech`）调用 Fish Audio Drama 3，配置见[配置参考](configuration.md#语音)。实现见 [`src/tools/voice.ts`](../src/tools/voice.ts)。不依赖沙盒。
+`send_voice` 把一段文字说出来或唱出来，当场作为一条语音消息发出去（和 `send_message` 一样算一次回复）。通过 OpenRouter 的语音接口（`POST /audio/speech`）调用，默认 Fish Audio Drama 3，也可以让模型改用字节 Seed Audio 1.0，配置见[配置参考](configuration.md#语音)。实现见 [`src/tools/voice.ts`](../src/tools/voice.ts)。不依赖沙盒。
 
 | 参数 | 说明 |
 |---|---|
-| `text` | 要说的话，最多 500 字，可以夹带下面的语气指令 |
-| `instructions` | 可选，整条语音的语气，例如 `像在讲睡前故事`。会接在 `TTS_INSTRUCTIONS` 后面一起发给接口 |
+| `text` | 要说或唱的内容，最多 500 字，按所选模型的写法（Fish 可以夹带下面的语气指令） |
+| `instructions` | 可选，整条语音的语气，例如 `像在讲睡前故事`；唱歌时是风格（`温柔的摇篮曲`）；音色选 `none` 时用来描述角色的声音。会接在 `TTS_INSTRUCTIONS` 后面一起发给接口（`none` 时不带 `TTS_INSTRUCTIONS`） |
+| `mode` | `speak`（默认）或 `sing`：把 `text` 当歌词唱 |
+| `model` | `TTS_MODELS` 里的一个，默认第一个 |
+| `voice` | `dafeiyu`（默认，克隆大肥鱼）、`dafeiyu_sing`（配置了唱歌参考音频才有）、`none`（不克隆，演别的角色） |
+| `speed` | 可选，0.5–2，Fish 认，Seed 忽略（不会发给它） |
 | `reply_to` | 回复哪条消息，同 `send_message` |
 
+工具描述是按配置现拼的：只列出允许的模型和音色，每个模型写明它擅长什么、大概多少钱、`text` 和 `instructions` 怎么写，以及唱歌怎么写。效果不好时（群友说不像、像念的），描述让模型换模型、音色或写法再试，而不是原样重发；好用的组合可以用 `remember` 记下来。工具结果会写明这次用了什么，例如 `voice message: sung, model=…, voice=dafeiyu, 9.4s`。
+
+| 模型 | 特点 | 价格（实测） |
+|---|---|---|
+| `fish-audio/drama-3` | 音色还原最好，行内语气指令最丰富，认 `speed`。唱歌更像有起伏的朗诵 | 一句约 $0.0001 |
+| `bytedance-seed/seed-audio-1-0` | 演绎更自由，适合唱歌和 Fish 演不出来的效果。只认 `instructions` 里的描述，`text` 不要夹方括号或标签。返回 24 kHz 双声道 PCM，网关混成单声道 | 约 $0.0013/秒，10 秒约 1.3 美分 |
+
+- **唱歌**（`mode: "sing"`）：两个模型都没有专门的唱歌模式，工具按模型套上唱歌提示：Fish 在歌词前加 `[唱歌]`、末尾加 `♪`；两者都在 `instructions` 里加"按旋律唱、长音拖住、不要念白"，再加风格（不给就用默认的儿歌风）。效果是清唱，旋律由模型自己编，没有伴奏，适合唱几句。描述让模型只唱原创或对方写的词。
+
 - **固定音色**：每次请求都带上仓库里的参考音频 [`assets/voice/dafeiyu.mp3`](../assets/voice/dafeiyu.mp3)（约 10 秒，32 kbps）和它的文字稿，通过接口的 `input_references` 克隆这个声音，所以每条语音都是同一个声音，不需要在 Fish 那边建音色。参考音频要尽量小：同一段声音用 170 KB 的原文件时每次约 $0.002，压到 43 KB 后和不带参考一样（约 $0.00006 一条短句）。
-- **各渠道怎么发**：接口返回单声道 PCM（采样率从响应头读取，Drama 3 是 44.1 kHz）。QQ 在函数里用 [silk-wasm](https://github.com/idranme/silk-wasm) 编成 SILK，以 `file_type: 3` 上传，收到的是能直接点开播放的语音条；Telegram 收到一个 `voice.wav` 文件；HTTP 等同步渠道收到 `[语音] 文字`。
+- **各渠道怎么发**：接口返回 PCM（采样率和声道数从响应头读取，Drama 3 是 44.1 kHz 单声道，Seed 是 24 kHz 双声道，多声道会先混成单声道）。QQ 在函数里用 [silk-wasm](https://github.com/idranme/silk-wasm) 编成 SILK，以 `file_type: 3` 上传，收到的是能直接点开播放的语音条；Telegram 收到一个 `voice.wav` 文件；HTTP 等同步渠道收到 `[语音] 文字`。
 - **语气写法**（Drama 3 的语法，工具描述里也教了模型）：
   - `[方括号]` 写在要说的话前面，用大白话描述语气，中英文都行：`[得意地] 本鱼早就算到了！`、`[小声嘀咕] 才不是因为想你呢。`，一直生效到下一个指令。
   - `[方括号]` 写在发出声音或停顿的位置：`好吧 [叹气] 我输了。`、`[轻笑]`、`[短暂停顿]`。

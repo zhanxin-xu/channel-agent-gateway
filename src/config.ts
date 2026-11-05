@@ -118,8 +118,22 @@ export const config = {
     get baseUrl() {
       return str("TTS_BASE_URL", "https://openrouter.ai/api/v1").replace(/\/+$/, "");
     },
+    /** The default speech model. */
     get model() {
-      return str("TTS_MODEL", "fish-audio/drama-3");
+      return this.models[0]!;
+    },
+    /**
+     * The speech models send_voice may choose from (comma-separated), the
+     * first being the default. TTS_MODEL alone means just that one.
+     */
+    get models(): string[] {
+      const list = str("TTS_MODELS")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (list.length) return [...new Set(list)];
+      const single = str("TTS_MODEL");
+      return single ? [single] : ["fish-audio/drama-3", "bytedance-seed/seed-audio-1-0"];
     },
     /** The API's `voice` (a provider voice ID). Empty: the reference audio sets the voice. */
     get voice() {
@@ -133,6 +147,18 @@ export const config = {
     /** What the reference audio says (helps the clone). Defaults to the built-in clip's words when that clip is used. */
     get referenceText() {
       return str("TTS_REFERENCE_TEXT", this.referenceAudio === DEFAULT_VOICE_REFERENCE ? DEFAULT_VOICE_REFERENCE_TEXT : "");
+    },
+    /**
+     * Optional second clip of the same voice singing (file or https URL), offered
+     * to the model as voice "dafeiyu_sing". Empty: not offered.
+     */
+    get singReferenceAudio() {
+      const value = str("TTS_SING_REFERENCE_AUDIO");
+      return value.toLowerCase() === "none" ? "" : value;
+    },
+    /** What the singing clip sings. */
+    get singReferenceText() {
+      return str("TTS_SING_REFERENCE_TEXT");
     },
     /** The API's `instructions`: a standing direction for every line, e.g. "软萌可爱的小女孩". The model can add its own. */
     get instructions() {
