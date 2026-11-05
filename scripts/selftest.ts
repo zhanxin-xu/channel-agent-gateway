@@ -1626,7 +1626,8 @@ await test("generate_image: workspace references become data URLs; results cappe
     assert.equal(req.headers.get("authorization"), "Bearer img-key");
     assert.equal(req.body.model, "openai/gpt-image-2.6-sunburst");
     assert.equal(req.body.quality, "low");
-    assert.equal(req.body.resolution, "512");
+    assert.equal(req.body.resolution, undefined, "gpt-image doesn't take it: not sent unless configured");
+    assert.equal(req.body.output_format, "png");
     assert.equal(req.body.aspect_ratio, "3:2");
     assert.equal(req.body.n, undefined, "the API's default unless asked");
     assert.equal(req.body.input_references[0].type, "image_url");

@@ -32,6 +32,8 @@ const MEDIA_TYPES: Record<string, string> = {
   ".gif": "image/gif",
 };
 const EXTENSIONS: Record<string, string> = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" };
+/** Lossless, so output_compression (JPEG / WebP only) doesn't apply; previews are made from it. */
+const OUTPUT_FORMAT = "png";
 const MAX_REFERENCES = 16;
 /** Tells the image model who the first reference is (it reads prompts best in English). */
 const SELF_NOTE =
@@ -144,8 +146,9 @@ export const generateImage: Tool = {
     const body = {
       model,
       quality,
-      resolution,
+      ...(resolution ? { resolution } : {}),
       ...extraBody,
+      output_format: OUTPUT_FORMAT,
       prompt: self ? `${prompt}\n\n${SELF_NOTE}` : prompt,
       ...(references.length ? { input_references: references } : {}),
       ...(args.aspect_ratio !== undefined ? { aspect_ratio: String(args.aspect_ratio) } : {}),

@@ -57,7 +57,7 @@
 | `background` | `auto`、`transparent`、`opaque` |
 | `n` | 生成几张，1–10，默认 1 |
 
-`quality`（默认 `low`）和 `resolution`（默认 `512`）只能在环境变量里设，模型不能改。
+`quality`（默认 `low`）只能在环境变量里设，模型不能改；输出格式固定为 `png`（无损，所以不用 `output_compression`）。`resolution` 默认不发：默认的 gpt-image 模型不支持它，换成支持的模型时再设 `IMAGE_RESOLUTION`。
 
 - **结果**：存到 `/workspace/images/{时间}-{序号}.png`。超过 1920×1080（横竖都算）的会先缩小再保存。同时把一张 1024px 的预览给模型看，确认没问题后再用 `send_file` 发到聊天。
 - **修别人发的照片**：先用 `save_attachment` 把原图存进 `/workspace/inbox/`，再把这个路径填进 `input_references`。

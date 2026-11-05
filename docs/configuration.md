@@ -87,7 +87,7 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 | `IMAGE_BASE_URL` | `https://openrouter.ai/api/v1` | 请求发到 `{IMAGE_BASE_URL}/images` |
 | `IMAGE_MODEL` | `openai/gpt-image-2.6-sunburst` | 图像模型 |
 | `IMAGE_QUALITY` | `low` | 对应接口的 `quality`：`auto`、`low`、`medium`、`high`、`xhigh`、`max`。只能在这里设，模型不能自己调高，因为它决定价格 |
-| `IMAGE_RESOLUTION` | `512` | 对应接口的 `resolution`：`512`、`768`、`1K`、`1.5K`、`2K`、`4K`。出图费用大致和面积成正比，低质量下 `512` 约 $0.006 一张，`1K` 约 $0.025（竖版 1024×1536 约 $0.037），另加参考图约 $0.01。不管设成多少，结果都会再缩到 1920×1080 以内（横竖都算）再保存 |
+| `IMAGE_RESOLUTION` | 空（不发） | 对应接口的 `resolution`：`512`、`768`、`1K`、`1.5K`、`2K`、`4K`，只对支持它的模型有用（看 OpenRouter `GET /api/v1/images/models` 里模型的 `supported_parameters`）。默认的 gpt-image 系列**不支持**，发了也会被忽略，按画幅出约 1024px 的图（1024×1024、1024×1536、1536×1024）。结果都会再缩到 1920×1080 以内（横竖都算）再保存 |
 | `IMAGE_EXTRA_BODY` | 空 | JSON 对象，合并进请求体，例如 `{"provider":{"options":{"openai":{"moderation":"low"}}}}` |
 | `IMAGE_TIMEOUT_MS` | `180000` | 单次请求的超时时间（毫秒），临近函数时限时会自动缩短 |
 | `IMAGE_SELF_REFERENCE` | `assets/persona/dafeiyu.webp` | 大肥鱼的形象图：部署里的文件路径或 https 链接，画她自己时作为参考图（`include_self`）。填 `none` 关闭。放进仓库的新文件要在 `vercel.json` 的 `includeFiles` 里能匹配到（现在整个 `assets/` 都会打包），体积尽量小 |
