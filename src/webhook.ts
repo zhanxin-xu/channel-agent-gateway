@@ -2,9 +2,10 @@
  * Webhook entry shared by the Vercel function and the local dev server.
  *
  * Async channels (QQ, Telegram) must be ACKed quickly or the platform
- * retries, so logging the message happens inside `waitUntil` after the ACK is
- * returned; the agent then runs in /api/worker (see runtime/ingress.ts).
- * Sync channels (no `send`) wait for the agent and return its replies.
+ * retries, so logging the message and running the agent happen inside
+ * `waitUntil` after the ACK is returned (a turn that outlasts the function
+ * continues in /api/worker). Sync channels (no `send`) wait for the agent and
+ * return its replies.
  */
 import { waitUntil } from "@vercel/functions";
 import { handleMessage } from "./runtime/ingress.js";

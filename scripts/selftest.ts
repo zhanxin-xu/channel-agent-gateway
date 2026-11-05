@@ -341,6 +341,8 @@ function qqRequest(payload: unknown, sign = true) {
   }
   return new Request("https://bot.example.com/api/webhook/qq", { method: "POST", headers, body });
 }
+/** A message timestamp `m` minutes ago, as QQ sends it. */
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 const c2c = (id: string, content: string, user = "USER1", extra: Record<string, unknown> = {}) =>
   qqRequest({ op: 0, t: "C2C_MESSAGE_CREATE", d: { id, content, author: { user_openid: user }, ...extra } });
 
@@ -713,7 +715,6 @@ await test("qq: retried event is de-duplicated", async () => {
 });
 
 await test("qq reply window: the turn's default target is a message that can still be answered", async () => {
-  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
   const groupAtOld = (id: string, m: number) =>
     qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id, content: "hi", timestamp: minutesAgo(m), group_openid: "GROUP2", author: { member_openid: "M2" } } });
   // Group message from 6 minutes ago: past the 5-minute window, so nothing is posted to QQ.
@@ -887,8 +888,7 @@ await test("cost: a silent ambient wake (model only hangs up) is a handful of st
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   console.log(`  silent ambient wake: ${total} store calls ${JSON.stringify(counts)}`);
   assert.equal(counts.ingest, 1, "ingest de-duplicates, logs and takes the lock in one call");
-  // 12 for the run itself, plus the hand-off to the worker: the webhook releases the lock, the worker takes it.
-  assert.ok(total <= 14, `${total} calls`);
+  assert.ok(total <= 12, `${total} calls`);
 });
 
 await test("qq group: one message as both full and @ events → logged once, answered once", async () => {
@@ -1116,40 +1116,39 @@ async function withModelHook(onModelCall: (n: number) => void, fn: () => Promise
   }
 }
 
-await test("worker: the webhook only logs and starts a signed /api/worker run, which answers", async () => {
+await test("worker: the webhook runs the agent itself; /api/worker is only for continuing", async () => {
   await handleWebhook(c2c("run-w1", "你好", "WORKER"), "qq");
   await drain();
-  const [start] = workerCalls();
-  assert.deepEqual(start!.body, { chatKey: "qq:c2c:WORKER", ambientClaimed: false });
-  assert.match(start!.headers.get("x-worker-signature")!, /^[0-9a-f]{64}$/);
-  assert.deepEqual(sentTo("/v2/users/WORKER/messages").map((b) => b.msg_id), ["run-w1"], "answered by the worker's run");
-
-  // An ambient message that wins the sampler window passes the claim on.
-  calls.length = 0;
-  await handleWebhook(groupMsg("GWORKER", "run-w2", "路过"), "qq");
-  await drain();
-  assert.deepEqual(workerCalls()[0]!.body, { chatKey: "qq:group:GWORKER", ambientClaimed: true });
-  assert.deepEqual(await turnEnds("qq:group:GWORKER"), ["completed"], "the ambient turn ran in the worker");
-
+  assert.equal(workerCalls().length, 0, "a turn that fits in the function never leaves it");
+  assert.deepEqual(sentTo("/v2/users/WORKER/messages").map((b) => b.msg_id), ["run-w1"]);
   const forged = await handleWorker(new Request("https://bot.example.com/api/worker", { method: "POST", body: '{"chatKey":"qq:c2c:WORKER"}', headers: { "x-worker-signature": "00" } }));
   assert.equal(forged.status, 401);
 });
 
-await test("worker: unreachable (5xx) → retried, then the webhook runs the agent itself", async () => {
+await test("worker: unreachable when a turn pauses → the work stays in the log and the next message's run continues it", async () => {
   const { workerRetry } = await import("../src/runtime/handoff.js");
   const original = worker!;
   const waits = workerRetry.waitsMs;
   workerRetry.waitsMs = [1, 1];
   worker = async () => new Response("down", { status: 503 });
   try {
-    await handleWebhook(c2c("run-w3", "你好", "NOWORKER"), "qq");
-    await drain();
+    await withModelHook((n) => void (n === 1 && (clockOffset += 201_000)), async () => {
+      await handleWebhook(c2c("run-w3", "算一下", "NOWORKER"), "qq");
+      await drain();
+    });
   } finally {
     worker = original;
     workerRetry.waitsMs = waits;
   }
   assert.equal(workerCalls().length, 3, "one try and two retries");
-  assert.deepEqual(sentTo("/v2/users/NOWORKER/messages").map((b) => b.msg_id), ["run-w3"], "answered by the webhook's own run");
+  assert.deepEqual(await turnEnds("qq:c2c:NOWORKER"), ["paused"]);
+  assert.equal(sentTo("/v2/users/NOWORKER/messages").length, 0);
+
+  calls.length = 0;
+  await handleWebhook(c2c("run-w4", "在吗", "NOWORKER"), "qq");
+  await drain();
+  assert.deepEqual(await turnEnds("qq:c2c:NOWORKER"), ["paused", "completed"]);
+  assert.match(llmRequests()[0]!.body.input.findLast((i: any) => i.role === "developer").content, /^（系统提示）第2轮：接着第1轮继续/);
 });
 
 await test("pause: not enough time for the next step → the turn ends paused and a fresh worker continues it", async () => {
@@ -1158,8 +1157,8 @@ await test("pause: not enough time for the next step → the turn ends paused an
     await handleWebhook(c2c("run-p1", "算一下", "PAUSE"), "qq");
     await drain();
   });
-  assert.equal(workerCalls().length, 2, "webhook → worker, then worker → fresh worker");
-  assert.deepEqual(workerCalls()[1]!.body, { chatKey: "qq:c2c:PAUSE", ambientClaimed: false });
+  assert.equal(workerCalls().length, 1, "the webhook's run hands over once");
+  assert.deepEqual(workerCalls()[0]!.body, { chatKey: "qq:c2c:PAUSE", ambientClaimed: false });
   assert.deepEqual(await turnEnds("qq:c2c:PAUSE"), ["paused", "completed"]);
   assert.equal(llmCalls, 2, "no forced wrap-up step: the calculation's result is answered in the fresh function");
   const resumed = llmRequests()[1]!.body.input.findLast((i: any) => i.role === "developer").content;
@@ -1196,7 +1195,7 @@ await test("interrupted: a model call that times out → a fresh worker retries 
     await drain();
   });
   assert.deepEqual(await turnEnds("qq:c2c:STUCK"), ["interrupted", "interrupted"]);
-  assert.equal(workerCalls().length, 2, "no third function");
+  assert.equal(workerCalls().length, 1, "no third function");
   assert.deepEqual(sentTo("/v2/users/STUCK/messages").map((b) => b.content), ["这件事每次做到一半都超时了，我先停在这里。可以把它拆小一点再让我做。"]);
   const session = await getStore().open("qq:c2c:STUCK", -1);
   assert.equal(session.session!.cursor, 0, "given up: the message counts as handled");
@@ -1216,6 +1215,30 @@ await test("budget: a model call may take what's left of the function, minus the
   }
   // 150s - 20s margin, a little less for the time already spent (well under the 280s default cap).
   assert.ok(timeouts.some((ms) => ms > 125_000 && ms <= 130_000), JSON.stringify(timeouts));
+});
+
+await test("reply window closed: the send is refused with guidance, and later turns are reminded until it gets through", async () => {
+  const at = (id: string, text: string, sentAt: string) =>
+    qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id, content: text, timestamp: sentAt, group_openid: "GLATE", author: { member_openid: "MLATE" } } });
+  // QQ takes group replies for 5 minutes: this one was sent 6 minutes ago.
+  await handleWebhook(at("late-1", " 表情", minutesAgo(6)), "qq");
+  await drain();
+  const results = (await events("qq:group:GLATE")).filter((e) => e.type === "tool/result").map((e) => e.data.output);
+  assert.match(results[0]!, /^Error: reply window closed for 第0条: .*nothing was sent\. Don't retry on another old message/);
+  assert.equal(sentTo("/v2/groups/GLATE/messages").length, 0, "refused before reaching QQ");
+
+  calls.length = 0;
+  await handleWebhook(at("late-2", " 路过", minutesAgo(0)), "qq");
+  await drain();
+  const opening = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "developer").content;
+  assert.match(opening, /之前有 2 条消息因为回复窗口关了没发出去：「红温了」「气死我了」。如果还用得上，这一轮回复时补上。/);
+
+  // Once a message gets through, the reminder stops.
+  calls.length = 0;
+  await handleWebhook(at("late-3", " 表情", minutesAgo(0)), "qq");
+  await handleWebhook(at("late-4", " 路过", minutesAgo(0)), "qq");
+  await drain();
+  assert.doesNotMatch(llmRequests().at(-1)!.body.input.findLast((i: any) => i.role === "developer").content, /没发出去/);
 });
 
 // ── Tools ──

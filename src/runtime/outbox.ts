@@ -1,6 +1,7 @@
 import { unreachableReason } from "../channels/net.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import { messageLabel, type SessionEvent } from "../conversation/events.js";
+import { REPLY_WINDOW_CLOSED } from "../conversation/undelivered.js";
 import type { Session } from "../conversation/session.js";
 import type { ChatStore } from "../store/index.js";
 import type { ChatMeta } from "./types.js";
@@ -43,7 +44,7 @@ export class Outbox {
     const target = this.session.message(seq);
     if (!target) return false;
     const context = await this.context(target);
-    return Number(context.replies ?? 0) < this.maxReplies && Date.now() <= Number(context.expiresAt ?? Infinity);
+    return Number(context.replies ?? 0) < this.maxReplies && !windowClosed(context);
   }
 
   async deliver(seq: number, send: (message: InboundMessage) => Promise<void>): Promise<string> {
@@ -51,6 +52,14 @@ export class Outbox {
     const target = this.session.message(seq);
     if (!target) throw new Error(`${messageLabel(seq)} isn't in this chat; reply_to takes the N of a 第N条 label`);
     const replyContext = await this.context(target);
+    if (windowClosed(replyContext)) {
+      // Older messages are closed too, and waiting won't reopen this one: the model should stop and say it later.
+      throw new Error(
+        `${REPLY_WINDOW_CLOSED} for ${messageLabel(seq)}: the platform no longer takes replies to it, so nothing was sent. ` +
+          "Don't retry on another old message: reply_to a newer one if it's still open, otherwise call end_turn. " +
+          "You'll be reminded of what you wanted to say next turn, when someone writes again.",
+      );
+    }
     const count = Number(replyContext.replies ?? 0);
     if (count >= this.maxReplies) {
       throw new Error(
@@ -86,3 +95,6 @@ export class Outbox {
     return `sent as a reply to ${messageLabel(seq)} (${count + 1}/${this.maxReplies})`;
   }
 }
+
+/** Channels with a reply window (QQ) put its end in the reply context. */
+const windowClosed = (context: Record<string, string>) => Date.now() > Number(context.expiresAt ?? Infinity);

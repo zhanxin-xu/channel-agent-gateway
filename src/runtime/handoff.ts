@@ -1,8 +1,7 @@
 /**
- * Starting a run in a fresh function: a signed POST to /api/worker (worker.ts).
- * The webhook starts every run of an async channel this way, and a run that is
- * out of time hands its chat over the same way, so all agent work happens in
- * the worker with a whole function to itself.
+ * Continuing a run in a fresh function: a signed POST to /api/worker
+ * (worker.ts). A run that is out of time (agent/budget.ts) hands its chat
+ * over this way; the worker continues the unfinished turn from the log.
  *
  * The caller releases the chat's lock first and the worker takes it again. If
  * a webhook grabs it in between, that run carries on instead: either way one

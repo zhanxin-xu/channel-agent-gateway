@@ -1,8 +1,7 @@
 /**
- * Worker endpoint (`POST /api/worker`): where async channels' runs happen.
- * The webhook starts a run here after logging a message, and a run that is
- * out of time hands the chat over to a fresh call here. The request is signed
- * with WORKER_SECRET (see runtime/handoff.ts).
+ * Worker endpoint (`POST /api/worker`): a run that is out of time hands its
+ * chat over to a fresh function here, which continues the unfinished turn.
+ * The request is signed with WORKER_SECRET (see runtime/handoff.ts).
  */
 import crypto from "node:crypto";
 import { waitUntil } from "@vercel/functions";
@@ -37,7 +36,7 @@ export async function handleWorker(request: Request): Promise<Response> {
   const adapter = channels.get(meta.channel);
   if (!adapter?.send) return json({ error: `channel "${meta.channel}" can't run in the background` }, 400);
 
-  console.log(`[worker] running ${chatKey}`);
+  console.log(`[worker] continuing ${chatKey}`);
   waitUntil(
     runChat(adapter, meta, { ambientClaimed: ambientClaimed === true, deadline }).catch((err) => console.error(`[worker] ${chatKey} failed`, err)),
   );

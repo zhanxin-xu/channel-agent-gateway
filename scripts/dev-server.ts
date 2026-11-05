@@ -1,6 +1,6 @@
 /**
  * Local dev server: `npm run dev`, then POST to http://localhost:3000/api/webhook/<channel>.
- * Serves /api/worker too, where the webhook starts each run (as on Vercel).
+ * Serves /api/worker too, where a turn that outlasts the function continues (as on Vercel).
  * Loads `.env.local` if present. Expose it with a tunnel (cloudflared, ngrok)
  * to receive real QQ / Telegram webhooks without deploying.
  */

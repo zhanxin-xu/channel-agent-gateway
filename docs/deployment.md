@@ -30,7 +30,7 @@
 
 ## 函数时长
 
-`vercel.json` 把 Webhook 函数和 `/api/worker` 的 `maxDuration` 都设为 300 秒，这是 Hobby 套餐的上限。平台要求很快拿到回执，所以 Webhook 先返回回执，再用 `waitUntil` 在后台写库，然后把运行交给 `/api/worker`，agent 在 worker 里跑。
+`vercel.json` 把 Webhook 函数和 `/api/worker` 的 `maxDuration` 都设为 300 秒，这是 Hobby 套餐的上限。平台要求很快拿到回执，所以 Webhook 先返回回执，再用 `waitUntil` 在后台写库、运行 agent，后台处理同样受 300 秒限制；一轮做不完时交给 `/api/worker`，由新的函数接着做。
 
 如果你修改了 `maxDuration`，记得同步修改 `AGENT_MAX_DURATION_SECONDS`，agent 会根据它安排时间：剩余不到 100 秒时不开新的一步，把这一轮交给一个新的 `/api/worker` 接着做，详见[步数与时间](agent.md#步数与时间)。
 
@@ -93,12 +93,12 @@ Supabase（Postgres）保存每个聊天的会话、事件流、回复状态、�
 | 消息类型 | Vercel 函数调用 | 存储操作 | 模型调用 |
 |---|---|---|---|
 | 群里没 @ 的消息，只写入 | 1 | 1（每张图片再加 1） | 0 |
-| 旁观唤起，模型不插话 | 2（Webhook + worker） | 约 14 | 1 |
-| 私聊 / 被 @，一步回复 | 2（Webhook + worker） | 约 16 | 1 |
+| 旁观唤起，模型不插话 | 1 | 11 | 1 |
+| 私聊 / 被 @，一步回复 | 1 | 约 13 | 1 |
 | 每多一步（查资料、跑代码） | — | 约 3 | 1 |
 | 一轮跑超过一个函数的时长 | 每交接一次再加 1 | 每次再加约 5 | — |
 
-旁观唤起的数字由测试实测（`npm test` 里的 cost 用例），其余为估算。唤起 agent 时多出的那次函数调用和 2 次存储操作，是 Webhook 把运行交给 `/api/worker`（释放锁、worker 重新抢锁）的开销。Supabase 免费版不限 API 请求次数，这些操作只影响延迟。
+旁观唤起的数字由测试实测（`npm test` 里的 cost 用例），其余为估算。Supabase 免费版不限 API 请求次数，这些操作只影响延迟。
 
 **流量**：每次运行开始时，会把这轮要用的事件和图片从存储读出来（同一个函数实例会缓存读过的事件和图片，下次只读新增的部分）。图片多的聊天要留意 Supabase 每月 5 GB 的出站流量。
 

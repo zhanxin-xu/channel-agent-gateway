@@ -35,6 +35,7 @@ import { config } from "../config.js";
 import { messageLabel, type NewEvent, type OutputItem, type SessionEvent, type TurnEndReason } from "../conversation/events.js";
 import type { UnfinishedTurn } from "../conversation/recovery.js";
 import type { Session } from "../conversation/session.js";
+import { undelivered } from "../conversation/undelivered.js";
 import { LockLostError } from "../store/types.js";
 import { activeTools, runTool, sayTool, toolNames } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
@@ -55,6 +56,19 @@ const NO_TIME_FOR_TOOL =
 
 const describe = (m: SessionEvent<"user/message">) =>
   `${messageLabel(m.seq)}（${m.data.sender}${m.data.mentioned ? "，@你" : ""}）`;
+
+/** Undelivered messages quoted in a turn's opening note: the newest few, each cut short. */
+const MAX_UNDELIVERED_SHOWN = 3;
+const MAX_UNDELIVERED_CHARS = 100;
+
+function undeliveredNote(missed: string[]): string {
+  if (!missed.length) return "";
+  const quoted = missed
+    .slice(-MAX_UNDELIVERED_SHOWN)
+    .map((text) => `「${text.length > MAX_UNDELIVERED_CHARS ? `${text.slice(0, MAX_UNDELIVERED_CHARS)}…` : text}」`)
+    .join("");
+  return `之前有 ${missed.length} 条消息因为回复窗口关了没发出去：${quoted}。如果还用得上，这一轮回复时补上。`;
+}
 
 function listMessages(messages: SessionEvent<"user/message">[]): string {
   const shown = messages.slice(-10).map(describe).join("、");
@@ -110,7 +124,8 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   const usage = { input: 0, cached: 0, reasoning: 0 };
   let handledUpTo = o.pending.at(-1)!.seq;
 
-  const replyNote = `发消息默认回复${messageLabel(o.main.seq)}，要回复别的消息用 reply_to。`;
+  const replyNote =
+    `发消息默认回复${messageLabel(o.main.seq)}，要回复别的消息用 reply_to。` + undeliveredNote(undelivered(session.events, (tool) => talks.has(tool)));
   const start = o.resume
     ? `（系统提示）第${turn}轮：接着第${o.resume.turn}轮继续。` +
       (o.resume.interruptions ? "上一段的最后一步被打断了，那一步没有结果；" : "上一段在这个函数里的时间用完了；") +
