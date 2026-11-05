@@ -1419,19 +1419,6 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
     assert.equal(sent[0].voice.pcm.byteLength, 44100);
     assert.equal(sent[0].voice.text, "[得意地] 本鱼来啦！");
 
-    calls.length = 0;
-    const sung = await runTool("send_voice", JSON.stringify({ text: "小鲸鱼～游呀游～", sing: true }), ctx);
-    assert.match(sung, /\(sung, 0\.5s\)/);
-    let sing = calls.find((c) => c.url.endsWith("/audio/speech"))!.body;
-    assert.equal(sing.input, "[唱歌] 小鲸鱼～游呀游～ ♪", "a singing cue before, a ♪ after");
-    assert.match(sing.instructions, /^软萌可爱；这是一段歌唱：.*；欢快的儿歌旋律$/, "standing direction, singing, default style");
-    assert.equal(sent[1].voice.text, "小鲸鱼～游呀游～", "the lyrics as written");
-    calls.length = 0;
-    await runTool("send_voice", JSON.stringify({ text: "睡吧～ ♪", sing: true, instructions: "温柔的摇篮曲" }), ctx);
-    sing = calls.find((c) => c.url.endsWith("/audio/speech"))!.body;
-    assert.equal(sing.input, "[唱歌] 睡吧～ ♪", "no second ♪");
-    assert.match(sing.instructions, /；温柔的摇篮曲$/, "the model's style replaces the default");
-
     process.env.TTS_REFERENCE_AUDIO = "https://cdn.example.com/me.wav";
     calls.length = 0;
     await runTool("send_voice", '{"text":"hi"}', ctx);
@@ -1455,7 +1442,7 @@ await test("send_voice: clones the bundled voice clip, asks for PCM, hands the a
     assert.match(await runTool("send_voice", '{"text":"hi"}', ctx), /^Error: speech API HTTP 402: .*Insufficient credits/);
     ttsResponse = () => new Response(new Uint8Array([0xff, 0xfb, 0x90]), { headers: { "content-type": "audio/mpeg" } });
     assert.match(await runTool("send_voice", '{"text":"hi"}', ctx), /^Error: speech API returned audio\/mpeg, expected raw PCM/);
-    assert.equal(sent.length, 5, "nothing sent when making the audio failed");
+    assert.equal(sent.length, 3, "nothing sent when making the audio failed");
   } finally {
     resetTts();
   }

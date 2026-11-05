@@ -14,14 +14,6 @@ import type { Tool } from "./types.js";
 const MAX_TEXT_CHARS = 500;
 /** Leave this much of the function's time for the model to reply. */
 const REPLY_RESERVE_MS = 15_000;
-/**
- * sing: true. Drama 3 has no singing mode; these cues (a direction before the
- * lyrics, a whole-message instruction, a closing ♪) get the closest to it.
- */
-const SING_DIRECTION = "[唱歌]";
-const SING_INSTRUCTIONS = "这是一段歌唱：按旋律和节奏唱出来，音高起伏明显，长音拖住，不要念白";
-const DEFAULT_SING_STYLE = "欢快的儿歌旋律";
-
 /** When the API doesn't say (it normally does: "audio/pcm;rate=44100;channels=1"). */
 const DEFAULT_SAMPLE_RATE = 44_100;
 const AUDIO_TYPES: Record<string, string> = {
@@ -78,7 +70,7 @@ export const sendVoice: Tool = {
   description:
     "Say something out loud: `text` is turned into speech in your own voice and sent right now as a voice message " +
     "(it counts as a reply like send_message). Use it when a voice fits: they ask to hear you, a greeting, a joke, " +
-    "a cheer, a short story. Not for every reply, and not for links, code, lists or long explanations " +
+    "a cheer, a short story or a line of a song. Not for every reply, and not for links, code, lists or long explanations " +
     "(send those as text). Keep it short, one to four sentences. Write it the way it should be spoken: numbers, units " +
     "and symbols as words, no emoji or markdown.\n" +
     "You can direct the delivery inside `text` (the speech model is Fish Audio Drama 3; directions aren't read out):\n" +
@@ -90,22 +82,15 @@ export const sendVoice: Tool = {
     "- A phrase in another language: <english>…</english>, <japanese>…</japanese>, <korean>…</korean> (experimental).\n" +
     "- A tricky reading (多音字, names): one pinyin syllable with its tone number per tag, " +
     "e.g. <|phoneme_start|>chong2<|phoneme_end|><|phoneme_start|>qing4<|phoneme_end|> for 重庆.\n" +
-    "Use directions sparingly: a few per message, at most about three per sentence; the voice is already cute and lively without them.\n" +
-    "Singing: set `sing: true` and put lyrics in `text`, and the style in `instructions` if you like (\"温柔的摇篮曲\", \"摇滚，很有劲\"). " +
-    "It's your voice singing a cappella, with a melody the model makes up, no accompaniment: good for a few lines, not a whole song. " +
-    "Write short lines, mark held notes with ～ (小鲸鱼～游呀游～), and leave out directions. " +
-    "Sing lyrics you make up or that the person wrote; for a well-known song, write your own playful words instead of its lyrics.",
+    "Use directions sparingly: a few per message, at most about three per sentence; the voice is already cute and lively without them.",
   parameters: {
     type: "object",
     properties: {
       text: { type: "string", description: `What to say (at most ${MAX_TEXT_CHARS} characters), with optional [directions] and tags.` },
       instructions: {
         type: "string",
-        description:
-          "Optional direction for the whole message, e.g. \"困得迷迷糊糊\" or \"像在讲睡前故事\". Prefer [brackets] in the text for single lines. " +
-          "With sing: the singing style, e.g. \"温柔的摇篮曲\".",
+        description: "Optional direction for the whole message, e.g. \"困得迷迷糊糊\" or \"像在讲睡前故事\". Prefer [brackets] in the text for single lines.",
       },
-      sing: { type: "boolean", description: "Sing `text` as lyrics instead of saying it. Default false." },
       reply_to: REPLY_TO,
     },
     required: ["text"],
@@ -119,15 +104,12 @@ export const sendVoice: Tool = {
     if (left < 10_000) throw new Error("not enough time left in this turn to make a voice message; reply in text");
 
     const { apiKey, baseUrl, model, voice, instructions: standing, extraBody, timeoutMs } = config.tts;
-    const sing = args.sing === true;
-    const style = String(args.instructions ?? "").trim();
-    const instructions = (sing ? [standing, SING_INSTRUCTIONS, style || DEFAULT_SING_STYLE] : [standing, style]).filter(Boolean).join("；");
-    const input = sing ? `${SING_DIRECTION} ${text}${text.endsWith("♪") ? "" : " ♪"}` : text;
+    const instructions = [standing, String(args.instructions ?? "").trim()].filter(Boolean).join("；");
     const references = await voiceReferences();
     const body = {
       model,
       ...extraBody,
-      input,
+      input: text,
       response_format: "pcm",
       ...(voice ? { voice } : {}),
       ...(instructions ? { instructions } : {}),
@@ -148,6 +130,6 @@ export const sendVoice: Tool = {
     const seconds = (pcm.byteLength / 2 / sampleRate).toFixed(1);
 
     const status = await ctx.send({ kind: "voice", voice: { pcm, sampleRate, text } }, replyTo(args));
-    return `${status} (${sing ? "sung" : "voice message"}, ${seconds}s). If you're done, call end_turn (in the same step as your last message).`;
+    return `${status} (voice message, ${seconds}s). If you're done, call end_turn (in the same step as your last message).`;
   },
 };
