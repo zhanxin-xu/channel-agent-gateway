@@ -1025,6 +1025,43 @@ await test("qq mentions: others become \"@昵称 #ID\", the bot's own @ is dropp
   assert.deepEqual(stored.data.mentions, [{ userId: "MEMBERAB2C08", name: "坏坏" }, { userId: "NEWBIE999999" }], "not the bot");
 });
 
+await test("qq: only an @ of the bot itself is direct; @全体成员, @someone else or a bare \"@\" are ordinary messages", async () => {
+  process.env.AGENT_AMBIENT_INTERVAL_SECONDS = "0";
+  try {
+    const say = (t: string, id: string, content: string, mentions?: unknown[]) =>
+      qqRequest({ op: 0, t, d: { id, content, group_openid: "GONLY", author: { member_openid: "MOMMA0000001" }, ...(mentions ? { mentions } : {}) } });
+    const everyone = { scope: "all", is_you: true, username: "全体成员" };
+    const other = { scope: "single", id: "MEMBERAB2C08", member_openid: "MEMBERAB2C08", is_you: false, bot: false, username: "坏坏" };
+    await handleWebhook(say("GROUP_MESSAGE_CREATE", "only-1", "<qqbot-at-everyone /> 开会了", [everyone]), "qq");
+    await handleWebhook(say("GROUP_AT_MESSAGE_CREATE", "only-2", "<qqbot-at-everyone /> 开会了", [everyone]), "qq");
+    await handleWebhook(say("GROUP_MESSAGE_CREATE", "only-3", '<qqbot-at-user id="MEMBERAB2C08" /> 你来', [other]), "qq");
+    await handleWebhook(say("GROUP_MESSAGE_CREATE", "only-4", "邮箱 a@b.com，@"), "qq");
+    await drain();
+    assert.equal(llmRequests().length, 0, "none of them wakes the agent");
+    const stored = (await events("qq:group:GONLY")).filter((e) => e.type === "user/message");
+    assert.deepEqual(stored.map((e) => e.data.mentioned), [false, false, false, false]);
+
+    const self = { scope: "single", id: "BOTSELF", member_openid: "BOTSELF", is_you: true, bot: true, username: "大肥鱼" };
+    await handleWebhook(say("GROUP_MESSAGE_CREATE", "only-5", "<@BOTSELF> <qqbot-at-everyone /> 开会了", [everyone, self]), "qq");
+    await drain();
+    assert.ok(llmRequests().length > 0, "@全体成员 together with an @ of the bot still wakes it");
+  } finally {
+    delete process.env.AGENT_AMBIENT_INTERVAL_SECONDS;
+  }
+});
+
+await test("qq faces: the tag becomes \"[表情：名字]\", with any other ext fields (a dice roll) kept", async () => {
+  const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64");
+  const content =
+    `吃瓜<faceType=1,faceId="271",ext="${b64({ text: "[吃瓜]" })}">` +
+    `骰子<faceType=3,faceId="358",ext="${b64({ text: "骰子", resultId: "3" })}">` +
+    `坏的<faceType=1,faceId="1",ext="!!">`;
+  await handleWebhook(c2c("face-1", content, "FACES"), "qq");
+  await drain();
+  const msg = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "user");
+  assert.match(textOf(msg), /\]\n吃瓜\[表情：吃瓜\]骰子\[表情：骰子 resultId=3\]坏的\[表情：未知\]$/);
+});
+
 await test("@#ID: in a group, a Markdown message with a real QQ mention; plain \"@昵称\" when QQ refuses or the id is unknown", async () => {
   const said = (id: string, text: string, author: Record<string, unknown>) =>
     qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id, content: text, group_openid: "GAT", author } });

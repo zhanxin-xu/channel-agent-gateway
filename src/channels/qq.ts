@@ -246,9 +246,13 @@ function quoteOf(d: QQMessageEvent) {
   return { line: `[引用 ${quotedAuthor(q.author)} 的消息：${body}]`, ...parsed };
 }
 
-/** Same signals as the official SDK: `mentions[].is_you`, or a `<@!AppID>` marker in the text. */
+/**
+ * Whether the message @-s this bot by name: a `mentions` entry marked
+ * `is_you`, or a `<@!AppID>` marker in the text. @全体成员 doesn't count,
+ * though QQ marks it `is_you` too (scope "all").
+ */
 function mentionsBot(d: QQMessageEvent): boolean {
-  if (d.mentions?.some((m) => m?.is_you === true)) return true;
+  if (d.mentions?.some((m) => m?.is_you === true && m.scope !== "all")) return true;
   const appId = config.qq.appId;
   return Boolean(appId) && new RegExp(`<@!?${appId}>`).test(d.content ?? "");
 }
@@ -256,6 +260,31 @@ function mentionsBot(d: QQMessageEvent): boolean {
 /** A mention in the text: `<qqbot-at-user id="…" />`, or the older `<@…>` / `<@!…>`. */
 const MENTION_TAG = /<qqbot-at-user id="(\w+)"\s*\/>|<@!?(\w+)>/g;
 const EVERYONE_TAG = /<qqbot-at-everyone\s*\/>/g;
+/** A QQ face (emoji, sticker, dice…): `<faceType=1,faceId="13",ext="base64 of {"text":"吃瓜"}">`. */
+const FACE_TAG = /<faceType=(\d+),faceId="(\d+)",ext="([^"]*)">/g;
+
+/**
+ * A face as the model reads it: "[表情：吃瓜]". Fields of `ext` besides its
+ * name are kept as they are ("[表情：骰子 resultId=3]"): what QQ puts there
+ * for dice and the like isn't documented, and the model can read it.
+ */
+function renderFace(faceType: string, faceId: string, ext: string): string {
+  let info: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(ext, "base64").toString("utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) info = parsed as Record<string, unknown>;
+  } catch {
+    // Not base64 JSON: the face is still a face.
+  }
+  const { text, ...rest } = info;
+  const name = typeof text === "string" ? text.replace(/^\[|\]$/g, "").trim() : "";
+  const extra = Object.entries(rest)
+    .filter(([, v]) => v !== "" && v !== null && typeof v !== "object")
+    .map(([k, v]) => `${k}=${String(v)}`);
+  // Logged whole while the format is unknown: what a dice roll carries shows up here.
+  console.log(`[qq] face type=${faceType} id=${faceId} ext=${JSON.stringify(info).slice(0, 300)}`);
+  return `[表情：${[name || "未知", ...extra].join(" ")}]`;
+}
 
 /**
  * Mentions as the model reads people: "@昵称 #3B6834" (names from the
@@ -277,6 +306,7 @@ function renderMentions(content: string | undefined, mentions: QQMention[] = [])
       return `@${personLabel(userId, m?.username)}`;
     })
     .replace(EVERYONE_TAG, "@全体成员")
+    .replace(FACE_TAG, (_tag, faceType: string, faceId: string, ext: string) => renderFace(faceType, faceId, ext))
     .trim();
   return { text, people };
 }
@@ -349,7 +379,9 @@ function parseEvent(t: string, d: QQMessageEvent): InboundMessage | undefined {
     case "GROUP_MESSAGE_CREATE": {
       if (d.author?.bot) return undefined; // never react to other bots
       const group = d.group_openid ?? "";
-      const mentioned = t === "GROUP_AT_MESSAGE_CREATE" || mentionsBot(d);
+      // An @全体成员 may come as GROUP_AT_MESSAGE_CREATE too: only an @ of the bot itself wakes it.
+      const everyone = d.mentions?.some((m) => m?.scope === "all") ?? false;
+      const mentioned = mentionsBot(d) || (t === "GROUP_AT_MESSAGE_CREATE" && !everyone);
       return {
         ...base,
         conversationId: `group:${group}`,
