@@ -373,8 +373,11 @@ const ACK = () => json({ op: OP_HTTP_CALLBACK_ACK, d: 0 });
 export const qqAdapter: ChannelAdapter = {
   name: "qq",
   promptHint: "This is QQ: reply in plain text, no Markdown syntax. Keep replies under 1500 characters.",
-  /** bot-docs text-chain.md: works in group messages (and text sub-channels). */
-  mentionTag: (userId) => `<qqbot-at-user id="${userId}" />`,
+  /**
+   * Experiment: bot-docs text-chain.md documents <qqbot-at-user id="…" /> for groups, but QQ showed
+   * it as raw text in a group reply (2026-11-05). Trying the older <@id> form (message_format.md).
+   */
+  mentionTag: (userId) => `<@${userId}>`,
   /** Passive replies: 5 per inbound message (bot-docs send.md). */
   maxRepliesPerMessage: 5,
 

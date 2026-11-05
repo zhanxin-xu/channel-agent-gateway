@@ -1029,7 +1029,7 @@ await test("@#ID: in a group it becomes a real QQ mention of someone the log kno
   calls.length = 0;
   await handleWebhook(said("at-2", " 艾特 @#ab2c08 有人找你，@#000000 你也来", { member_openid: "MOMMA0000001", username: "党国华" }), "qq");
   await drain();
-  assert.deepEqual(sentTo("/v2/groups/GAT/messages").map((b) => b.content), ['<qqbot-at-user id="MEMBERAB2C08" /> 有人找你，@#000000 你也来']);
+  assert.deepEqual(sentTo("/v2/groups/GAT/messages").map((b) => b.content), ['<@MEMBERAB2C08> 有人找你，@#000000 你也来']);
   const sent = (await events("qq:group:GAT")).findLast((e) => e.type === "tool/result" && e.data.callId === "call_at")!;
   assert.match(sent.data.output, /^sent as a reply/);
 
