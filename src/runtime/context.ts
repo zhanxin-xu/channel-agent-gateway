@@ -4,8 +4,9 @@
  * where that becomes a channel call.
  */
 import { callBudgetMs } from "../agent/budget.js";
-import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
-import { chatPeople, findByShortId } from "../conversation/people.js";
+import { partsToText } from "../channels/format.js";
+import type { ChannelAdapter, InboundMessage, TextPart } from "../channels/types.js";
+import { chatPeople, mentionParts } from "../conversation/people.js";
 import type { Session } from "../conversation/session.js";
 import { pcmToWav } from "../media/voice.js";
 import type { Outgoing, ToolContext } from "../tools/types.js";
@@ -14,8 +15,6 @@ import type { ChatMeta } from "./types.js";
 
 /** How a voice message reads in `sent` and on text-only channels: "[语音] " + its words. */
 const VOICE_LABEL = "[语音] ";
-/** "@#3B6834" in a message: the agent @-ing someone by the id it knows them by. */
-const MENTION_REF = /@#([0-9A-Za-z]{6})(?![0-9A-Za-z])/g;
 
 export function makeToolContext(
   adapter: ChannelAdapter,
@@ -29,16 +28,9 @@ export function makeToolContext(
 ): { ctx: ToolContext; endRun(): Promise<void> } {
   const cleanups: Array<() => Promise<void> | void> = [];
 
-  // In a group, "@#3B6834" becomes the platform's mention of that person, if the log knows them;
-  // an unknown id stays as written.
-  const withMentions = (text: string): string => {
-    if (meta.chatType !== "group" || !adapter.mentionTag || !text.includes("@#")) return text;
-    const people = chatPeople(session.events);
-    return text.replace(MENTION_REF, (ref, id: string) => {
-      const person = findByShortId(people, id);
-      return person ? adapter.mentionTag!(person.userId) : ref;
-    });
-  };
+  // "@#3B6834" in a group message: a real mention where the channel can send one, "@昵称" elsewhere.
+  const textParts = (text: string): TextPart[] =>
+    meta.chatType === "group" && text.includes("@#") ? mentionParts(text, chatPeople(session.events)) : [text];
 
   // Sync channels (no `send`) collect text instead; an image becomes its label and URL,
   // a voice message its words. Channels without voice messages get a WAV file.
@@ -48,10 +40,11 @@ export function makeToolContext(
       if (adapter.sendVoice) return adapter.sendVoice(msg, m.voice);
       if (adapter.sendFile) return adapter.sendFile(msg, { name: "voice.wav", data: pcmToWav(m.voice.pcm, m.voice.sampleRate) });
     }
-    const text = m.kind === "text" ? withMentions(m.text) : m.kind === "voice" ? `${VOICE_LABEL}${m.voice.text}` : `${m.label} ${m.url}`;
-    if (collect) return Promise.resolve(void collect.push(text));
+    const parts = m.kind === "text" ? textParts(m.text) : [m.kind === "voice" ? `${VOICE_LABEL}${m.voice.text}` : `${m.label} ${m.url}`];
+    if (collect) return Promise.resolve(void collect.push(partsToText(parts)));
     if (m.kind === "image" && adapter.sendImage) return adapter.sendImage(msg, m.url);
-    return adapter.send!(msg, text);
+    if (adapter.sendMentions && parts.some((p) => typeof p !== "string")) return adapter.sendMentions(msg, parts);
+    return adapter.send!(msg, partsToText(parts));
   };
 
   const ctx: ToolContext = {

@@ -1,5 +1,4 @@
 /** Talking and hanging up: send_message, send_sticker, end_turn, chat_members, and the reply rules they share. */
-import { personLabel } from "../channels/format.js";
 import { config } from "../config.js";
 import { DEFAULT_STICKER_BASE_URL, isStickerName, STICKER_NAMES, STICKERS, stickerUrl } from "./stickers.js";
 import type { Tool } from "./types.js";
@@ -73,7 +72,7 @@ export const chatMembers: Tool = {
       minute: "2-digit",
       hourCycle: "h23",
     });
-    const lines = people.slice(0, MAX_MEMBERS).map((p) => `${personLabel(p.userId, p.name)}（最后出现 ${when.format(p.lastSeen)}）`);
+    const lines = people.slice(0, MAX_MEMBERS).map((p) => `${p.name ? `${p.name} ` : ""}${p.id}（最后出现 ${when.format(p.lastSeen)}）`);
     const more = people.length > MAX_MEMBERS ? `\n……还有 ${people.length - MAX_MEMBERS} 人` : "";
     return `${people.length} 人：\n${lines.join("\n")}${more}`;
   },

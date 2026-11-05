@@ -10,9 +10,18 @@
 import crypto from "node:crypto";
 import { config } from "../config.js";
 import { pcmToSilk } from "../media/voice.js";
-import { ChannelUnreachableError, platformFetch } from "./net.js";
-import { personLabel } from "./format.js";
-import { chunkText, json, type Attachment, type ChannelAdapter, type InboundMessage, type OutgoingFile, type Person, type ReceiveResult } from "./types.js";
+import { ChannelUnreachableError, platformFetch, unreachableReason } from "./net.js";
+import { partsToText, personLabel } from "./format.js";
+import {
+  chunkText,
+  json,
+  type Attachment,
+  type ChannelAdapter,
+  type InboundMessage,
+  type OutgoingFile,
+  type Person,
+  type ReceiveResult,
+} from "./types.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -373,11 +382,6 @@ const ACK = () => json({ op: OP_HTTP_CALLBACK_ACK, d: 0 });
 export const qqAdapter: ChannelAdapter = {
   name: "qq",
   promptHint: "This is QQ: reply in plain text, no Markdown syntax. Keep replies under 1500 characters.",
-  /**
-   * Experiment: bot-docs text-chain.md documents <qqbot-at-user id="…" /> for groups, but QQ showed
-   * it as raw text in a group reply (2026-11-05). Trying the older <@id> form (message_format.md).
-   */
-  mentionTag: (userId) => `<@${userId}>`,
   /** Passive replies: 5 per inbound message (bot-docs send.md). */
   maxRepliesPerMessage: 5,
 
@@ -443,6 +447,28 @@ export const qqAdapter: ChannelAdapter = {
     }
   },
 
+  /**
+   * Groups only take @-mentions in Markdown messages (bot-docs text-chain:
+   * <qqbot-at-user id="member_openid" />, msg_type 2; open to every bot since
+   * 2026-04-23). If QQ refuses the Markdown, the text goes out plain with
+   * "@昵称" instead, so the message still arrives.
+   */
+  async sendMentions(message, parts) {
+    const ctx = message.replyContext;
+    const { scope, target, msgId } = ctx;
+    const plain = partsToText(parts);
+    if (scope !== "group" || plain.length > MAX_CHUNK) return qqAdapter.send!(message, plain);
+    const content = parts.map((p) => (typeof p === "string" ? escapeMarkdown(p) : `<qqbot-at-user id="${p.mention.userId}" />`)).join("");
+    try {
+      await qqApi(`${v2Base(scope, target!)}/messages`, { msg_type: 2, markdown: { content }, msg_id: msgId, msg_seq: nextSeq(ctx) });
+    } catch (err) {
+      // QQ unreachable: the outbox stops the run; a retry here could post the message twice.
+      if (unreachableReason(err)) throw err;
+      console.warn(`[qq] markdown with mentions refused, sending plain text: ${err instanceof Error ? err.message : String(err)}`);
+      await qqAdapter.send!(message, plain);
+    }
+  },
+
   async sendImage(message, url) {
     const ctx = message.replyContext;
     const { scope, target, msgId } = ctx;
@@ -495,6 +521,18 @@ async function uploadAndSend(message: InboundMessage, file: OutgoingFile): Promi
   });
   if (!res.file_info) throw new Error(`QQ upload ${base}/files returned no file_info`);
   await qqApi(`${base}/messages`, { msg_type: 7, media: { file_info: res.file_info }, msg_id: ctx.msgId, msg_seq: nextSeq(ctx) });
+}
+
+/**
+ * Chat text inside a Markdown message stays literal: escape what Markdown reads
+ * as formatting (emphasis, code, links) and line starts that make headings,
+ * quotes or lists.
+ */
+function escapeMarkdown(text: string): string {
+  return text
+    .replace(/[\\`*_~[\]]/g, "\\$&")
+    .replace(/^(\s*)([#>+-])/gm, "$1\\$2")
+    .replace(/^(\s*\d+)\./gm, "$1\\.");
 }
 
 function v2Base(scope: string, target: string): string {

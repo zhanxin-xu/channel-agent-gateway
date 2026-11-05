@@ -5,6 +5,9 @@ export interface Person {
   name?: string;
 }
 
+/** A piece of an outgoing text: plain words, or an @-mention of someone in the chat. */
+export type TextPart = string | { mention: Person };
+
 export interface InboundMessage {
   channel: string;
   /** Unique per delivery; used to drop webhook retries. */
@@ -90,11 +93,10 @@ export interface ChannelAdapter {
    */
   sendVoice?(message: InboundMessage, voice: OutgoingVoice): Promise<void>;
   /**
-   * The markup that @-mentions a person in a group message's text. The agent
-   * writes "@#3B6834" and the gateway swaps in this tag; without it the text
-   * stays as written.
+   * Send a group message that @-mentions people (the agent wrote "@#3B6834").
+   * Adapters without it get the text with each mention written as "@昵称".
    */
-  mentionTag?(userId: string): string;
+  sendMentions?(message: InboundMessage, parts: TextPart[]): Promise<void>;
   /** Optional "typing…" indicator shown while the agent runs. */
   typing?(message: InboundMessage): Promise<void>;
 }

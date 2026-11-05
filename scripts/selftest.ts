@@ -196,6 +196,8 @@ function respond(body: any, output: unknown[]) {
 let worker: ((request: Request) => Promise<Response>) | undefined;
 /** The next this-many calls to QQ's API fail to connect (as undici reports a connect timeout). */
 let qqConnectFailures = 0;
+/** Tests can answer a QQ API call themselves (return undefined for the normal reply). */
+let qqReply: ((body: any) => Response | undefined) | undefined;
 /** What the fake image API answers; set by the generate_image test. */
 let imageResponse: (() => Response) | undefined;
 /** Half a second of a 440 Hz tone, as the speech API returns it (mono s16le PCM). */
@@ -273,7 +275,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (url.startsWith("https://api.sgroup.qq.com/v2/") && url.endsWith("/files")) {
     return Response.json({ file_uuid: "u1", file_info: "FILEINFO", ttl: 3600 });
   }
-  if (url.startsWith("https://api.sgroup.qq.com/")) return Response.json({ id: "sent", timestamp: 1 });
+  if (url.startsWith("https://api.sgroup.qq.com/")) return qqReply?.(body) ?? Response.json({ id: "sent", timestamp: 1 });
   if (url.startsWith("https://api.telegram.org/")) return Response.json({ ok: true, result: {} });
   throw new Error(`unexpected fetch ${url}`);
 }) as typeof fetch;
@@ -314,7 +316,7 @@ const noCtx = {
   images: [],
   onRunEnd: () => {},
   attachments: (_seq: number) => undefined as Array<{ name: string; url: string; contentType: string }> | undefined,
-  people: () => [] as Array<{ userId: string; name?: string; lastSeen: number }>,
+  people: () => [] as Array<{ id: string; userId?: string; name?: string; lastSeen: number }>,
 };
 
 /** A chat's events as stored. */
@@ -1021,22 +1023,61 @@ await test("qq mentions: others become \"@昵称 #ID\", the bot's own @ is dropp
   assert.deepEqual(stored.data.mentions, [{ userId: "MEMBERAB2C08", name: "坏坏" }, { userId: "NEWBIE999999" }], "not the bot");
 });
 
-await test("@#ID: in a group it becomes a real QQ mention of someone the log knows; otherwise it stays as text", async () => {
+await test("@#ID: in a group, a Markdown message with a real QQ mention; plain \"@昵称\" when QQ refuses or the id is unknown", async () => {
   const said = (id: string, text: string, author: Record<string, unknown>) =>
     qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id, content: text, group_openid: "GAT", author } });
   await handleWebhook(said("at-1", " 路过", { member_openid: "MEMBERAB2C08", username: "坏坏" }), "qq");
   await drain();
   calls.length = 0;
-  await handleWebhook(said("at-2", " 艾特 @#ab2c08 有人找你，@#000000 你也来", { member_openid: "MOMMA0000001", username: "党国华" }), "qq");
+  await handleWebhook(said("at-2", " 艾特 @#ab2c08 有人找你*快来*，@#000000 你也来", { member_openid: "MOMMA0000001", username: "党国华" }), "qq");
   await drain();
-  assert.deepEqual(sentTo("/v2/groups/GAT/messages").map((b) => b.content), ['<@MEMBERAB2C08> 有人找你，@#000000 你也来']);
-  const sent = (await events("qq:group:GAT")).findLast((e) => e.type === "tool/result" && e.data.callId === "call_at")!;
-  assert.match(sent.data.output, /^sent as a reply/);
+  const [md] = sentTo("/v2/groups/GAT/messages");
+  assert.equal(md.msg_type, 2, "groups only take @ in Markdown");
+  assert.equal(md.markdown.content, '<qqbot-at-user id="MEMBERAB2C08" /> 有人找你\\*快来\\*，@#000000 你也来', "the rest escaped, the unknown id as written");
+  assert.equal(md.content, undefined);
+  assert.equal(md.msg_id, "at-2");
+
+  // QQ refuses the Markdown: the text still goes out, with the name written out.
+  calls.length = 0;
+  qqReply = (body) => (body?.msg_type === 2 ? Response.json({ code: 40034127, message: "markdown not allowed" }, { status: 400 }) : undefined);
+  try {
+    await handleWebhook(said("at-3", " 艾特 @#AB2C08 在吗", { member_openid: "MOMMA0000001", username: "党国华" }), "qq");
+    await drain();
+  } finally {
+    qqReply = undefined;
+  }
+  assert.deepEqual(
+    sentTo("/v2/groups/GAT/messages").map((b) => [b.msg_type, b.content ?? b.markdown.content]),
+    [[2, '<qqbot-at-user id="MEMBERAB2C08" /> 在吗'], [0, "@坏坏 在吗"]],
+  );
 
   calls.length = 0;
-  await handleWebhook(c2c("at-3", "艾特 @#AB2C08 在吗", "PRIVATEAT"), "qq");
+  await handleWebhook(c2c("at-4", "艾特 @#AB2C08 在吗", "PRIVATEAT"), "qq");
   await drain();
   assert.deepEqual(sentTo("/v2/users/PRIVATEAT/messages").map((b) => b.content), ["@#AB2C08 在吗"], "no mentions in a private chat");
+});
+
+await test("chat roster: senders logged before ids were kept still count, by #ID and nickname", async () => {
+  const { chatPeople, mentionParts } = await import("../src/conversation/people.js");
+  const msg = (seq: number, time: number, data: Record<string, unknown>) => ({ seq, time, type: "user/message", data: { eventId: `e${seq}`, header: "", text: "", mentioned: false, reply: {}, ...data } }) as any;
+  const people = chatPeople([
+    msg(1, 1000, { sender: "姨姨 #29CF3F" }), // logged before userId was stored
+    msg(2, 2000, { sender: "坏坏 #AB2C08", userId: "MEMBERAB2C08", mentions: [{ userId: "NEWBIE999999" }] }),
+    msg(3, 3000, { sender: "#29CF3F" }), // nickname not sent this time: keep the known one
+  ]);
+  assert.deepEqual(people, [
+    { id: "#29CF3F", userId: undefined, name: "姨姨", lastSeen: 3000 },
+    { id: "#AB2C08", userId: "MEMBERAB2C08", name: "坏坏", lastSeen: 2000 },
+    { id: "#999999", userId: "NEWBIE999999", name: undefined, lastSeen: 2000 },
+  ]);
+  assert.deepEqual(mentionParts("@#29CF3F 看 @#ab2c08 和 @#999999！@#123456", people), [
+    "@姨姨",
+    " 看 ",
+    { mention: { userId: "MEMBERAB2C08", name: "坏坏" } },
+    " 和 ",
+    { mention: { userId: "NEWBIE999999" } },
+    "！@#123456",
+  ]);
 });
 
 await test("chat_members: who the log has seen, most recent first, with nickname, #ID and when", async () => {
@@ -1044,8 +1085,8 @@ await test("chat_members: who the log has seen, most recent first, with nickname
   const ctx = {
     ...noCtx,
     people: () => [
-      { userId: "MEMBERAB2C08", name: "坏坏", lastSeen: at("2026-11-05T12:03:00Z") },
-      { userId: "NEWBIE999999", lastSeen: at("2026-11-05T11:58:00Z") },
+      { id: "#AB2C08", userId: "MEMBERAB2C08", name: "坏坏", lastSeen: at("2026-11-05T12:03:00Z") },
+      { id: "#999999", lastSeen: at("2026-11-05T11:58:00Z") },
     ],
   };
   assert.equal(await runTool("chat_members", "{}", ctx), "2 人：\n坏坏 #AB2C08（最后出现 11/05 20:03）\n#999999（最后出现 11/05 19:58）");

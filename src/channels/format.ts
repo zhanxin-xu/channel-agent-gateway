@@ -1,12 +1,16 @@
 /** How an inbound message is shown to the model (its context line). */
 import { config } from "../config.js";
-import type { InboundMessage } from "./types.js";
+import type { InboundMessage, TextPart } from "./types.js";
 
 /** How the model knows a person: "#" + the last 6 characters of their platform id, e.g. "#3B6834". */
 export const shortId = (userId: string) => `#${userId.slice(-6).toUpperCase() || "?"}`;
 /** A person as the model reads them: "老王 #3B6834", or just the short id. */
 export const personLabel = (userId: string, name?: string) => (name ? `${name} ${shortId(userId)}` : shortId(userId));
 export const senderLabel = (m: InboundMessage) => personLabel(m.userId, m.senderName);
+
+/** An outgoing text with each mention written out ("@老王"), for channels that can't mention. */
+export const partsToText = (parts: TextPart[]) =>
+  parts.map((p) => (typeof p === "string" ? p : `@${p.mention.name ?? shortId(p.mention.userId)}`)).join("");
 
 /**
  * The context line of a message, kept in the log; the model sees it as
