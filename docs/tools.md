@@ -68,7 +68,8 @@
 | 参数 | 说明 |
 |---|---|
 | `text` | 要说的话，最多 500 字，可以夹带下面的语气指令 |
-| `instructions` | 可选，整条语音的语气，例如 `像在讲睡前故事`。会接在 `TTS_INSTRUCTIONS` 后面一起发给接口 |
+| `instructions` | 可选，整条语音的语气，例如 `像在讲睡前故事`。会接在 `TTS_INSTRUCTIONS` 后面一起发给接口；唱歌时是唱法风格，例如 `温柔的摇篮曲` |
+| `sing` | 可选，`true` 时把 `text` 当歌词唱出来 |
 | `reply_to` | 回复哪条消息，同 `send_message` |
 
 - **固定音色**：每次请求都带上仓库里的参考音频 [`assets/voice/dafeiyu.mp3`](../assets/voice/dafeiyu.mp3)（约 10 秒，32 kbps）和它的文字稿，通过接口的 `input_references` 克隆这个声音，所以每条语音都是同一个声音，不需要在 Fish 那边建音色。参考音频要尽量小：同一段声音用 170 KB 的原文件时每次约 $0.002，压到 43 KB 后和不带参考一样（约 $0.00006 一条短句）。
@@ -80,6 +81,7 @@
   - 中途换语言：`<english>…</english>`、`<japanese>…</japanese>` 等（实验性）。
   - 多音字、人名注音：每个字一组 `<|phoneme_start|>chong2<|phoneme_end|>`，拼音后面带声调数字。
   - 方括号里的内容不会被念出来；每句最多三个左右，用多了反而不自然。详见 [Fish Audio 的 Drama 3 文档](https://docs.fish.audio/features/text-to-speech/drama-3)。
+- **唱歌**（`sing: true`）：Drama 3 没有专门的唱歌模式，工具会在歌词前加 `[唱歌]`、末尾加 `♪`，并把唱歌要求（按旋律唱、长音拖住、不要念白）和风格（默认 `欢快的儿歌旋律`）放进 `instructions`。效果是大肥鱼的声音清唱，旋律由模型自己编，没有伴奏，适合唱几句，不适合整首歌。工具描述让模型用 `～` 标长音，只唱原创或对方写的词。
 - **费用**：按输入文字的字节数计费，OpenRouter 上 Drama 3 是 $2 / 百万 UTF-8 字节，一条短语音不到 0.01 美分。群里任何人都能让机器人发语音，介意的话不要配置 `TTS_API_KEY`。
 
 ## 沙盒工作区
