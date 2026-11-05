@@ -27,6 +27,30 @@ export class ModelCallError extends Error {
   }
 }
 
+/**
+ * The model key has no money left: out of credits (402), or over the key's
+ * spending limit (OpenRouter: 403 "Key limit exceeded"). Retrying won't help
+ * until it resets or is topped up. `resetsAt`: when, if the provider said.
+ */
+export class OutOfCreditError extends ModelCallError {
+  override name = "OutOfCreditError";
+  constructor(
+    message: string,
+    readonly resetsAt?: number,
+  ) {
+    super(message, false);
+  }
+}
+
+/** Whether an error body means the key is out of money, and when it resets ("…; resets 2026-11-06T00:00:00.000Z."). */
+function outOfCredit(status: number, error: unknown): { resetsAt?: number } | undefined {
+  const e = (error ?? {}) as { message?: unknown; metadata?: { limit_source?: unknown } };
+  const message = typeof e.message === "string" ? e.message : "";
+  if (status !== 402 && !(status === 403 && (e.metadata?.limit_source || /limit exceeded|credit/i.test(message)))) return undefined;
+  const resetsAt = Date.parse(/resets (\S+?)\.?(?:\s|$)/.exec(message)?.[1] ?? "");
+  return Number.isNaN(resetsAt) ? {} : { resetsAt };
+}
+
 export function outputText(output: OutputItem[]): string {
   return output
     .filter((item) => item.type === "message")
@@ -73,6 +97,8 @@ export async function createResponse(body: Record<string, unknown>, opts: { time
   if (!res.ok || data.error) {
     // Gateways may answer 200 with the provider's error code in the body (OpenRouter: {"error":{"code":502,…}}).
     const status = res.ok ? Number(data.error?.code) || res.status : res.status;
+    const credit = outOfCredit(status, data.error);
+    if (credit) throw new OutOfCreditError(`Responses API HTTP ${status}: ${data.error?.message ?? "out of credit"}`, credit.resetsAt);
     throw new ModelCallError(`Responses API HTTP ${res.status}: ${JSON.stringify(data.error ?? data).slice(0, 300)}`, isTransientStatus(status));
   }
   return data;

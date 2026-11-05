@@ -1957,6 +1957,36 @@ await test("time limit: close to the function's deadline, the next step is the l
   }
 });
 
+await test("out of credit: an @ or a DM is told, an ordinary group message is skipped quietly", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    if (String(input instanceof Request ? input.url : input).endsWith("/responses")) {
+      calls.push({ url: "https://gw.example.com/api/v1/responses", body: {}, headers: new Headers() });
+      const message = "Key limit exceeded (daily limit). $3.01 of $3.00 used; resets 2026-11-06T00:00:00.000Z.";
+      return Response.json({ error: { message, code: 403, metadata: { limit_source: "openrouter_key_limit" } } }, { status: 403 });
+    }
+    return original(input, init);
+  }) as typeof fetch;
+  try {
+    await handleWebhook(groupMsg("GBROKE", "nc1", "今天吃啥"), "qq");
+    await drain();
+    assert.equal(llmRequests().length, 1, "the ambient turn tried the model");
+    assert.equal(sentTo("/v2/groups/GBROKE/messages").length, 0, "and said nothing");
+
+    await handleWebhook(groupAt("GBROKE", "nc2", " 在吗"), "qq");
+    await handleWebhook(c2c("nc3", "在吗", "BROKE"), "qq");
+    await drain();
+    const notice = "没余额了，暂时回不了消息（北京时间 11月6日 08:00 恢复）。";
+    assert.deepEqual(sentTo("/v2/groups/GBROKE/messages").map((b) => b.content), [notice]);
+    assert.deepEqual(sentTo("/v2/users/BROKE/messages").map((b) => b.content), [notice]);
+    assert.deepEqual(await turnEnds("qq:group:GBROKE"), ["error", "error"], "the cursor moved on: nothing is retried");
+  } finally {
+    globalThis.fetch = original;
+  }
+  const { outOfCreditText } = await import("../src/runtime/runner.js");
+  assert.equal(outOfCreditText(), "没余额了，暂时回不了消息。", "a 402 says no reset time");
+});
+
 await test("unknown channel → 404", async () => {
   assert.equal((await handleWebhook(new Request("http://x/api/webhook/nope", { method: "POST" }), "nope")).status, 404);
 });

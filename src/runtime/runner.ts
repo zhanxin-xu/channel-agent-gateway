@@ -19,6 +19,7 @@ import type { ChannelAdapter } from "../channels/types.js";
 import { config } from "../config.js";
 import { LAST_STEP_MIN_MS, NEW_STEP_MIN_MS, timeLeftMs } from "../agent/budget.js";
 import { runTurn, type TurnResult } from "../agent/loop.js";
+import { OutOfCreditError } from "../agent/model.js";
 import { SYSTEM_PROMPT } from "../agent/system-prompt.js";
 import type { SessionEvent } from "../conversation/events.js";
 import { recoverOpenTurn, unfinishedTurn } from "../conversation/recovery.js";
@@ -39,6 +40,15 @@ const MAX_INTERRUPTIONS = 2;
 const SYNC_TURN_MIN_MS = LAST_STEP_MIN_MS + 30_000;
 const GIVE_UP_TEXT = "这件事每次做到一半都超时了，我先停在这里。可以把它拆小一点再让我做。";
 const ERROR_TEXT = "抱歉，处理消息时出错了，请稍后再试。";
+
+/** What an @ or a DM gets while the model key has no money left; ordinary group messages get nothing. */
+export function outOfCreditText(resetsAt?: number): string {
+  if (resetsAt === undefined) return "没余额了，暂时回不了消息。";
+  // Beijing has no DST: UTC+8 all year.
+  const t = new Date(resetsAt + 8 * 3600_000);
+  const hm = `${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`;
+  return `没余额了，暂时回不了消息（北京时间 ${t.getUTCMonth() + 1}月${t.getUTCDate()}日 ${hm} 恢复）。`;
+}
 
 export interface RunOptions {
   /** Sync channels: replies are collected here instead of sent. */
@@ -195,9 +205,15 @@ async function drain(
         }
       } catch (err) {
         if (err instanceof LockLostError) throw err;
-        console.error(`[runner] turn ${turn} failed for ${chatKey}`, err);
         await session.setCursor(pending.at(-1)!.seq);
-        if (direct && ctx.sent.length === 0) await ctx.send({ kind: "text", text: ERROR_TEXT }).catch(() => {});
+        if (err instanceof OutOfCreditError) {
+          // Not a bug: one line, and only those who called the bot hear about it.
+          console.warn(`[runner] turn ${turn} for ${chatKey}: model out of credit (${direct ? "told the chat" : "ambient, skipped"}): ${err.message}`);
+          if (direct) await ctx.send({ kind: "text", text: outOfCreditText(err.resetsAt) }).catch(() => {});
+        } else {
+          console.error(`[runner] turn ${turn} failed for ${chatKey}`, err);
+          if (direct && ctx.sent.length === 0) await ctx.send({ kind: "text", text: ERROR_TEXT }).catch(() => {});
+        }
       }
       // The platform is down: leave what's left for the next run instead of more turns that can't send.
       if (outbox.unreachable) return done({ outcome: "stopped" });
