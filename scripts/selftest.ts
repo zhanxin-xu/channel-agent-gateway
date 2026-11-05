@@ -986,6 +986,43 @@ await test("qq voice/video/file: voice uses QQ's transcript, others become place
   assert.match(llmRequests()[0]!.body.input[0].content, /\n\[语音\] 你好呀\n\[视频\]\n\[文件：报告\.pdf\]$/);
 });
 
+await test("qq quote: the quoted message (text and picture) is shown and its picture can be saved", async () => {
+  const quoting = (id: string, author: Record<string, unknown>) =>
+    qqRequest({
+      op: 0,
+      t: "GROUP_AT_MESSAGE_CREATE",
+      d: {
+        id,
+        content: " 换成绿巨人",
+        group_openid: "GQUOTE",
+        author: { member_openid: "OWNER" },
+        message_type: 103,
+        message_scene: { source: "default", ext: ["msg_idx=REFIDX_new", "ref_msg_idx=REFIDX_old"] },
+        msg_elements: [
+          { msg_idx: "REFIDX_other", content: "别的", author: { member_openid: "X" } },
+          {
+            msg_idx: "REFIDX_old",
+            content: "超人版来啦",
+            author,
+            attachments: [{ content_type: "image/png", url: "//multimedia.nt.qq.com.cn/hero.png" }],
+          },
+        ],
+      },
+    });
+  await handleWebhook(quoting("quote1", { bot: true, username: "大肥鱼" }), "qq");
+  await drain();
+  const msg = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "user");
+  assert.match(textOf(msg), /\[引用 你 的消息：超人版来啦\n\[图片\]\]\n换成绿巨人/);
+  assert.ok(msg.content.some((p: any) => p.type === "input_image"), "the quoted picture reaches the model");
+  const stored = (await events("qq:group:GQUOTE")).find((e) => e.type === "user/message" && e.data.eventId === "quote1")!;
+  assert.deepEqual(stored.data.attachments, [{ name: "", url: "https://multimedia.nt.qq.com.cn/hero.png", contentType: "image/png" }]);
+
+  calls.length = 0;
+  await handleWebhook(quoting("quote2", { member_openid: "ABCDEF123456", username: "老王" }), "qq");
+  await drain();
+  assert.match(textOf(llmRequests()[0]!.body.input.findLast((i: any) => i.role === "user")), /\[引用 老王 #123456 的消息：超人版来啦/);
+});
+
 // ── Compaction, recovery, hand-off ──
 await test("compaction: past 80% of the context, older events become a summary (cache-friendly call), then deleted", async () => {
   await httpCall("first", "cmp");

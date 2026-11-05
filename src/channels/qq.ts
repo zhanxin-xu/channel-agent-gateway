@@ -163,6 +163,56 @@ interface QQMessageEvent {
   group_openid?: string;
   channel_id?: string;
   guild_id?: string;
+  /**
+   * Undocumented, but what QQ sends (and what NoneBot / nanobot read): a reply
+   * to an earlier message has message_type 103, `message_scene.ext` holds
+   * "ref_msg_idx=X", and the quoted message is the `msg_elements` entry whose
+   * `msg_idx` is X.
+   */
+  message_type?: number;
+  message_scene?: { ext?: unknown };
+  msg_elements?: QQQuotedElement[];
+}
+
+interface QQQuotedElement {
+  msg_idx?: string;
+  content?: string;
+  attachments?: QQMessageEvent["attachments"];
+  author?: { bot?: boolean; username?: string; member_openid?: string; user_openid?: string; id?: string };
+}
+
+/** Longest quoted text shown to the model. */
+const MAX_QUOTE_CHARS = 500;
+
+/** The message this one quotes (a reply in QQ's UI), if any. */
+function quotedElement(d: QQMessageEvent): QQQuotedElement | undefined {
+  const ext = Array.isArray(d.message_scene?.ext) ? d.message_scene.ext : [];
+  const ref = ext.find((v): v is string => typeof v === "string" && v.startsWith("ref_msg_idx="))?.slice("ref_msg_idx=".length);
+  if (!ref || !Array.isArray(d.msg_elements)) return undefined;
+  return d.msg_elements.find((e) => e?.msg_idx === ref);
+}
+
+/** Who wrote the quoted message, as the model knows people: 你 for the bot, else nickname + short id. */
+function quotedAuthor(a: QQQuotedElement["author"]): string {
+  if (a?.bot) return "你";
+  const openid = a?.member_openid ?? a?.user_openid ?? a?.id ?? "";
+  const id = openid ? `#${openid.slice(-6).toUpperCase()}` : "";
+  return [a?.username, id].filter(Boolean).join(" ") || "某人";
+}
+
+/**
+ * The quoted message as a line before the text, e.g. "[引用 你 的消息：好呀\n[图片]]";
+ * its images and files join this message's, so the model sees them and
+ * save_attachment can fetch them (after the message's own).
+ */
+function quoteOf(d: QQMessageEvent) {
+  const q = quotedElement(d);
+  if (!q) return undefined;
+  const parsed = parseAttachments(q.attachments);
+  let text = cleanContent(q.content);
+  if (text.length > MAX_QUOTE_CHARS) text = `${text.slice(0, MAX_QUOTE_CHARS)}…`;
+  const body = [text, ...parsed.images.map(() => "[图片]"), ...parsed.notes].filter(Boolean).join("\n") || "（内容没收到）";
+  return { line: `[引用 ${quotedAuthor(q.author)} 的消息：${body}]`, ...parsed };
 }
 
 /** Same signals as the official SDK: `mentions[].is_you`, or a `<@!AppID>` marker in the text. */
@@ -202,9 +252,14 @@ function toInbound(t: string, d: QQMessageEvent): InboundMessage | undefined {
   const message = parseEvent(t, d);
   if (!message) return undefined;
   const { images, notes, attachments } = parseAttachments(d.attachments);
+  const quote = quoteOf(d);
+  if (quote) {
+    images.push(...quote.images);
+    attachments.push(...quote.attachments);
+  }
   if (images.length) message.images = images;
   if (attachments.length) message.attachments = attachments;
-  if (notes.length) message.text = [message.text, ...notes].filter(Boolean).join("\n");
+  message.text = [quote?.line, message.text, ...notes].filter(Boolean).join("\n");
   // A bare "@大肥鱼" has no text once the mention is stripped, but it's still someone calling the bot.
   if (message.mode !== "ambient" && !message.text && !images.length) message.text = "（只 @ 了你，没说话）";
   const window = REPLY_WINDOW_MS[message.replyContext.scope!];
