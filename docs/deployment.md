@@ -30,6 +30,12 @@
 
 **敏感变量读不出来。** 标记为 Sensitive 的变量保存后无法再查看原值，修改时只能整段重写。像 `OPENAI_RESPONSES_EXTRA_BODY` 这种不含密钥的配置，建议存成普通变量（CLI 加 `--no-sensitive`），方便以后查看和修改。
 
+## 函数区域
+
+`vercel.json` 的 `regions` 把函数放在新加坡（`sin1`），和 Supabase 在同一个区。每个请求要访问数据库好几次，函数和数据库离得近，接口才快；离中国大陆的用户和 QQ 服务器也近。Vercel 默认的 `iad1` 在美国东部，每次访问数据库都要横跨太平洋。Hobby 套餐只能选一个区域。
+
+沙盒的区域另外由 `SANDBOX_REGION` 决定（默认 `iad1`）。函数在 `sin1` 时，沙盒里每条命令都要跨一次太平洋，所以会慢一点。
+
 ## 函数时长
 
 `vercel.json` 把 Webhook 函数和 `/api/worker` 的 `maxDuration` 都设为 300 秒，这是 Hobby 套餐的上限。平台要求很快拿到回执，所以 Webhook 先返回回执，再用 `waitUntil` 在后台写库、运行 agent，后台处理同样受 300 秒限制；一轮做不完时交给 `/api/worker`，由新的函数接着做。

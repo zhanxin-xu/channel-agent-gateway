@@ -37,7 +37,7 @@ export async function handleAdmin(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const to = target(url);
   if (!to) return new Response("not found", { status: 404 });
-  if ("ui" in to) return serveUi(to.ui);
+  if ("ui" in to) return serveUi(to.ui, request);
 
   try {
     await refreshSettings();

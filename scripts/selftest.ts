@@ -2098,6 +2098,11 @@ await test("admin api: login, cookie session, same-origin JSON only; a new ADMIN
     const page = await handleAdmin(new Request("https://bot.example.com/api/admin?__ui="));
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-security-policy")!, /script-src 'self'/);
+    assert.match(await page.text(), /<link rel="modulepreload" href="\/admin\/view-chat\.js">/, "every script is preloaded");
+    const etag = page.headers.get("etag")!;
+    assert.equal(page.headers.get("vercel-cdn-cache-control"), "max-age=86400", "the CDN keeps it");
+    const again = await handleAdmin(new Request("https://bot.example.com/api/admin?__ui=", { headers: { "if-none-match": etag } }));
+    assert.equal(again.status, 304, "unchanged: the browser keeps its copy");
     assert.equal((await handleAdmin(new Request("https://bot.example.com/api/admin?__ui=..%2Fpackage.json"))).status, 404);
   } finally {
     await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null })));
