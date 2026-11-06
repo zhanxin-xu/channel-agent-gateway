@@ -22,6 +22,17 @@ interface MemorySession extends Omit<SessionState, "minSeq"> {
   events: StoredEvent[];
 }
 
+/** Mirrors admin_chats' `speakers`: who wrote among the last 50 messages, most recent first, at most 5. */
+function recentSpeakers(events: StoredEvent[]): string[] {
+  const speakers: string[] = [];
+  const recent = events.filter((e) => e.type === "user/message" && !(e.data as { replyVia?: string }).replyVia).slice(-50).reverse();
+  for (const e of recent) {
+    const sender = (e.data as { sender?: string }).sender;
+    if (sender && !speakers.includes(sender)) speakers.push(sender);
+  }
+  return speakers.slice(0, 5);
+}
+
 /** The same contract in one process's memory. Mirrors the SQL functions. */
 export class MemoryStore implements Store {
   private sessions = new Map<string, MemorySession>();
@@ -242,6 +253,7 @@ export class MemoryStore implements Store {
         lastActiveAt: s?.lastActiveAt ?? null,
         profile: this.profiles.get(chat) ?? null,
         usage: this.usageDays.get(chat)?.get(day) ?? null,
+        speakers: recentSpeakers(s?.events ?? []),
       };
     });
     return summaries.sort((a, b) => (b.lastActiveAt ?? -1) - (a.lastActiveAt ?? -1));

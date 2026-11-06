@@ -231,6 +231,14 @@ async function contract(name: string, store: Store) {
     assert.equal(await store.unlock(c), true);
     assert.equal(await store.unlock(c), false);
     assert.equal(await store.lock(c, "someone", 60_000, "acquire"), true, "free again");
+
+    const said = (id: string, sender: string, extra: Record<string, unknown> = {}) =>
+      store.ingest(msg(c, id, { direct: false, wake: false, event: { type: "user/message", data: { eventId: id, sender, ...extra } } }));
+    await said("sp1", "老王 #3B6834");
+    await said("sp2", "阿青 #AAAAAA");
+    await said("sp3", "老王 #3B6834");
+    await said("sp4", "管理员 #ADMIN", { replyVia: "sp3" });
+    assert.deepEqual((await store.chats("2026-11-06")).find((x) => x.chat === c)!.speakers, ["老王 #3B6834", "阿青 #AAAAAA"], "most recent first, once each, whispers left out");
   });
 
   await test("admin: log and login failures", async () => {

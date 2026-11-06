@@ -444,6 +444,8 @@ language sql stable security definer set search_path = '' as $$
 $$;
 
 -- Every chat that has a session or a profile, most recently active first.
+-- `speakers`: who wrote among the last 50 messages, most recent first (at most 5),
+-- so a chat can be told apart when the platform gives no name (QQ).
 create or replace function public.admin_chats(p_day date) returns jsonb
 language sql stable security definer set search_path = '' as $$
   with keys as (
@@ -454,12 +456,23 @@ language sql stable security definer set search_path = '' as $$
     'chat', k.chat, 'channel', s.channel, 'conversationId', s.conversation_id, 'chatType', s.chat_type,
     'turn', s.turn, 'locked', coalesce(s.lock_expires_at > now(), false),
     'lastActiveAt', gateway.epoch_ms(s.last_active_at),
-    'profile', p.profile, 'usage', u.counts
+    'profile', p.profile, 'usage', u.counts, 'speakers', w.speakers
   ) order by s.last_active_at desc nulls last), '[]'::jsonb)
   from keys k
   left join gateway.sessions s on s.chat = k.chat
   left join gateway.chat_profiles p on p.chat = k.chat
-  left join gateway.usage_daily u on u.chat = k.chat and u.day = p_day;
+  left join gateway.usage_daily u on u.chat = k.chat and u.day = p_day
+  left join lateral (
+    select coalesce(jsonb_agg(sender order by last_seq desc), '[]'::jsonb) as speakers from (
+      select m.sender, max(m.seq) as last_seq from (
+        select e.seq, e.data ->> 'sender' as sender from gateway.events e
+        where e.chat = k.chat and e.type = 'user/message' and not (e.data ? 'replyVia')
+        order by e.seq desc limit 50
+      ) m
+      where m.sender is not null
+      group by m.sender order by last_seq desc limit 5
+    ) recent
+  ) w on true;
 $$;
 
 -- The session and up to p_limit events before p_before, newest first.
@@ -590,7 +603,7 @@ end;
 $$;
 
 -- Keep in step with SCHEMA_VERSION in src/store/types.ts.
-insert into gateway.meta (key, value) values ('schema_version', '2')
+insert into gateway.meta (key, value) values ('schema_version', '3')
   on conflict (key) do update set value = excluded.value;
 
 -- Let the Data API see new functions right away.

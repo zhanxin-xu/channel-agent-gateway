@@ -102,7 +102,7 @@ export interface ChatStore {
 // Separate interfaces, so each part of the gateway depends only on what it uses.
 
 /** The schema version this code expects; keep in step with the end of supabase/schema.sql. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * A call to a store function the database doesn't have yet (the schema is
@@ -159,6 +159,8 @@ export interface ChatSummary {
   profile?: Record<string, unknown> | null;
   /** Today's counters. */
   usage?: UsageCounts | null;
+  /** Who wrote among the last 50 messages ("老王 #3B6834"), most recent first, at most 5. */
+  speakers?: string[];
 }
 
 export interface TurnProblem {

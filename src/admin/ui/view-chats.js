@@ -15,9 +15,19 @@ const CHANNELS = { qq: "QQ", telegram: "Telegram", http: "HTTP" };
 /** "QQ 群", "Telegram 私聊". */
 export const chatKind = (c) => `${CHANNELS[c.channel] ?? c.channel}${c.chatType === "group" ? " 群" : c.chatType === "private" ? " 私聊" : ""}`;
 
-/** A chat's name for people: its title, else a short form of its key. */
+/** "老王 #3B6834" → "老王"; a label without a name stays as its short id. */
+const personName = (label) => label.replace(/ #[0-9A-Za-z?]{1,6}$/, "");
+
+/** Who's been talking: "老王、阿青、小明 等". The platform gives no group names (QQ), so this is how a group is recognized. */
+export function speakersText(c) {
+  const names = (c.speakers ?? []).map(personName);
+  return names.length ? `${names.join("、")}${names.length >= 5 ? " 等" : ""}` : "";
+}
+
+/** A chat's name for people: its title; else, for a DM, the person; else a short form of its key. */
 export function chatName(c) {
   if (c.profile?.title) return c.profile.title;
+  if (c.chatType === "private" && c.speakers?.length) return c.speakers[0];
   const id = c.chat.replace(/^(\w+):(group:|c2c:)?/, "");
   return id.length > 10 ? `${id.slice(0, 10)}…` : id;
 }
@@ -38,7 +48,7 @@ export async function renderChats(main) {
 
   const draw = () => {
     const shown = chats.filter(
-      (c) => (kind === "all" || c.chatType === kind) && (!search || `${c.profile?.title ?? ""} ${c.chat}`.toLowerCase().includes(search)),
+      (c) => (kind === "all" || c.chatType === kind) && (!search || `${c.profile?.title ?? ""} ${c.chat} ${(c.speakers ?? []).join(" ")}`.toLowerCase().includes(search)),
     );
     count.textContent = `${shown.length} 个`;
     fill(
@@ -48,7 +58,13 @@ export async function renderChats(main) {
             h(
               "tr",
               { class: "clickable", onClick: () => (location.hash = `#/chat/${encodeURIComponent(c.chat)}/history`) },
-              h("td", null, h("a", { href: `#/chat/${encodeURIComponent(c.chat)}/history` }, h("b", null, chatName(c))), h("div", { class: "muted mono small" }, c.chat)),
+              h(
+                "td",
+                null,
+                h("a", { href: `#/chat/${encodeURIComponent(c.chat)}/history` }, h("b", null, chatName(c))),
+                c.chatType === "group" && speakersText(c) ? h("div", { class: "small" }, `最近：${speakersText(c)}`) : null,
+                h("div", { class: "muted mono small" }, c.chat),
+              ),
               h("td", { class: "nowrap" }, chatKind(c)),
               h("td", null, pill(...MODES[c.mode]), c.locked ? [" ", pill("info", "运行中")] : null),
               h("td", { class: "num" }, fmtInt(c.usage?.turns)),
@@ -75,11 +91,11 @@ export async function renderChats(main) {
       }, label),
     ),
   );
-  const filter = h("input", { id: "chat-search", type: "search", placeholder: "搜索备注名或 ID", onInput: (e) => ((search = e.target.value.trim().toLowerCase()), draw()) });
+  const filter = h("input", { id: "chat-search", type: "search", placeholder: "搜索备注名、群友或 ID", onInput: (e) => ((search = e.target.value.trim().toLowerCase()), draw()) });
 
   fill(
     main,
-    h("header", { class: "page-head" }, h("h1", null, "聊天"), h("p", { class: "muted" }, "QQ 不提供群名，可以在聊天的“设置与额度”里填备注名。")),
+    h("header", { class: "page-head" }, h("h1", null, "聊天"), h("p", { class: "muted" }, "QQ 不提供群名和私聊昵称：群下面列出最近说话的人，也可以在聊天的“设置与额度”里填备注名。")),
     h("div", { class: "row between" }, h("div", { class: "row" }, seg, filter), count),
     h(
       "div",
