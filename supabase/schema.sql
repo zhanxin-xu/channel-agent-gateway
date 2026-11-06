@@ -14,7 +14,7 @@
 -- For the admin console (/admin):
 --   gateway.meta           schema version.
 --   gateway.settings       configuration set in the console, by env var name;
---                          secrets are encrypted by the gateway (src/settings).
+--                          secrets are flagged so the console only shows them masked.
 --   gateway.chat_profiles  per-chat settings: name, reply mode, quotas, tools.
 --                          Not tied to sessions, so they outlive an expired chat.
 --   gateway.usage_daily    per-chat counters per UTC day (turns, tokens, cost…).
@@ -315,7 +315,7 @@ create table if not exists gateway.meta (
 
 create table if not exists gateway.settings (
   key text primary key, -- the env var it stands in for, e.g. OPENAI_RESPONSES_MODEL
-  value text not null,  -- secrets: ciphertext made by the gateway
+  value text not null,
   secret boolean not null default false,
   updated_at timestamptz not null default now()
 );

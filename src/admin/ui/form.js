@@ -74,7 +74,7 @@ export function settingField(def, view) {
   const el = h(
     "div",
     { class: "field" },
-    h("label", { for: id }, def.label, " ", pill(kind, text), view.undecryptable ? pill("bad", "用旧密码加密，读不出") : null),
+    h("label", { for: id }, def.label, " ", pill(kind, text)),
     editor.el,
     def.help ? h("p", { class: "help" }, def.help) : null,
     h("p", { class: "help mono" }, def.key),

@@ -67,7 +67,6 @@ export const setupRoutes: Route[] = [
         autoImported,
         /** Settings still read from the environment: can be imported. */
         envOnly: values.filter((v) => v.source === "env").map((v) => v.key),
-        undecryptable: values.filter((v) => v.undecryptable).map((v) => v.key),
       };
     },
   },

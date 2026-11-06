@@ -63,7 +63,7 @@ function llmEnv(suffix: LlmSuffix): string {
 }
 
 export const config = {
-  /** The admin console (/admin). Environment only: it guards the console and encrypts the secrets set there. */
+  /** The admin console (/admin). Environment only: the password that signs in to it. */
   admin: {
     get password() {
       return env("ADMIN_PASSWORD");

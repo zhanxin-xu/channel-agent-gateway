@@ -102,7 +102,7 @@ function renderNoPassword() {
       "div",
       { class: "gate" },
       h("h1", null, "先设一个管理密码"),
-      h("p", null, "管理端用环境变量 ADMIN_PASSWORD 保护，它也用来加密存进数据库的各种 key。这是唯一需要在 Vercel 里手动设置的变量："),
+      h("p", null, "管理端用环境变量 ADMIN_PASSWORD 保护。这是唯一需要在 Vercel 里手动设置的变量："),
       h(
         "ol",
         null,

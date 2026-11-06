@@ -95,21 +95,6 @@ async function banners(status, app) {
       ),
     );
   }
-  if (status.undecryptable.length) {
-    const input = h("input", { id: "old-password", type: "password", autocomplete: "off", placeholder: "旧的 ADMIN_PASSWORD" });
-    items.push(
-      h(
-        "div",
-        { class: "banner banner-warn" },
-        h("span", null, `${status.undecryptable.length} 个密钥是用旧的管理密码加密的，现在读不出来，暂时用的是环境变量里的值。输入旧密码重新加密：`),
-        h("span", { class: "row" }, input, action("重新加密", async () => {
-          const { reencrypted } = await api.post("settings/rekey", { oldPassword: input.value });
-          toast(`重新加密了 ${reencrypted} 个密钥`);
-          app.go(location.hash);
-        }, { primary: true })),
-      ),
-    );
-  }
   return items;
 }
 
@@ -119,7 +104,7 @@ const STEP_VIEWS = {
       panel,
       h("h2", null, "管理密码"),
       h("p", null, pill("ok", "已设置"), " 你已经用它登录了。"),
-      h("p", { class: "muted" }, "要换密码：在 Vercel 改 ADMIN_PASSWORD 并重新部署，再回到这里用旧密码把已存的密钥重新加密（页面顶部会提示）。"),
+      h("p", { class: "muted" }, "要换密码：在 Vercel 改 ADMIN_PASSWORD 并重新部署，用新密码登录就行，已存的配置不受影响。"),
       h("div", { class: "row" }, h("button", { type: "button", class: "btn btn-primary", onClick: next }, "下一步")),
     );
   },

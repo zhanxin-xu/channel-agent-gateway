@@ -2032,31 +2032,21 @@ await test("out of credit: an @ or a DM is told, an ordinary group message is sk
 });
 
 // ── Admin console ──
-const { saveSettings, refreshSettings, describeSettings, rekeySecrets, importEnv } = await import("../src/settings/service.js");
+const { saveSettings, refreshSettings, describeSettings, importEnv } = await import("../src/settings/service.js");
 const { saveChatProfile } = await import("../src/chats/profile.js");
 const { quotaPolicy, turnUsage } = await import("../src/chats/usage.js");
 const { utcDay } = await import("../src/chats/day.js");
 const { Toolset } = await import("../src/tools/registry.js");
 
-await test("settings: the console's values win over the environment; secrets are stored encrypted under ADMIN_PASSWORD", async () => {
-  process.env.ADMIN_PASSWORD = "pw-one";
+await test("settings: the console's values win over the environment; secrets only leave the server masked", async () => {
   try {
-    await saveSettings({ OPENAI_RESPONSES_MODEL: "x/console-model", DEEPSEEK_API_KEY: "ds-from-console" });
+    await saveSettings({ OPENAI_RESPONSES_MODEL: "x/console-model", DEEPSEEK_API_KEY: "ds-from-console-123" });
     assert.equal(config.llm.model, "x/console-model");
-    assert.equal(config.deepseek.apiKey, "ds-from-console");
-    const stored = (await getStore().listSettings()).find((r) => r.key === "DEEPSEEK_API_KEY")!;
-    assert.equal(stored.secret, true);
-    assert.ok(!stored.value.includes("ds-from-console"), "ciphertext at rest");
+    assert.equal(config.deepseek.apiKey, "ds-from-console-123");
+    assert.equal((await getStore().listSettings()).find((r) => r.key === "DEEPSEEK_API_KEY")!.secret, true);
     const view = (await describeSettings()).values.find((v) => v.key === "DEEPSEEK_API_KEY")!;
-    assert.equal(view.source, "db");
-    assert.ok(!view.value.includes("from-console"), "only a masked preview leaves the server");
-
-    process.env.ADMIN_PASSWORD = "pw-two";
-    await refreshSettings({ force: true });
-    assert.equal(config.deepseek.apiKey, "ds-key", "unreadable under another password: the environment's value");
-    assert.equal(config.llm.model, "x/console-model", "plain settings aren't affected");
-    assert.equal(await rekeySecrets("pw-one"), 1);
-    assert.equal(config.deepseek.apiKey, "ds-from-console");
+    assert.deepEqual([view.source, view.value], ["db", "ds-fro…-123"], "a masked preview");
+    assert.deepEqual((await getStore().adminLog(1))[0]!.detail, { keys: ["OPENAI_RESPONSES_MODEL", "DEEPSEEK_API_KEY"] }, "the log has names, not values");
 
     await assert.rejects(saveSettings({ OPENAI_RESPONSES_EXTRA_BODY: "[1]", AGENT_MAX_STEPS: "0" }), (err: any) => {
       assert.deepEqual(Object.keys(err.errors).sort(), ["AGENT_MAX_STEPS", "OPENAI_RESPONSES_EXTRA_BODY"]);
@@ -2070,11 +2060,9 @@ await test("settings: the console's values win over the environment; secrets are
 
     const imported = await importEnv();
     assert.ok(imported.includes("QQ_APP_SECRET") && imported.includes("OPENAI_RESPONSES_EXTRA_BODY"));
-    assert.equal((await getStore().listSettings()).find((r) => r.key === "QQ_APP_SECRET")!.secret, true);
     assert.equal(config.qq.appSecret, process.env.QQ_APP_SECRET);
   } finally {
     await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null, secret: r.secret })));
-    delete process.env.ADMIN_PASSWORD;
     await refreshSettings({ force: true });
   }
 });

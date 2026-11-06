@@ -1,7 +1,7 @@
 /** Reading and changing the settings (src/settings). */
 import crypto from "node:crypto";
 import { settingDef } from "../../settings/catalog.js";
-import { describeSettings, importEnv, rekeySecrets, saveSettings, SettingsError } from "../../settings/service.js";
+import { describeSettings, importEnv, saveSettings, SettingsError } from "../../settings/service.js";
 import { field, HttpError, type Route } from "../http.js";
 
 /** Secrets the console can make up itself. */
@@ -33,14 +33,6 @@ export const settingsRoutes: Route[] = [
     },
   },
   { method: "POST", path: "settings/import-env", handler: async () => ({ saved: await checked(importEnv) }) },
-  {
-    method: "POST",
-    path: "settings/rekey",
-    async handler(req) {
-      const oldPassword = field(await req.json(), "oldPassword", { max: 200 });
-      return { reencrypted: await checked(() => rekeySecrets(oldPassword)) };
-    },
-  },
   {
     method: "POST",
     path: "settings/generate",

@@ -2,7 +2,7 @@
 
 下面的配置都可以在[管理端](admin.md)（`/admin`）里填写，存进数据库，改完 30 秒内生效，不用重新部署。每一项按这个顺序取值：**管理端 → 同名环境变量 → 默认值**，所以也可以照旧只用环境变量。直接改环境变量时，需要**重新部署**才会生效。
 
-只能用环境变量设置的有：`ADMIN_PASSWORD`（管理端密码，也用来加密存进数据库的 key）、数据库连接（`SUPABASE_URL`、`SUPABASE_SECRET_KEY`、`POSTGRES_URL_NON_POOLING`），以及 `AGENT_MAX_DURATION_SECONDS`。
+只能用环境变量设置的有：`ADMIN_PASSWORD`（管理端密码）、数据库连接（`SUPABASE_URL`、`SUPABASE_SECRET_KEY`、`POSTGRES_URL_NON_POOLING`），以及 `AGENT_MAX_DURATION_SECONDS`。
 
 本地开发时把变量写进 `.env.local`，模板见 [`.env.example`](../.env.example)。
 

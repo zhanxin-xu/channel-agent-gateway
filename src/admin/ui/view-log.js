@@ -5,7 +5,6 @@ import { fill, fmtTime, h } from "./dom.js";
 const ACTIONS = {
   settings: "改了设置",
   "import-env": "导入环境变量",
-  rekey: "重新加密密钥",
   schema: "执行 schema.sql",
   profile: "改了聊天设置",
   say: "代发消息",

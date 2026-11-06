@@ -4,21 +4,21 @@
  * the table at most every RELOAD_MS, so a change reaches every instance within
  * that time without a redeploy.
  *
+ * Values are stored as typed. The table sits in a private schema with RLS, and
+ * only the server key may call its functions; secrets (`secret`) never leave
+ * the server whole: the console shows a masked preview only.
+ *
  * Until the database has the admin schema, nothing is overridden and the
  * gateway runs on its environment variables, as before.
  */
-import { config } from "../config.js";
 import { getStore, SchemaOutdatedError, type SettingsStore, type StoredSetting } from "../store/index.js";
 import { SETTING_GROUPS, SETTINGS, settingDef, validateSetting, type SettingDef } from "./catalog.js";
 import { setOverrides } from "./overrides.js";
-import { decryptSecret, encryptSecret, maskSecret, SecretKeyError } from "./secrets.js";
 
 export const RELOAD_MS = 30_000;
 
 let loadedAt = -Infinity;
 let loading: Promise<void> | undefined;
-/** Keys whose stored secret can't be decrypted with the current ADMIN_PASSWORD. */
-let undecryptable = new Set<string>();
 let warned = "";
 
 function warnOnce(message: string) {
@@ -27,33 +27,13 @@ function warnOnce(message: string) {
   console.warn(`[settings] ${message}`);
 }
 
-/** Decrypt what was stored; returns the usable values and the keys that couldn't be read. */
-function decode(rows: StoredSetting[], password: string): { values: Map<string, string>; failed: Set<string> } {
-  const values = new Map<string, string>();
-  const failed = new Set<string>();
-  for (const row of rows) {
-    if (!settingDef(row.key)) continue;
-    if (!row.secret) {
-      values.set(row.key, row.value);
-      continue;
-    }
-    try {
-      values.set(row.key, decryptSecret(row.value, password));
-    } catch (err) {
-      if (!(err instanceof SecretKeyError)) throw err;
-      failed.add(row.key);
-    }
-  }
-  return { values, failed };
-}
+/** The stored values of the settings the catalog knows. */
+const valuesOf = (rows: StoredSetting[]) => new Map(rows.filter((r) => settingDef(r.key)).map((r) => [r.key, r.value]));
 
-async function load(store: SettingsStore): Promise<StoredSetting[]> {
+async function load(store: SettingsStore): Promise<StoredSetting[] | undefined> {
   try {
     const rows = await store.listSettings();
-    const { values, failed } = decode(rows, config.admin.password);
-    setOverrides(values);
-    undecryptable = failed;
-    if (failed.size) warnOnce(`${failed.size} secret(s) were encrypted under another ADMIN_PASSWORD; using the environment for them`);
+    setOverrides(valuesOf(rows));
     return rows;
   } catch (err) {
     if (err instanceof SchemaOutdatedError) {
@@ -63,7 +43,7 @@ async function load(store: SettingsStore): Promise<StoredSetting[]> {
     }
     // The database is unreachable: keep what this instance last loaded.
     warnOnce(`couldn't load settings, keeping the last ones: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
+    return undefined;
   }
 }
 
@@ -86,8 +66,11 @@ export interface SettingView {
   /** The value in effect; for secrets only a masked preview. */
   value: string;
   updatedAt?: number;
-  /** Stored, but encrypted under another ADMIN_PASSWORD. */
-  undecryptable?: boolean;
+}
+
+/** How a secret is shown: enough to recognize it, not to use it. */
+export function maskSecret(plain: string): string {
+  return plain.length > 12 ? `${plain.slice(0, 6)}…${plain.slice(-4)}` : "••••••";
 }
 
 function envValue(def: SettingDef): string {
@@ -98,21 +81,19 @@ function envValue(def: SettingDef): string {
 /** Every setting with where its value comes from. Reads the table now, so it is current. */
 export async function describeSettings(): Promise<{ groups: typeof SETTING_GROUPS; settings: typeof SETTINGS; values: SettingView[] }> {
   const rows = await load(getStore());
+  if (!rows) throw new Error("读不到数据库里的设置，稍后再试");
   loadedAt = Date.now();
   const stored = new Map(rows.map((r) => [r.key, r]));
-  const { values: decoded } = decode(rows, config.admin.password);
   const values = SETTINGS.map((def): SettingView => {
     const row = stored.get(def.key);
-    const dbValue = decoded.get(def.key);
     const fromEnv = envValue(def);
-    const source: SettingSource = dbValue !== undefined ? "db" : fromEnv ? "env" : "default";
-    const value = dbValue ?? (fromEnv || def.default || "");
+    const source: SettingSource = row ? "db" : fromEnv ? "env" : "default";
+    const value = row?.value ?? (fromEnv || def.default || "");
     return {
       key: def.key,
       source,
       value: def.kind === "secret" && value ? maskSecret(value) : value,
       ...(row ? { updatedAt: row.updatedAt } : {}),
-      ...(row && undecryptable.has(def.key) ? { undecryptable: true } : {}),
     };
   });
   return { groups: SETTING_GROUPS, settings: SETTINGS, values };
@@ -131,7 +112,6 @@ export class SettingsError extends Error {
  * bad field, without saving anything.
  */
 export async function saveSettings(changes: Record<string, string | null>, action = "settings"): Promise<string[]> {
-  const password = config.admin.password;
   const errors: Record<string, string> = {};
   const entries: Array<{ key: string; value: string | null; secret: boolean }> = [];
   for (const [key, input] of Object.entries(changes)) {
@@ -141,30 +121,18 @@ export async function saveSettings(changes: Record<string, string | null>, actio
       continue;
     }
     const checked = validateSetting(def, input ?? "");
-    if ("error" in checked) {
-      errors[key] = checked.error;
-      continue;
-    }
-    const secret = def.kind === "secret";
-    if (secret && checked.value && !password) {
-      errors[key] = "没有设置 ADMIN_PASSWORD，不能保存密钥";
-      continue;
-    }
-    entries.push({ key, value: checked.value ? (secret ? encryptSecret(checked.value, password) : checked.value) : null, secret });
+    if ("error" in checked) errors[key] = checked.error;
+    else entries.push({ key, value: checked.value || null, secret: def.kind === "secret" });
   }
   if (Object.keys(errors).length) throw new SettingsError(errors);
   if (!entries.length) return [];
   const store = getStore();
   await store.putSettings(entries);
   const keys = entries.map((e) => e.key);
+  // Names only: the log never holds a secret.
   await store.log(action, null, { keys });
   await refreshSettings({ force: true });
   return keys;
-}
-
-/** Settings that come from the environment now and aren't in the database. */
-export function envOnlySettings(): string[] {
-  return SETTINGS.filter((def) => envValue(def) !== "").map((d) => d.key);
 }
 
 /** Copy every setting the environment provides into the database (keys already there are skipped). */
@@ -184,43 +152,12 @@ const ENV_IMPORTED = "env_imported_at";
  * The first time the console finds the admin schema in place: import what
  * the environment provides, once. After that the console is where settings
  * change (the database wins over the environment), and a key cleared in the
- * console stays cleared. Needs ADMIN_PASSWORD, to encrypt the keys.
- * Returns the keys imported ([] when it already ran).
+ * console stays cleared. Returns the keys imported ([] when it already ran).
  */
 export async function importEnvOnce(): Promise<string[]> {
-  if (!config.admin.password) return [];
   const store = getStore();
   if (await store.meta(ENV_IMPORTED)) return [];
   const saved = await importEnv();
   await store.setMeta(ENV_IMPORTED, new Date().toISOString());
   return saved;
-}
-
-/**
- * After ADMIN_PASSWORD changed: re-encrypt the stored secrets made under the
- * old one. Returns how many were re-encrypted; throws if `oldPassword` opens none.
- */
-export async function rekeySecrets(oldPassword: string): Promise<number> {
-  const password = config.admin.password;
-  const store = getStore();
-  const rows = (await store.listSettings()).filter((r) => r.secret);
-  const entries: Array<{ key: string; value: string; secret: boolean }> = [];
-  for (const row of rows) {
-    try {
-      decryptSecret(row.value, password);
-      continue; // already under the current password
-    } catch {
-      // try the old one below
-    }
-    try {
-      entries.push({ key: row.key, value: encryptSecret(decryptSecret(row.value, oldPassword), password), secret: true });
-    } catch (err) {
-      if (!(err instanceof SecretKeyError)) throw err;
-    }
-  }
-  if (!entries.length) throw new SettingsError({ oldPassword: "旧密码解不开任何一个密钥" });
-  await store.putSettings(entries);
-  await store.log("rekey", null, { keys: entries.map((e) => e.key) });
-  await refreshSettings({ force: true });
-  return entries.length;
 }

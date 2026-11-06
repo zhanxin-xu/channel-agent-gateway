@@ -116,7 +116,7 @@ export class SchemaOutdatedError extends Error {
   }
 }
 
-/** A setting as stored: secrets hold ciphertext (src/settings/secrets.ts). */
+/** A setting as stored. `secret`: shown masked in the console, never returned whole. */
 export interface StoredSetting {
   key: string;
   value: string;
