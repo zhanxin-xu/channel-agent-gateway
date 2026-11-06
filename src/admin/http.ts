@@ -2,6 +2,7 @@
  * The admin API's plumbing: a request wrapper, a tiny router and JSON errors.
  * Routes return plain data (sent as JSON) or a Response.
  */
+import { SchemaOutdatedError } from "../store/index.js";
 
 export class HttpError extends Error {
   constructor(
@@ -58,6 +59,7 @@ export function jsonResponse(data: unknown, status = 200, headers: Record<string
 }
 
 export function errorResponse(err: unknown): Response {
+  if (err instanceof SchemaOutdatedError) return jsonResponse({ error: "数据库的表结构太旧，先在新手引导的“数据库”一步升级" }, 409);
   if (err instanceof HttpError) return jsonResponse({ error: err.message, ...(err.fields ? { fields: err.fields } : {}) }, err.status);
   console.error("[admin] request failed", err);
   return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 500);

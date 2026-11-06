@@ -16,7 +16,7 @@
   },
   "rewrites": [
     { "source": "/admin", "destination": "/api/admin?__ui=" },
-    { "source": "/admin/:file*", "destination": "/api/admin?__ui=:file*" },
-    { "source": "/api/admin/:path*", "destination": "/api/admin?__api=:path*" }
+    { "source": "/admin/(.*)", "destination": "/api/admin?__ui=$1" },
+    { "source": "/api/admin/(.*)", "destination": "/api/admin?__api=$1" }
   ]
 }

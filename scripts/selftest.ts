@@ -85,6 +85,12 @@ const { memoryRpc, postgresRpc, rpcResponse } = await import("./rpc-shim.js");
 const pgBackend = process.env.TEST_DATABASE_URL ? await postgresRpc(process.env.TEST_DATABASE_URL) : undefined;
 const supabaseRpc = pgBackend?.rpc ?? memoryRpc(new MemoryStore());
 const fakeSupabase = rpcResponse(supabaseRpc, "sb_secret_test");
+/** The same database as it was before the admin console: only the original functions. */
+const V1_FUNCTIONS = new Set(["chat_ingest", "chat_open", "chat_append", "chat_trim", "chat_lock", "chat_claim_ambient", "chat_begin_turn", "chat_set_cursor", "reply_get", "reply_put", "image_put", "image_get", "gateway_expire"]);
+const oldSupabase = rpcResponse(async (fn, args) => {
+  if (!V1_FUNCTIONS.has(fn)) throw new Error(`function public.${fn}() does not exist`);
+  return supabaseRpc(fn, args);
+}, "sb_secret_test");
 
 /** Minimal Upstash Vector emulator: "similarity" is just shared characters with the query. */
 const vectors = new Map<string, { data: string; metadata: unknown }>();
@@ -263,6 +269,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     });
   }
   if (url.startsWith("https://db.example.supabase.co/rest/v1/rpc/")) return fakeSupabase(url, req.headers, body);
+  if (url.startsWith("https://olddb.example.supabase.co/rest/v1/rpc/")) return oldSupabase(url, req.headers, body);
   if (url.startsWith("https://vector.example.com/")) return fakeVector(url, req.method, body);
   if (url.startsWith("https://multimedia.nt.qq.com.cn/")) {
     if (url.includes("missing")) return new Response("gone", { status: 404 });
@@ -2096,7 +2103,10 @@ await test("admin api: login, cookie session, same-origin JSON only; a new ADMIN
     const status = (await (await req("GET", "status", undefined, auth)).json()) as any;
     assert.equal(status.model, true);
     assert.equal(status.channels.find((c: any) => c.name === "qq").webhook, "https://bot.example.com/api/webhook/qq");
-    assert.ok(status.envOnly.includes("OPENAI_RESPONSES_API_KEY"));
+    assert.ok(status.autoImported.includes("OPENAI_RESPONSES_API_KEY"), "the environment moves in the first time");
+    assert.deepEqual(status.envOnly, []);
+    const again = (await (await req("GET", "status", undefined, auth)).json()) as any;
+    assert.deepEqual(again.autoImported, [], "only once");
     assert.equal((await req("PUT", "settings", { changes: { AGENT_MAX_STEPS: "abc" } }, auth)).status, 400);
     assert.equal((await req("GET", "nope", undefined, auth)).status, 404);
 
@@ -2108,7 +2118,38 @@ await test("admin api: login, cookie session, same-origin JSON only; a new ADMIN
     assert.match(page.headers.get("content-security-policy")!, /script-src 'self'/);
     assert.equal((await handleAdmin(new Request("https://bot.example.com/api/admin?__ui=..%2Fpackage.json"))).status, 404);
   } finally {
+    await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null, secret: r.secret })));
     delete process.env.ADMIN_PASSWORD;
+    await refreshSettings({ force: true });
+  }
+});
+
+await test("deploying before the database upgrade: on the old schema the bot runs on its environment as before", async () => {
+  const memory = getStore();
+  process.env.SUPABASE_URL = "https://olddb.example.supabase.co";
+  process.env.SUPABASE_SECRET_KEY = "sb_secret_test";
+  process.env.ADMIN_PASSWORD = "admin-pw";
+  resetStore();
+  try {
+    await refreshSettings({ force: true });
+    assert.equal(config.llm.model, "openai/gpt-6-luna");
+    assert.equal((await httpCall("first", "oldschema")).reply, "答案是 20");
+    await handleWebhook(groupAt("GOLD", "o1", " 在吗"), "qq");
+    await drain();
+    assert.equal(sentTo("/v2/groups/GOLD/messages").length, 1, "a group @ is answered");
+    const { session } = (await supabaseRpc("chat_open", { p_chat: "http:oldschema", p_after_seq: -1 })) as any;
+    assert.equal(session.turn, 1);
+    const { handleAdmin } = await import("../src/admin/handler.js");
+    const login = await handleAdmin(new Request("https://bot.example.com/api/admin/session", { method: "POST", headers: { "content-type": "application/json" }, body: '{"password":"admin-pw"}' }));
+    const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    const status = (await (await handleAdmin(new Request("https://bot.example.com/api/admin/status", { headers: { cookie } }))).json()) as any;
+    assert.deepEqual([status.database.schemaVersion, status.database.ready], [null, false], "the console asks for the upgrade");
+    const chats = await handleAdmin(new Request("https://bot.example.com/api/admin/chats", { headers: { cookie } }));
+    assert.equal(chats.status, 409, "pages that need the new tables say so");
+  } finally {
+    for (const k of ["SUPABASE_URL", "SUPABASE_SECRET_KEY", "ADMIN_PASSWORD"]) delete process.env[k];
+    resetStore(memory);
+    await refreshSettings({ force: true });
   }
 });
 

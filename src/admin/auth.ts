@@ -6,13 +6,29 @@
  */
 import crypto from "node:crypto";
 import { config } from "../config.js";
-import type { ConsoleStore } from "../store/index.js";
+import { SchemaOutdatedError, type ConsoleStore } from "../store/index.js";
 import { HttpError, type AdminRequest } from "./http.js";
 
 const COOKIE = "sag_admin";
 const SESSION_MS = 7 * 24 * 3600_000;
 const FAILURE_WINDOW_S = 15 * 60;
 const MAX_FAILURES = 10;
+
+/** Before the database has the admin schema (you log in to create it), failures are counted per instance. */
+const localFailures = new Map<string, number[]>();
+
+async function failures(store: ConsoleStore, ip: string, record: boolean): Promise<number> {
+  try {
+    return await store.loginFailures(ip, record, FAILURE_WINDOW_S);
+  } catch (err) {
+    if (!(err instanceof SchemaOutdatedError)) throw err;
+    const since = Date.now() - FAILURE_WINDOW_S * 1000;
+    const times = (localFailures.get(ip) ?? []).filter((t) => t > since);
+    if (record) times.push(Date.now());
+    localFailures.set(ip, times);
+    return times.length;
+  }
+}
 
 const sha256 = (data: string) => crypto.createHash("sha256").update(data).digest();
 
@@ -45,11 +61,11 @@ function cookie(value: string, maxAgeS: number, secure: boolean): string {
 export async function login(req: AdminRequest, password: string, store: ConsoleStore): Promise<string> {
   const expected = config.admin.password;
   if (!expected) throw new HttpError(503, "还没有设置 ADMIN_PASSWORD");
-  if ((await store.loginFailures(req.ip, false, FAILURE_WINDOW_S)) >= MAX_FAILURES) {
+  if ((await failures(store, req.ip, false)) >= MAX_FAILURES) {
     throw new HttpError(429, "密码错太多次了，15 分钟后再试");
   }
   if (!crypto.timingSafeEqual(sha256(password), sha256(expected))) {
-    await store.loginFailures(req.ip, true, FAILURE_WINDOW_S);
+    await failures(store, req.ip, true);
     throw new HttpError(401, "密码不对");
   }
   const expires = Date.now() + SESSION_MS;

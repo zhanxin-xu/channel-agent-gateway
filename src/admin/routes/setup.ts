@@ -6,7 +6,7 @@ import { createResponse, outputText } from "../../agent/model.js";
 import { channels } from "../../channels/index.js";
 import { utcDay } from "../../chats/day.js";
 import { config } from "../../config.js";
-import { describeSettings, saveSettings } from "../../settings/service.js";
+import { describeSettings, importEnvOnce, saveSettings } from "../../settings/service.js";
 import { getStore, SCHEMA_VERSION, storeBackend } from "../../store/index.js";
 import { searchBalanceReport } from "../../tools/account.js";
 import { applySchema, connectionVar, readSchema } from "../database.js";
@@ -40,6 +40,8 @@ export const setupRoutes: Route[] = [
     path: "status",
     async handler(req) {
       const database = await databaseStatus();
+      // Whichever way the schema got there (the button or SQL run by hand), the environment moves in once.
+      const autoImported = database.ready ? await importEnvOnce() : [];
       const { values } = database.ready ? await describeSettings() : { values: [] };
       const chats = database.ready ? await getStore().chats(utcDay()) : [];
       return {
@@ -61,6 +63,8 @@ export const setupRoutes: Route[] = [
           sandbox: config.sandbox.enabled,
         },
         firstMessage: chats.length > 0,
+        /** Settings this request imported from the environment (the first time only). */
+        autoImported,
         /** Settings still read from the environment: can be imported. */
         envOnly: values.filter((v) => v.source === "env").map((v) => v.key),
         undecryptable: values.filter((v) => v.undecryptable).map((v) => v.key),

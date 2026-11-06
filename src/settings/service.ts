@@ -178,6 +178,24 @@ export async function importEnv(): Promise<string[]> {
   return saveSettings(changes, "import-env");
 }
 
+const ENV_IMPORTED = "env_imported_at";
+
+/**
+ * The first time the console finds the admin schema in place: import what
+ * the environment provides, once. After that the console is where settings
+ * change (the database wins over the environment), and a key cleared in the
+ * console stays cleared. Needs ADMIN_PASSWORD, to encrypt the keys.
+ * Returns the keys imported ([] when it already ran).
+ */
+export async function importEnvOnce(): Promise<string[]> {
+  if (!config.admin.password) return [];
+  const store = getStore();
+  if (await store.meta(ENV_IMPORTED)) return [];
+  const saved = await importEnv();
+  await store.setMeta(ENV_IMPORTED, new Date().toISOString());
+  return saved;
+}
+
 /**
  * After ADMIN_PASSWORD changed: re-encrypt the stored secrets made under the
  * old one. Returns how many were re-encrypted; throws if `oldPassword` opens none.

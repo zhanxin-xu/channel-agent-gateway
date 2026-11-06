@@ -96,6 +96,10 @@ export function memoryRpc(store: MemoryStore): Rpc {
         return store.addHistory(a.p_chat, a.p_entries);
       case "history_list":
         return store.history(a.p_chat, a.p_before, a.p_limit);
+      case "meta_get":
+        return store.meta(a.p_key);
+      case "meta_put":
+        return store.setMeta(a.p_key, a.p_value);
       case "admin_chats":
         return store.chats(a.p_day);
       case "admin_events":

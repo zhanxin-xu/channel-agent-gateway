@@ -148,6 +148,14 @@ export class PostgresStore implements Store {
     }
   }
 
+  meta(key: string) {
+    return this.rpc<string | null>("meta_get", { p_key: key });
+  }
+
+  async setMeta(key: string, value: string) {
+    await this.rpc("meta_put", { p_key: key, p_value: value });
+  }
+
   chats(day: string) {
     return this.rpc<ChatSummary[]>("admin_chats", { p_day: day });
   }

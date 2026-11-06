@@ -16,6 +16,9 @@ const app = {
   status: null,
   async refreshStatus() {
     app.status = await api.get("status");
+    if (app.status.autoImported?.length) {
+      toast(`已把 ${app.status.autoImported.length} 个环境变量导入数据库，以后在这里改配置`);
+    }
     renderNav();
     return app.status;
   },

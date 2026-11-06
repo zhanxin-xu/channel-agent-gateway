@@ -379,6 +379,19 @@ language sql stable security definer set search_path = '' as $$
   select jsonb_build_object('schemaVersion', (select value::int from gateway.meta where key = 'schema_version'));
 $$;
 
+-- Markers the console keeps (e.g. when it imported the environment): a text value or null.
+create or replace function public.meta_get(p_key text) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select to_jsonb(value) from gateway.meta where key = p_key;
+$$;
+
+create or replace function public.meta_put(p_key text, p_value text) returns jsonb
+language sql security definer set search_path = '' as $$
+  insert into gateway.meta (key, value) values (p_key, p_value)
+    on conflict (key) do update set value = excluded.value;
+  select 'true'::jsonb;
+$$;
+
 -- Settings: [{key, value, secret, updatedAt}].
 create or replace function public.settings_list() returns jsonb
 language sql stable security definer set search_path = '' as $$
@@ -599,7 +612,7 @@ begin
     'history_add(text,jsonb)', 'history_list(text,bigint,int)',
     'admin_chats(date)', 'admin_events(text,bigint,int)', 'admin_append(text,jsonb)', 'admin_unlock(text)',
     'admin_problems(bigint,int)', 'admin_log_add(text,text,jsonb)', 'admin_log_list(int)',
-    'admin_login_failures(text,boolean,int)'
+    'admin_login_failures(text,boolean,int)', 'meta_get(text)', 'meta_put(text,text)'
   ] loop
     execute format('revoke all on function public.%s from public', fn);
     if exists (select from pg_roles where rolname = 'anon') then
