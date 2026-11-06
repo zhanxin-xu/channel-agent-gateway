@@ -12,7 +12,10 @@ import type { MemoryStore } from "../src/store/index.js";
 export type Rpc = (fn: string, args: Record<string, any>) => Promise<unknown>;
 
 /** jsonb parameters: node-postgres would turn a JS array into a Postgres array, so send them as JSON text. */
-const JSONB_PARAMS = new Set(["p_event", "p_events", "p_context", "p_upgrade"]);
+const JSONB_PARAMS = new Set(["p_event", "p_events", "p_context", "p_upgrade", "p_entries", "p_profile", "p_counts", "p_detail"]);
+
+/** PostgREST's answer when a function doesn't exist. */
+class NoFunction extends Error {}
 
 /** A fresh `gateway` schema plus the functions, in the database at `url`. */
 export async function postgresRpc(url: string): Promise<{ rpc: Rpc; client: pg.Client }> {
@@ -73,8 +76,44 @@ export function memoryRpc(store: MemoryStore): Rpc {
         return store.putImage(a.p_chat, a.p_key, a.p_data_url);
       case "image_get":
         return store.getImages(a.p_keys);
+      case "gateway_info":
+        return { schemaVersion: await store.schemaVersion() };
+      case "settings_list":
+        return store.listSettings();
+      case "settings_put":
+        return store.putSettings(a.p_entries);
+      case "profile_get":
+        return store.getProfile(a.p_chat);
+      case "profile_put":
+        return store.putProfile(a.p_chat, a.p_profile);
+      case "usage_add":
+        return store.addUsage(a.p_chat, a.p_day, a.p_counts);
+      case "usage_list":
+        return store.usage(a.p_chat, a.p_from, a.p_to);
+      case "usage_day":
+        return store.usageOfDay(a.p_day);
+      case "history_add":
+        return store.addHistory(a.p_chat, a.p_entries);
+      case "history_list":
+        return store.history(a.p_chat, a.p_before, a.p_limit);
+      case "admin_chats":
+        return store.chats(a.p_day);
+      case "admin_events":
+        return store.recentEvents(a.p_chat, a.p_before, a.p_limit);
+      case "admin_append":
+        return store.appendUnlocked(a.p_chat, a.p_events);
+      case "admin_unlock":
+        return store.unlock(a.p_chat);
+      case "admin_problems":
+        return store.problems(a.p_since, a.p_limit);
+      case "admin_log_add":
+        return store.log(a.p_action, a.p_chat, a.p_detail);
+      case "admin_log_list":
+        return store.adminLog(a.p_limit);
+      case "admin_login_failures":
+        return store.loginFailures(a.p_ip, a.p_record, a.p_window_s);
       default:
-        throw new Error(`no function ${fn}`);
+        throw new NoFunction(`Could not find the function public.${fn}`);
     }
   };
 }
@@ -87,6 +126,9 @@ export function rpcResponse(rpc: Rpc, key: string) {
     try {
       return new Response(JSON.stringify((await rpc(fn, body ?? {})) ?? null), { headers: { "content-type": "application/json" } });
     } catch (err) {
+      if (err instanceof NoFunction || /function public\.\w+\(.*\) does not exist/.test(String(err))) {
+        return Response.json({ code: "PGRST202", message: String(err instanceof Error ? err.message : err) }, { status: 404 });
+      }
       return Response.json({ message: err instanceof Error ? err.message : String(err) }, { status: 400 });
     }
   };

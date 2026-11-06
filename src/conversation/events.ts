@@ -30,6 +30,8 @@ export interface Usage {
   output_tokens?: number;
   input_tokens_details?: { cached_tokens?: number };
   output_tokens_details?: { reasoning_tokens?: number };
+  /** What the call cost in USD, where the provider reports it (OpenRouter). */
+  cost?: number;
 }
 
 /** "unreachable": the platform couldn't be reached, so the turn stopped instead of retrying (runtime/outbox.ts). */
@@ -62,7 +64,20 @@ export interface EventMap {
     attachments?: Attachment[];
     /** The channel's reply context (msg_id, chat_id, …) as received; not model-visible. */
     reply: Record<string, string>;
+    /**
+     * Replies to this message go through that platform message (its eventId)
+     * and share its reply count: an admin's whisper (admin/whisper.ts) has no
+     * platform message of its own.
+     */
+    replyVia?: string;
+    /**
+     * Logged while the chat was set to record only: context for later turns,
+     * never a turn's work (see Session.messagesAfter).
+     */
+    quiet?: true;
   };
+  /** Something an admin sent in the bot's name; the model sees it as its own message. */
+  "admin/message": { text: string };
   /** The same platform message arrived again as an @ (QQ can send both). Log-only. */
   "user/mentioned": { eventId: string };
   /** `/reset`: the model sees nothing before this. Log-only. */

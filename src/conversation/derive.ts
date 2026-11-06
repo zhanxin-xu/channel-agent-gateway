@@ -41,6 +41,10 @@ export async function deriveInput(events: SessionEvent[], loadImage: Loader): Pr
       case "developer/message":
         emit({ role: "developer", content: e.data.text });
         break;
+      case "admin/message":
+        // Said in the bot's name by an admin: as far as the model knows, it said this.
+        emit({ role: "assistant", content: e.data.text });
+        break;
       case "assistant/message":
         input.push(...e.data.output);
         for (const item of e.data.output) {

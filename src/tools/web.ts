@@ -49,6 +49,7 @@ const enabled = () => Boolean(config.deepseek.apiKey);
 
 export const webSearch: Tool = {
   name: "web_search",
+  feature: "search",
   description:
     "Search the web for up-to-date information. Returns titles, URLs, summaries and publish times. " +
     'Supports operators: site:example.com, -site:, "exact phrase", -keyword, lang:zh,en, after:2025, before:2026-01-01. ' +
@@ -81,6 +82,7 @@ export const webSearch: Tool = {
 
 export const webFetch: Tool = {
   name: "web_fetch",
+  feature: "search",
   description: "Fetch a web page and return its main content as Markdown.",
   parameters: {
     type: "object",

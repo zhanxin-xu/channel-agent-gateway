@@ -11,6 +11,7 @@ import { waitUntil } from "@vercel/functions";
 import { handleMessage } from "./runtime/ingress.js";
 import { channels } from "./channels/index.js";
 import { json, type ChannelAdapter, type InboundMessage } from "./channels/types.js";
+import { refreshSettings } from "./settings/service.js";
 
 async function process(adapter: ChannelAdapter, message: InboundMessage, origin: string): Promise<void> {
   try {
@@ -22,6 +23,7 @@ async function process(adapter: ChannelAdapter, message: InboundMessage, origin:
 }
 
 export async function handleWebhook(request: Request, channelName: string): Promise<Response> {
+  await refreshSettings();
   const adapter = channels.get(channelName);
   if (!adapter) return json({ error: `unknown channel "${channelName}"` }, 404);
   if (!adapter.isConfigured()) return json({ error: `channel "${channelName}" is not configured` }, 503);

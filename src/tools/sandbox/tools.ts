@@ -48,6 +48,7 @@ const WORKSPACE_NOTE =
 
 export const bash: Tool = {
   name: "bash",
+  feature: "sandbox",
   description:
     `Run a bash command in your workspace (working directory ${WORKDIR}). ${WORKSPACE_NOTE} ` +
     "Each command is killed after a time limit (60s by default, shorter when this turn is running out of time); " +
@@ -72,6 +73,7 @@ export const bash: Tool = {
 
 export const writeFile: Tool = {
   name: "write_file",
+  feature: "sandbox",
   description: `Write a text file in your workspace (relative paths are under ${WORKDIR}; parent folders are created). Overwrites.`,
   parameters: {
     type: "object",
@@ -92,6 +94,7 @@ export const writeFile: Tool = {
 
 export const readFile: Tool = {
   name: "read_file",
+  feature: "sandbox",
   description:
     `Read a file from your workspace (relative paths are under ${WORKDIR}). Text comes back as text; ` +
     "images (png/jpg/gif/webp) are shown to you so you can look at them, e.g. a chart you just plotted.",
@@ -177,6 +180,7 @@ async function download(ctx: ToolContext, a: Attachment, file: string): Promise<
 
 export const saveAttachment: Tool = {
   name: "save_attachment",
+  feature: "sandbox",
   description:
     "Save the original of an image or file someone sent (a picture in their message, or [文件：…] / [视频] / [语音]) " +
     `into your workspace, under ${INBOX}/. Use it whenever you need the actual file: to edit a photo, read a document, ` +
@@ -222,6 +226,7 @@ export const saveAttachment: Tool = {
 
 export const sendFile: Tool = {
   name: "send_file",
+  feature: "sandbox",
   role: "talk",
   description:
     "Send a file from your workspace to the chat, as its own message (it counts as a reply like send_message). " +

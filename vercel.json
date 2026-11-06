@@ -8,6 +8,15 @@
     "api/worker.ts": {
       "maxDuration": 300,
       "includeFiles": "{assets/**,node_modules/silk-wasm/lib/silk.wasm}"
+    },
+    "api/admin.ts": {
+      "maxDuration": 300,
+      "includeFiles": "{assets/**,node_modules/silk-wasm/lib/silk.wasm,src/admin/ui/**,supabase/schema.sql}"
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/admin", "destination": "/api/admin?__ui=" },
+    { "source": "/admin/:file*", "destination": "/api/admin?__ui=:file*" },
+    { "source": "/api/admin/:path*", "destination": "/api/admin?__api=:path*" }
+  ]
 }

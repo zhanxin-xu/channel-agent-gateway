@@ -10,6 +10,7 @@ import { workerSignature, type WorkerRequest } from "./runtime/handoff.js";
 import { runChat, type ChatMeta } from "./runtime/runner.js";
 import { channels } from "./channels/index.js";
 import { json } from "./channels/types.js";
+import { refreshSettings } from "./settings/service.js";
 import { getStore } from "./store/index.js";
 import { publicOrigin } from "./webhook.js";
 
@@ -17,6 +18,8 @@ export async function handleWorker(request: Request): Promise<Response> {
   // The function's clock started with this request.
   const deadline = Date.now() + config.agent.maxDurationSeconds * 1000;
   if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
+  // The signature's key may come from the console's settings.
+  await refreshSettings();
   const body = await request.text();
   const signature = Buffer.from(request.headers.get("x-worker-signature") ?? "");
   const expected = Buffer.from(workerSignature(body));

@@ -97,3 +97,123 @@ export interface ChatStore {
   /** The data URLs of the keys that exist. */
   getImages(keys: string[]): Promise<Record<string, string>>;
 }
+
+// ── The admin console's data (supabase/schema.sql, "Admin console") ──
+// Separate interfaces, so each part of the gateway depends only on what it uses.
+
+/** The schema version this code expects; keep in step with the end of supabase/schema.sql. */
+export const SCHEMA_VERSION = 2;
+
+/**
+ * A call to a store function the database doesn't have yet (the schema is
+ * older than the code). Runtime features built on the admin tables treat it as
+ * "nothing configured" so the bot keeps working until the schema is upgraded.
+ */
+export class SchemaOutdatedError extends Error {
+  constructor(fn: string) {
+    super(`the database has no function ${fn}: run supabase/schema.sql (or upgrade from /admin)`);
+    this.name = "SchemaOutdatedError";
+  }
+}
+
+/** A setting as stored: secrets hold ciphertext (src/settings/secrets.ts). */
+export interface StoredSetting {
+  key: string;
+  value: string;
+  secret: boolean;
+  updatedAt: number;
+}
+
+export interface SettingsStore {
+  listSettings(): Promise<StoredSetting[]>;
+  /** In one transaction; a null value deletes the key. */
+  putSettings(entries: Array<{ key: string; value: string | null; secret: boolean }>): Promise<void>;
+}
+
+/** Per-chat settings, stored as JSON; their meaning lives in src/chats/profile.ts. */
+export interface ProfileStore {
+  getProfile(chat: string): Promise<Record<string, unknown> | null>;
+  /** Null deletes the profile. */
+  putProfile(chat: string, profile: Record<string, unknown> | null): Promise<void>;
+}
+
+/** Counters that add up ("turns", "cost_usd", …); names live in src/chats/usage.ts. */
+export type UsageCounts = Record<string, number>;
+
+export interface UsageStore {
+  /** `day` is a UTC date, "YYYY-MM-DD". */
+  addUsage(chat: string, day: string, counts: UsageCounts): Promise<void>;
+  usage(chat: string, fromDay: string, toDay: string): Promise<Array<{ day: string; counts: UsageCounts }>>;
+  usageOfDay(day: string): Promise<Record<string, UsageCounts>>;
+}
+
+export type HistoryRole = "user" | "bot" | "admin" | "hint";
+
+/** One line of a chat's readable history. */
+export interface HistoryEntry {
+  /** Unique per chat; an entry with an id seen before is ignored. */
+  id: string;
+  /** Epoch ms. */
+  time: number;
+  role: HistoryRole;
+  sender?: string | null;
+  text: string;
+}
+
+export interface HistoryStore {
+  addHistory(chat: string, entries: Array<Omit<HistoryEntry, "time"> & { time?: number }>): Promise<void>;
+  /** Up to `limit` entries before `beforeMs`, newest first. */
+  history(chat: string, beforeMs: number, limit: number): Promise<HistoryEntry[]>;
+}
+
+export interface ChatSummary {
+  chat: string;
+  /** Absent for a chat whose session expired (it still has a profile or history). */
+  channel?: string | null;
+  conversationId?: string | null;
+  chatType?: "private" | "group" | null;
+  turn?: number | null;
+  locked: boolean;
+  lastActiveAt?: number | null;
+  profile?: Record<string, unknown> | null;
+  /** Today's counters. */
+  usage?: UsageCounts | null;
+}
+
+export interface TurnProblem {
+  chat: string;
+  seq: number;
+  turn: number;
+  time: number;
+  reason: string;
+  error?: string | null;
+}
+
+export interface AdminLogEntry {
+  time: number;
+  action: string;
+  chat?: string | null;
+  detail: Record<string, unknown>;
+}
+
+/** What only the admin console reads or does. */
+export interface ConsoleStore {
+  /** Null when the database has no admin schema at all. */
+  schemaVersion(): Promise<number | null>;
+  /** `day`: whose usage to include, "YYYY-MM-DD" UTC. */
+  chats(day: string): Promise<ChatSummary[]>;
+  /** The session and up to `limit` events before `beforeSeq`, newest first. */
+  recentEvents(chat: string, beforeSeq: number, limit: number): Promise<{ session: SessionState | null; events: StoredEvent[] }>;
+  /** Append without the run lock (an admin's message). Returns the first seq. */
+  appendUnlocked(chat: string, events: NewStoredEvent[]): Promise<number>;
+  /** Take the run lock from whoever holds it. True if someone did. */
+  unlock(chat: string): Promise<boolean>;
+  problems(sinceMs: number, limit: number): Promise<TurnProblem[]>;
+  log(action: string, chat: string | null, detail: Record<string, unknown>): Promise<void>;
+  adminLog(limit: number): Promise<AdminLogEntry[]>;
+  /** Failed logins from `ip` in the last `windowSeconds`, after recording one more if `record`. */
+  loginFailures(ip: string, record: boolean, windowSeconds: number): Promise<number>;
+}
+
+/** Everything one backend provides. */
+export type Store = ChatStore & SettingsStore & ProfileStore & UsageStore & HistoryStore & ConsoleStore;

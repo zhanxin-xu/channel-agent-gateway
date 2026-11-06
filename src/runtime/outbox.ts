@@ -2,7 +2,7 @@ import { unreachableReason } from "../channels/net.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import { messageLabel, type SessionEvent } from "../conversation/events.js";
 import { REPLY_WINDOW_CLOSED } from "../conversation/undelivered.js";
-import type { Session } from "../conversation/session.js";
+
 import type { ChatStore } from "../store/index.js";
 import type { ChatMeta } from "./types.js";
 
@@ -12,6 +12,12 @@ import type { ChatMeta } from "./types.js";
  * (QQ's msg_seq, Telegram's quote-once flag, the reply count), so a later
  * turn or another instance continues where the last one stopped.
  */
+/** The messages replies can go to: a running Session, or a snapshot of recent events (admin/send.ts). */
+export interface MessageLookup {
+  readonly chatKey: string;
+  message(seq: number): SessionEvent<"user/message"> | undefined;
+}
+
 /** Replies per inbound message when the channel sets no limit of its own: a cap on a looping model. */
 const DEFAULT_MAX_REPLIES = 5;
 
@@ -23,9 +29,9 @@ export class Outbox {
   unreachable: string | undefined;
 
   constructor(
-    private store: ChatStore,
+    private store: Pick<ChatStore, "getReply" | "putReply">,
     private adapter: ChannelAdapter,
-    private session: Session,
+    private messages: MessageLookup,
     private meta: ChatMeta,
     private collect: string[] | undefined,
   ) {}
@@ -35,21 +41,28 @@ export class Outbox {
   }
 
   private async context(target: SessionEvent<"user/message">): Promise<Record<string, string>> {
-    return (await this.store.getReply(this.session.chatKey, target.data.eventId)) ?? { ...target.data.reply };
+    return (await this.store.getReply(this.messages.chatKey, replyKey(target))) ?? { ...target.data.reply };
+  }
+
+  /** How many replies message `seq` has had and may have, and when its reply window closes (QQ). */
+  async replyState(seq: number): Promise<{ replies: number; max: number; closesAt?: number } | undefined> {
+    const target = this.messages.message(seq);
+    if (!target) return undefined;
+    const context = await this.context(target);
+    const closesAt = Number(context.expiresAt);
+    return { replies: Number(context.replies ?? 0), max: this.maxReplies, ...(Number.isFinite(closesAt) ? { closesAt } : {}) };
   }
 
   /** Under the reply cap and, where the channel has one (QQ), inside the reply window. */
   async canReply(seq: number): Promise<boolean> {
     if (this.unreachable) return false;
-    const target = this.session.message(seq);
-    if (!target) return false;
-    const context = await this.context(target);
-    return Number(context.replies ?? 0) < this.maxReplies && !windowClosed(context);
+    const state = await this.replyState(seq);
+    return Boolean(state && state.replies < state.max && Date.now() <= (state.closesAt ?? Infinity));
   }
 
   async deliver(seq: number, send: (message: InboundMessage) => Promise<void>): Promise<string> {
     if (this.unreachable) throw new Error(this.unreachable);
-    const target = this.session.message(seq);
+    const target = this.messages.message(seq);
     if (!target) throw new Error(`${messageLabel(seq)} isn't in this chat; reply_to takes the N of a 第N条 label`);
     const replyContext = await this.context(target);
     if (windowClosed(replyContext)) {
@@ -68,7 +81,7 @@ export class Outbox {
     }
     const message: InboundMessage = {
       channel: this.meta.channel,
-      eventId: target.data.eventId,
+      eventId: replyKey(target),
       conversationId: this.meta.conversationId,
       chatType: this.meta.chatType,
       userId: "",
@@ -90,11 +103,14 @@ export class Outbox {
       }
       throw err;
     } finally {
-      await this.store.putReply(this.session.chatKey, target.data.eventId, replyContext);
+      await this.store.putReply(this.messages.chatKey, replyKey(target), replyContext);
     }
     return `sent as a reply to ${messageLabel(seq)} (${count + 1}/${this.maxReplies})`;
   }
 }
+
+/** Where replies to a message are tracked: its own platform message, or the one it replies via. */
+const replyKey = (m: SessionEvent<"user/message">) => m.data.replyVia ?? m.data.eventId;
 
 /** Channels with a reply window (QQ) put its end in the reply context. */
 const windowClosed = (context: Record<string, string>) => Date.now() > Number(context.expiresAt ?? Infinity);

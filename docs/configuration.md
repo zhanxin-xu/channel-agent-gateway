@@ -1,6 +1,8 @@
 # 配置参考
 
-所有配置都来自环境变量，每次读取时实时生效，测试和本地开发服务器可以随时覆盖。在 Vercel 上修改环境变量后，需要**重新部署**才会生效。
+下面的配置都可以在[管理端](admin.md)（`/admin`）里填写，存进数据库，改完 30 秒内生效，不用重新部署。每一项按这个顺序取值：**管理端 → 同名环境变量 → 默认值**，所以也可以照旧只用环境变量。直接改环境变量时，需要**重新部署**才会生效。
+
+只能用环境变量设置的有：`ADMIN_PASSWORD`（管理端密码，也用来加密存进数据库的 key）、数据库连接（`SUPABASE_URL`、`SUPABASE_SECRET_KEY`、`POSTGRES_URL_NON_POOLING`），以及 `AGENT_MAX_DURATION_SECONDS`。
 
 本地开发时把变量写进 `.env.local`，模板见 [`.env.example`](../.env.example)。
 
@@ -16,6 +18,7 @@
 | `OPENAI_RESPONSES_EXTRA_BODY` | 空 | JSON 对象，原样合并进每次请求的请求体，见下文 |
 | `OPENAI_RESPONSES_EXTRA_HEADERS` | 空 | JSON 对象，作为额外的请求头，例如 `{"X-Title":"my-bot"}` |
 | `OPENAI_RESPONSES_TIMEOUT_MS` | `280000` | 单次模型请求的超时上限（毫秒）。运行中还会按函数剩余时间缩短（剩余时间减 20 秒），取两者较小的 |
+| `MODEL_PRICE_INPUT` / `MODEL_PRICE_CACHED` / `MODEL_PRICE_OUTPUT` | 空 | 美元 / 百万 token。接口不返回花费时，用它们估算每个聊天的花费（每群额度按它算）。OpenRouter 会返回花费，可以不填 |
 
 `OPENAI_RESPONSES_EXTRA_BODY` 的常见写法（`provider` 是 OpenRouter 特有的参数）：
 
@@ -41,6 +44,14 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 | `AGENT_AMBIENT_INTERVAL_SECONDS` | `10` | 群里没 @ 的消息，每个群每隔多少秒最多唤起一次 agent；`0` 表示只记录、不唤起 |
 
 每次唤起，模型看到的都是这个聊天的完整事件流（超过预算的部分已压缩）。在很热闹的群里，旁观唤起的频率直接决定模型费用，见[资源消耗](deployment.md#免费额度与资源消耗)。
+
+## 管理端
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `ADMIN_PASSWORD` | 空 | 管理端密码，只能用环境变量设置。不设置时管理端打不开，也不能在管理端保存 key |
+| `CHAT_DEFAULT_MODE` | `normal` | 没单独设置过的聊天怎么回复：`normal`、`mention`（只回 @）、`record`（只记录）、`block`（屏蔽），见[每个聊天的设置](admin.md#每个聊天的设置) |
+| `HISTORY_RETENTION_DAYS` | `30` | 管理端里的聊天记录保留多少天 |
 
 ## 渠道
 

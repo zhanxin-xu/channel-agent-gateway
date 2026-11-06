@@ -32,20 +32,25 @@ export const searchBalance: Tool = {
   parameters: { type: "object", properties: {} },
   enabled: () => Boolean(config.deepseek.apiKey),
   async run() {
-    const data = await getJson<DeepSeekBalance>(`${config.deepseek.baseUrl}/user/balance`, config.deepseek.apiKey);
-    return JSON.stringify({
-      available: data.is_available,
-      balances: (data.balance_infos ?? []).map((b) => ({
-        currency: b.currency,
-        total: b.total_balance,
-        granted: b.granted_balance,
-        topped_up: b.topped_up_balance,
-        ...(b.currency === "CNY" ? { approx_search_calls_left: Math.floor(Number(b.total_balance) / CNY_PER_SEARCH) } : {}),
-      })),
-      pricing: "web_search / web_fetch: ¥5 per 1,000 successful calls (shared with any DeepSeek model usage)",
-    });
+    return JSON.stringify(await searchBalanceReport());
   },
 };
+
+/** The DeepSeek balance (also shown in the admin console). */
+export async function searchBalanceReport() {
+  const data = await getJson<DeepSeekBalance>(`${config.deepseek.baseUrl}/user/balance`, config.deepseek.apiKey);
+  return {
+    available: data.is_available,
+    balances: (data.balance_infos ?? []).map((b) => ({
+      currency: b.currency,
+      total: b.total_balance,
+      granted: b.granted_balance,
+      topped_up: b.topped_up_balance,
+      ...(b.currency === "CNY" ? { approx_search_calls_left: Math.floor(Number(b.total_balance) / CNY_PER_SEARCH) } : {}),
+    })),
+    pricing: "web_search / web_fetch: ¥5 per 1,000 successful calls (shared with any DeepSeek model usage)",
+  };
+}
 
 interface Budget {
   scope: string;
@@ -107,7 +112,7 @@ export const llmKeyLimit: Tool = {
 };
 
 /** One key's limit and usage from OpenRouter's GET /key; an error is reported in place so the other key still shows. */
-async function keyReport(baseUrl: string, apiKey: string, headers: Record<string, string> = {}): Promise<Record<string, unknown>> {
+export async function keyReport(baseUrl: string, apiKey: string, headers: Record<string, string> = {}): Promise<Record<string, unknown>> {
   let data: KeyInfo["data"];
   try {
     ({ data } = await getJson<KeyInfo>(`${baseUrl}/key`, apiKey, headers));

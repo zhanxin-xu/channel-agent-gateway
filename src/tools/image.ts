@@ -89,6 +89,7 @@ const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace("T", "
 
 export const generateImage: Tool = {
   name: "generate_image",
+  feature: "image",
   get description() {
     return (
       "Generate or edit images with an image model. With input_references (images in your workspace, e.g. a photo saved with " +

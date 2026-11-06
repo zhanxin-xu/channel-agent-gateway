@@ -1,6 +1,7 @@
 import { activeTools } from "../src/tools/registry.js";
 import { channels } from "../src/channels/index.js";
 import { config } from "../src/config.js";
+import { refreshSettings } from "../src/settings/service.js";
 import { storeBackend } from "../src/store/index.js";
 
 function extraBodyStatus(): string {
@@ -14,7 +15,8 @@ function extraBodyStatus(): string {
 
 // GET /api/health — what is configured (no secrets exposed).
 export default {
-  fetch() {
+  async fetch() {
+    await refreshSettings();
     return Response.json({
       ok: true,
       model: config.llm.model,
@@ -28,6 +30,7 @@ export default {
       memory: Boolean(config.memory.url && config.memory.token),
       sandbox: config.sandbox.enabled,
       channels: Object.fromEntries([...channels.values()].map((c) => [c.name, c.isConfigured()])),
+      admin: Boolean(config.admin.password),
     });
   },
 };

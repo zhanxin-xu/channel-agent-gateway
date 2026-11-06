@@ -14,6 +14,10 @@
  * which continues that turn from the log (unfinishedTurn). A turn that keeps
  * getting interrupted is given up after MAX_INTERRUPTIONS. Sync channels can't
  * continue elsewhere: their turns end with a forced last step instead.
+ *
+ * Per chat (chats/): the profile adds to the system prompt, picks the tools
+ * and sets the ambient interval; a turn doesn't start once today's cost quota
+ * is used up; and after each turn its usage is added up from the log.
  */
 import type { ChannelAdapter } from "../channels/types.js";
 import { config } from "../config.js";
@@ -21,10 +25,13 @@ import { LAST_STEP_MIN_MS, NEW_STEP_MIN_MS, timeLeftMs } from "../agent/budget.j
 import { runTurn, type TurnResult } from "../agent/loop.js";
 import { OutOfCreditError } from "../agent/model.js";
 import { SYSTEM_PROMPT } from "../agent/system-prompt.js";
+import { ambientInterval, chatProfile, type ChatProfile } from "../chats/profile.js";
+import { costQuotaUsed, quotaPolicy, quotaResetText, recordUsage, turnUsage, usageToday } from "../chats/usage.js";
 import type { SessionEvent } from "../conversation/events.js";
 import { recoverOpenTurn, unfinishedTurn } from "../conversation/recovery.js";
 import { Session } from "../conversation/session.js";
 import { getStore, LockLostError, type ChatStore } from "../store/index.js";
+import { Toolset } from "../tools/registry.js";
 import { makeToolContext } from "./context.js";
 import { startWorker } from "./handoff.js";
 import { RunLock } from "./lock.js";
@@ -48,6 +55,15 @@ export function outOfCreditText(resetsAt?: number): string {
   const t = new Date(resetsAt + 8 * 3600_000);
   const hm = `${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`;
   return `没余额了，暂时回不了消息（北京时间 ${t.getUTCMonth() + 1}月${t.getUTCDate()}日 ${hm} 恢复）。`;
+}
+
+/** What an @ or a DM gets once the chat's daily cost quota is used up. */
+export const quotaUsedText = (scene: "群聊" | "私聊") =>
+  `${scene === "群聊" ? "这个群" : "这里"}今天的额度用完了，${quotaResetText()} 恢复。`;
+
+/** The persona, the channel's formatting hint, and the chat's own instructions. */
+function systemPrompt(adapter: ChannelAdapter, profile: ChatProfile): string {
+  return [SYSTEM_PROMPT, adapter.promptHint, profile.prompt ? `# 这个聊天的额外设定\n\n${profile.prompt}` : ""].filter(Boolean).join("\n\n");
 }
 
 export interface RunOptions {
@@ -119,7 +135,7 @@ export async function runChat(adapter: ChannelAdapter, meta: ChatMeta, opts: Run
       ambientClaimed = false;
       continue;
     }
-    const trigger = await wakeFor(store, chatKey, pending, false);
+    const trigger = await wakeFor(store, chatKey, pending, false, ambientInterval(await chatProfile(chatKey)));
     if (!trigger) return true;
     ambientClaimed = trigger === "ambient";
   }
@@ -144,6 +160,7 @@ async function drain(
   }
 
   const outbox = new Outbox(store, adapter, session, meta, opts.collect);
+  const profile = await chatProfile(chatKey);
   const turnState = { main: -1 };
   const { ctx, endRun } = makeToolContext(adapter, meta, chatKey, deadline, outbox, session, turnState, opts.collect);
   let ambientClaimed = opts.ambientClaimed;
@@ -156,7 +173,7 @@ async function drain(
       const pending = session.messagesAfter(session.cursor);
       // An unfinished turn is continued whatever the sampler says; its messages already woke the agent.
       const resume = pending.length ? unfinishedTurn(session.events) : undefined;
-      const trigger: Trigger | null = resume?.trigger ?? (await wakeFor(store, chatKey, pending, ambientClaimed));
+      const trigger: Trigger | null = resume?.trigger ?? (await wakeFor(store, chatKey, pending, ambientClaimed, ambientInterval(profile)));
       if (!trigger) return done({ outcome: "idle" });
       // The window claim (if any) goes with the work: to this turn, or to the worker taking over.
       const claimed = trigger === "ambient" && !resume;
@@ -167,6 +184,16 @@ async function drain(
       }
 
       const direct = trigger === "direct";
+      const today = await usageToday(chatKey);
+      if (costQuotaUsed(profile, today)) {
+        // Like running out of credit: those who called hear about it once per batch, the rest wait for tomorrow.
+        console.warn(`[runner] ${chatKey}: daily cost quota used up (${direct ? "told the chat" : "ambient, skipped"})`);
+        if (direct && (await outbox.canReply(pending.at(-1)!.seq))) {
+          await ctx.send({ kind: "text", text: quotaUsedText(ctx.chat.scene) }, pending.at(-1)!.seq).catch(() => {});
+        }
+        await session.setCursor(pending.at(-1)!.seq);
+        continue;
+      }
       // Replies go by default to the newest @ (else newest) message that can still take one.
       const main =
         (await findLastAsync(pending.filter((m) => m.data.mentioned), (m) => outbox.canReply(m.seq))) ??
@@ -177,11 +204,13 @@ async function drain(
       ctx.chat.sender = main.data.sender;
       const turn = await session.nextTurn();
       const started = Date.now();
+      const firstSeq = session.state.nextSeq;
       try {
         const result = await runTurn({
           session,
           ctx,
-          systemPrompt: [SYSTEM_PROMPT, adapter.promptHint].filter(Boolean).join("\n\n"),
+          systemPrompt: systemPrompt(adapter, profile),
+          toolset: new Toolset(quotaPolicy(profile, today)),
           turn,
           trigger,
           pending,
@@ -214,6 +243,11 @@ async function drain(
           console.error(`[runner] turn ${turn} failed for ${chatKey}`, err);
           if (direct && ctx.sent.length === 0) await ctx.send({ kind: "text", text: ERROR_TEXT }).catch(() => {});
         }
+      } finally {
+        // A continued turn already counted as a turn where it started.
+        const used = turnUsage(session.events.filter((e) => e.seq >= firstSeq));
+        if (resume) delete used.turns;
+        await recordUsage(chatKey, used);
       }
       // The platform is down: leave what's left for the next run instead of more turns that can't send.
       if (outbox.unreachable) return done({ outcome: "stopped" });

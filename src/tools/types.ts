@@ -50,11 +50,19 @@ export interface ToolContext {
  */
 export type ToolRole = "say" | "talk" | "hangup";
 
+/**
+ * What a tool belongs to, so a chat can turn it off or meter it (src/chats):
+ * image (generate_image), voice (send_voice), search (web_search / web_fetch),
+ * memory (remember / recall / forget), sandbox (the workspace tools).
+ */
+export type ToolFeature = "image" | "voice" | "search" | "memory" | "sandbox";
+
 export interface Tool {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
   role?: ToolRole;
+  feature?: ToolFeature;
   /** Hide the tool from the model when its backing service isn't configured. */
   enabled?(): boolean;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<string> | string;

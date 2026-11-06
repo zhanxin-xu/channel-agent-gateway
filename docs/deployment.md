@@ -11,8 +11,9 @@
 ## 部署到 Vercel
 
 1. 在 Vercel 导入本仓库，或者在本地运行 `npx vercel`。
-2. 在项目的 **Settings → Environment Variables** 里填写环境变量，完整列表见[配置参考](configuration.md)。
-3. 部署完成后访问 `https://<域名>/api/health`，检查返回结果：
+2. 在项目的 **Settings → Environment Variables** 里添加 `ADMIN_PASSWORD`，在 **Storage** 页面连接 Supabase（见下文），然后重新部署。
+3. 打开 `https://<域名>/admin` 登录，按[新手引导](admin.md#新手引导)一步步配置：建表、模型、渠道。其余配置都在管理端里填，不用再改环境变量，完整列表见[配置参考](configuration.md)。
+4. 也可以访问 `https://<域名>/api/health` 检查状态：
 
    | 字段 | 含义 |
    |---|---|
@@ -24,7 +25,7 @@
    | `memory` / `sandbox` | 长期记忆和沙盒是否启用 |
    | `channels` | 各渠道是否已配置凭据 |
 
-**修改环境变量后要重新部署。** 已经在运行的部署不会读到新值。可以在 Deployments 页面对最新一次部署点 Redeploy，或者再运行一次 `npx vercel --prod`。
+**在管理端改的配置 30 秒内生效**，不用重新部署。**直接改环境变量后要重新部署**，已经在运行的部署不会读到新值。可以在 Deployments 页面对最新一次部署点 Redeploy，或者再运行一次 `npx vercel --prod`。
 
 **敏感变量读不出来。** 标记为 Sensitive 的变量保存后无法再查看原值，修改时只能整段重写。像 `OPENAI_RESPONSES_EXTRA_BODY` 这种不含密钥的配置，建议存成普通变量（CLI 加 `--no-sensitive`），方便以后查看和修改。
 
@@ -41,7 +42,7 @@ Supabase（Postgres）保存每个聊天的会话、事件流、回复状态、�
 免费版 API 请求不限次数，只按数据量和流量限制，适合消息多的群。
 
 1. 在项目的 **Storage** 页面添加 Supabase：Free 套餐，区域选 Singapore（和函数所在的 `sin1` 同区）。连接项目后会自动注入 `SUPABASE_URL`、`SUPABASE_SECRET_KEY` 等变量。
-2. 打开 Supabase 控制台的 **SQL Editor**，执行 [`supabase/schema.sql`](../supabase/schema.sql)。它会在私有 schema `gateway` 里建表（开启 RLS），在 `public` 里建一组只有服务端密钥能调用的函数，并用 pg_cron 每天清理过期数据。重复执行是安全的。
+2. 在管理端的引导里点“建表”（用 Supabase 集成注入的 `POSTGRES_URL_NON_POOLING` 直接执行）；或者打开 Supabase 控制台的 **SQL Editor**，执行 [`supabase/schema.sql`](../supabase/schema.sql)。它会在私有 schema `gateway` 里建表（开启 RLS），在 `public` 里建一组只有服务端密钥能调用的函数，并用 pg_cron 每天清理过期数据。重复执行是安全的。
 3. 重新部署，`/api/health` 的 `store` 应显示 `supabase`。
 
 每个存储操作是一次函数调用（`POST /rest/v1/rpc/<函数名>`），多步操作（比如"去重 + 写入 + 抢锁"）在函数里是一个事务。表结构见 [Agent 文档](agent.md#存储结构)。
@@ -92,11 +93,18 @@ Supabase（Postgres）保存每个聊天的会话、事件流、回复状态、�
 
 | 消息类型 | Vercel 函数调用 | 存储操作 | 模型调用 |
 |---|---|---|---|
-| 群里没 @ 的消息，只写入 | 1 | 1（每张图片再加 1） | 0 |
+| 群里没 @ 的消息，只写入 | 1 | 2（写入和聊天记录；每张图片再加 1） | 0 |
 | 旁观唤起，模型不插话 | 1 | 11 | 1 |
 | 私聊 / 被 @，一步回复 | 1 | 约 13 | 1 |
 | 每多一步（查资料、跑代码） | — | 约 3 | 1 |
 | 一轮跑超过一个函数的时长 | 每交接一次再加 1 | 每次再加约 5 | — |
+
+上表不含管理端带来的几次小请求：
+
+- 每个实例每 30 秒读一次配置。
+- 每个聊天每 30 秒读一次它的设置。
+- 每一轮读写各一次当天用量。
+- 机器人每发一条消息，记一次聊天记录。
 
 旁观唤起的数字由测试实测（`npm test` 里的 cost 用例），其余为估算。Supabase 免费版不限 API 请求次数，这些操作只影响延迟。
 

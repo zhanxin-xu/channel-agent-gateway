@@ -1,11 +1,13 @@
 /**
  * Local dev server: `npm run dev`, then POST to http://localhost:3000/api/webhook/<channel>.
- * Serves /api/worker too, where a turn that outlasts the function continues (as on Vercel).
+ * Serves /api/worker too, where a turn that outlasts the function continues (as on Vercel),
+ * and the admin console at /admin.
  * Loads `.env.local` if present. Expose it with a tunnel (cloudflared, ngrok)
  * to receive real QQ / Telegram webhooks without deploying.
  */
 import { existsSync } from "node:fs";
 import http from "node:http";
+import { handleAdmin } from "../src/admin/handler.js";
 import { channelFromUrl, handleWebhook } from "../src/webhook.js";
 import { handleWorker } from "../src/worker.js";
 
@@ -28,6 +30,7 @@ http
       let response: Response;
       if (pathname.startsWith("/api/webhook/")) response = await handleWebhook(request, channelFromUrl(url));
       else if (pathname === "/api/worker") response = await handleWorker(request);
+      else if (/^\/(api\/)?admin(\/|$)/.test(pathname)) response = await handleAdmin(request);
       else {
         res.writeHead(404).end("not found");
         return;
@@ -39,4 +42,4 @@ http
       res.writeHead(500).end("internal error");
     }
   })
-  .listen(port, () => console.log(`dev server on http://localhost:${port}/api/webhook/{qq,telegram,http}`));
+  .listen(port, () => console.log(`dev server on http://localhost:${port}/api/webhook/{qq,telegram,http}, console at http://localhost:${port}/admin`));

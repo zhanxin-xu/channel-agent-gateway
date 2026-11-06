@@ -1,24 +1,48 @@
-import { LockLostError, type ChatStore, type IngestInput, type LockMode, type NewStoredEvent, type SessionState, type StoredEvent } from "./types.js";
+import {
+  LockLostError,
+  SCHEMA_VERSION,
+  type AdminLogEntry,
+  type ChatSummary,
+  type HistoryEntry,
+  type IngestInput,
+  type LockMode,
+  type NewStoredEvent,
+  type SessionState,
+  type Store,
+  type StoredEvent,
+  type StoredSetting,
+  type TurnProblem,
+  type UsageCounts,
+} from "./types.js";
 
 interface MemorySession extends Omit<SessionState, "minSeq"> {
   lockOwner?: string;
   lockExpiresAt?: number;
   ambientUntil?: number;
+  lastActiveAt: number;
   events: StoredEvent[];
 }
 
 /** The same contract in one process's memory. Mirrors the SQL functions. */
-export class MemoryStore implements ChatStore {
+export class MemoryStore implements Store {
   private sessions = new Map<string, MemorySession>();
   private inbound = new Map<string, { direct: boolean }>();
   private replies = new Map<string, Record<string, string>>();
   private images = new Map<string, string>();
+  private settings = new Map<string, StoredSetting>();
+  private profiles = new Map<string, Record<string, unknown>>();
+  /** chat → day → counts */
+  private usageDays = new Map<string, Map<string, UsageCounts>>();
+  private historyEntries = new Map<string, HistoryEntry[]>();
+  private logEntries: AdminLogEntry[] = [];
+  private loginFailureTimes = new Map<string, number[]>();
 
   private appendTo(s: MemorySession, events: NewStoredEvent[]): number {
     const first = s.nextSeq;
     const time = Date.now();
     events.forEach((e, i) => s.events.push({ seq: first + i, type: e.type, time, data: structuredClone(e.data ?? {}) }));
     s.nextSeq += events.length;
+    s.lastActiveAt = time;
     return first;
   }
 
@@ -52,6 +76,7 @@ export class MemoryStore implements ChatStore {
         cursor: -1,
         turn: 0,
         events: [],
+        lastActiveAt: Date.now(),
       };
       this.sessions.set(i.chat, s);
     } else {
@@ -80,11 +105,12 @@ export class MemoryStore implements ChatStore {
   async open(chat: string, afterSeq: number) {
     const s = this.sessions.get(chat);
     if (!s) return { session: null, events: [] };
-    const { lockOwner: _o, lockExpiresAt: _e, ambientUntil: _a, events, ...state } = s;
-    return {
-      session: { ...state, minSeq: events[0]?.seq ?? s.nextSeq },
-      events: events.filter((e) => e.seq > afterSeq).map((e) => structuredClone(e)),
-    };
+    return { session: this.state(s), events: s.events.filter((e) => e.seq > afterSeq).map((e) => structuredClone(e)) };
+  }
+
+  private state(s: MemorySession): SessionState {
+    const { lockOwner: _o, lockExpiresAt: _e, ambientUntil: _a, lastActiveAt: _l, events, ...state } = s;
+    return { ...state, minSeq: events[0]?.seq ?? s.nextSeq };
   }
 
   /** The session, if `owner` holds its lock. */
@@ -150,5 +176,143 @@ export class MemoryStore implements ChatStore {
 
   async getImages(keys: string[]) {
     return Object.fromEntries(keys.filter((k) => this.images.has(k)).map((k) => [k, this.images.get(k)!]));
+  }
+
+  // ── Admin console ──
+
+  async listSettings() {
+    return [...this.settings.values()].sort((a, b) => a.key.localeCompare(b.key)).map((x) => ({ ...x }));
+  }
+
+  async putSettings(entries: Array<{ key: string; value: string | null; secret: boolean }>) {
+    for (const e of entries) {
+      if (e.value === null) this.settings.delete(e.key);
+      else this.settings.set(e.key, { key: e.key, value: e.value, secret: e.secret, updatedAt: Date.now() });
+    }
+  }
+
+  async getProfile(chat: string) {
+    const profile = this.profiles.get(chat);
+    return profile ? structuredClone(profile) : null;
+  }
+
+  async putProfile(chat: string, profile: Record<string, unknown> | null) {
+    if (profile === null) this.profiles.delete(chat);
+    else this.profiles.set(chat, structuredClone(profile));
+  }
+
+  async addUsage(chat: string, day: string, counts: UsageCounts) {
+    const days = this.usageDays.get(chat) ?? new Map<string, UsageCounts>();
+    this.usageDays.set(chat, days);
+    const total = days.get(day) ?? {};
+    for (const [k, v] of Object.entries(counts)) total[k] = (total[k] ?? 0) + v;
+    days.set(day, total);
+  }
+
+  async usage(chat: string, fromDay: string, toDay: string) {
+    return [...(this.usageDays.get(chat) ?? new Map<string, UsageCounts>())]
+      .filter(([day]) => day >= fromDay && day <= toDay)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, counts]) => ({ day, counts: { ...counts } }));
+  }
+
+  async usageOfDay(day: string) {
+    const result: Record<string, UsageCounts> = {};
+    for (const [chat, days] of this.usageDays) {
+      const counts = days.get(day);
+      if (counts) result[chat] = { ...counts };
+    }
+    return result;
+  }
+
+  async addHistory(chat: string, entries: Array<Omit<HistoryEntry, "time"> & { time?: number }>) {
+    const list = this.historyEntries.get(chat) ?? [];
+    this.historyEntries.set(chat, list);
+    for (const e of entries) {
+      if (list.some((x) => x.id === e.id)) continue;
+      list.push({ ...e, sender: e.sender ?? null, time: e.time ?? Date.now() });
+    }
+  }
+
+  async history(chat: string, beforeMs: number, limit: number) {
+    return (this.historyEntries.get(chat) ?? [])
+      .filter((e) => e.time < beforeMs)
+      .sort((a, b) => b.time - a.time)
+      .slice(0, limit)
+      .map((e) => ({ ...e }));
+  }
+
+  async schemaVersion() {
+    return SCHEMA_VERSION;
+  }
+
+  async chats(day: string) {
+    const keys = new Set([...this.sessions.keys(), ...this.profiles.keys(), ...this.historyEntries.keys()]);
+    const now = Date.now();
+    const summaries: ChatSummary[] = [...keys].map((chat) => {
+      const s = this.sessions.get(chat);
+      const lastHistory = Math.max(...(this.historyEntries.get(chat) ?? []).map((e) => e.time), -Infinity);
+      const lastActiveAt = Math.max(s?.lastActiveAt ?? -Infinity, lastHistory);
+      return {
+        chat,
+        channel: s?.channel ?? null,
+        conversationId: s?.conversationId ?? null,
+        chatType: s?.chatType ?? null,
+        turn: s?.turn ?? null,
+        locked: (s?.lockExpiresAt ?? 0) > now,
+        lastActiveAt: Number.isFinite(lastActiveAt) ? lastActiveAt : null,
+        profile: this.profiles.get(chat) ?? null,
+        usage: this.usageDays.get(chat)?.get(day) ?? null,
+      };
+    });
+    return summaries.sort((a, b) => (b.lastActiveAt ?? -1) - (a.lastActiveAt ?? -1));
+  }
+
+  async recentEvents(chat: string, beforeSeq: number, limit: number) {
+    const s = this.sessions.get(chat);
+    if (!s) return { session: null, events: [] };
+    const events = s.events.filter((e) => e.seq < beforeSeq).slice(-limit).reverse();
+    return { session: this.state(s), events: events.map((e) => structuredClone(e)) };
+  }
+
+  async appendUnlocked(chat: string, events: NewStoredEvent[]) {
+    const s = this.sessions.get(chat);
+    if (!s) throw new Error(`no session ${chat}`);
+    return this.appendTo(s, events);
+  }
+
+  async unlock(chat: string) {
+    const s = this.sessions.get(chat);
+    if (!s?.lockOwner) return false;
+    s.lockOwner = s.lockExpiresAt = undefined;
+    return true;
+  }
+
+  async problems(sinceMs: number, limit: number) {
+    const found: TurnProblem[] = [];
+    for (const [chat, s] of this.sessions) {
+      for (const e of s.events) {
+        const data = e.data as { turn?: number; reason?: string; error?: string };
+        if (e.type !== "turn/end" || e.time <= sinceMs || !["error", "unreachable", "max-steps"].includes(data.reason ?? "")) continue;
+        found.push({ chat, seq: e.seq, turn: data.turn ?? 0, time: e.time, reason: data.reason!, error: data.error ?? null });
+      }
+    }
+    return found.sort((a, b) => b.time - a.time).slice(0, limit);
+  }
+
+  async log(action: string, chat: string | null, detail: Record<string, unknown>) {
+    this.logEntries.push({ time: Date.now(), action, chat, detail: structuredClone(detail) });
+  }
+
+  async adminLog(limit: number) {
+    return this.logEntries.slice(-limit).reverse();
+  }
+
+  async loginFailures(ip: string, record: boolean, windowSeconds: number) {
+    const since = Date.now() - windowSeconds * 1000;
+    const times = (this.loginFailureTimes.get(ip) ?? []).filter((t) => t > since);
+    if (record) times.push(Date.now());
+    this.loginFailureTimes.set(ip, times);
+    return times.length;
   }
 }

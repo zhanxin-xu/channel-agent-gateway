@@ -37,7 +37,7 @@ import type { UnfinishedTurn } from "../conversation/recovery.js";
 import type { Session } from "../conversation/session.js";
 import { undelivered } from "../conversation/undelivered.js";
 import { LockLostError } from "../store/types.js";
-import { activeTools, runTool, sayTool, toolNames } from "../tools/registry.js";
+import type { Toolset } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
 import { callBudgetMs, LAST_STEP_MIN_MS, MIN_CALL_MS, NEW_STEP_MIN_MS, timeLeftMs } from "./budget.js";
 import { compactIfNeeded } from "./compaction.js";
@@ -45,10 +45,6 @@ import { createResponse, ModelCallError, outputText, type ResponsesResult } from
 
 type FunctionCall = Extract<OutputItem, { type: "function_call" }>;
 const isFunctionCall = (item: OutputItem): item is FunctionCall => item.type === "function_call";
-
-export function toolDefinitions() {
-  return activeTools().map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters }));
-}
 
 /** A tool call the function had no time left for. */
 const NO_TIME_FOR_TOOL =
@@ -84,6 +80,8 @@ export interface TurnOptions {
   session: Session;
   ctx: ToolContext;
   systemPrompt: string;
+  /** The tools this chat offers this turn. */
+  toolset: Toolset;
   turn: number;
   trigger: "direct" | "ambient";
   /** The messages this turn starts with (not yet handled), oldest first. */
@@ -116,11 +114,12 @@ export interface TurnResult {
 export async function runTurn(o: TurnOptions): Promise<TurnResult> {
   const { session, ctx, turn } = o;
   const { model, extraBody } = config.llm;
-  const tools = toolDefinitions();
+  const { toolset } = o;
+  const tools = toolset.definitions();
   // Tools are told apart by role (tools/types.ts), never by name.
-  const say = sayTool();
-  const talks = toolNames("say", "talk");
-  const hangups = toolNames("hangup");
+  const say = toolset.say();
+  const talks = toolset.names("say", "talk");
+  const hangups = toolset.names("hangup");
   const usage = { input: 0, cached: 0, reasoning: 0 };
   let handledUpTo = o.pending.at(-1)!.seq;
 
@@ -241,7 +240,7 @@ export async function runTurn(o: TurnOptions): Promise<TurnResult> {
     for (const call of calls) {
       if (hangups.has(call.name)) continue;
       // Tools keep to the time budget themselves; this catches the step that used it all up.
-      const output = callBudgetMs(ctx.deadline) < MIN_CALL_MS ? NO_TIME_FOR_TOOL : await runTool(call.name, call.arguments, ctx);
+      const output = callBudgetMs(ctx.deadline) < MIN_CALL_MS ? NO_TIME_FOR_TOOL : await toolset.run(call.name, call.arguments, ctx);
       console.log(`[agent] tool ${call.name}(${call.arguments}) -> ${output.slice(0, 200)}`);
       sendFailed ||= talks.has(call.name) && output.startsWith("Error:");
       results.push({ type: "tool/result", data: { turn, step, callId: call.call_id, output } });

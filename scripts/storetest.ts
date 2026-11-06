@@ -5,7 +5,7 @@
  * functions of supabase/schema.sql (it recreates the `gateway` schema there).
  */
 import assert from "node:assert/strict";
-import { MemoryStore, PostgresStore, type ChatStore, type IngestInput } from "../src/store/index.js";
+import { MemoryStore, PostgresStore, SCHEMA_VERSION, type IngestInput, type Store } from "../src/store/index.js";
 import { postgresRpc, rpcResponse } from "./rpc-shim.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -30,7 +30,7 @@ function msg(chat: string, eventId: string, over: Partial<IngestInput> = {}): In
   };
 }
 
-async function contract(name: string, store: ChatStore) {
+async function contract(name: string, store: Store) {
   let failed = 0;
   const test = async (title: string, fn: () => Promise<void>) => {
     try {
@@ -176,6 +176,80 @@ async function contract(name: string, store: ChatStore) {
     assert.equal(session!.minSeq, 3);
     assert.deepEqual(await store.getImages(["img:b"]), {});
     assert.equal(await store.getReply(c, "t0"), null);
+  });
+
+  // ── Admin console ──
+
+  await test("admin: schema version, settings put / replace / delete", async () => {
+    assert.equal(await store.schemaVersion(), SCHEMA_VERSION);
+    await store.putSettings([
+      { key: "B", value: "1", secret: false },
+      { key: "A", value: "x", secret: true },
+    ]);
+    await store.putSettings([{ key: "B", value: "2", secret: false }]);
+    assert.deepEqual((await store.listSettings()).map((r) => [r.key, r.value, r.secret]), [["A", "x", true], ["B", "2", false]]);
+    await store.putSettings([{ key: "A", value: null, secret: true }]);
+    assert.deepEqual((await store.listSettings()).map((r) => r.key), ["B"]);
+  });
+
+  await test("admin: profiles, usage that adds up, history without repeats", async () => {
+    await store.putProfile("qq:p1", { mode: "record", quota: { images: 2 } });
+    assert.deepEqual(await store.getProfile("qq:p1"), { mode: "record", quota: { images: 2 } });
+    await store.putProfile("qq:p1", null);
+    assert.equal(await store.getProfile("qq:p1"), null);
+
+    await store.addUsage("qq:u1", "2026-11-05", { turns: 1, cost_usd: 0.25 });
+    await store.addUsage("qq:u1", "2026-11-06", { turns: 1, cost_usd: 0.5 });
+    await store.addUsage("qq:u1", "2026-11-06", { turns: 2, images: 1 });
+    assert.deepEqual(await store.usage("qq:u1", "2026-11-05", "2026-11-06"), [
+      { day: "2026-11-05", counts: { turns: 1, cost_usd: 0.25 } },
+      { day: "2026-11-06", counts: { turns: 3, cost_usd: 0.5, images: 1 } },
+    ]);
+    assert.deepEqual((await store.usageOfDay("2026-11-06"))["qq:u1"], { turns: 3, cost_usd: 0.5, images: 1 });
+
+    await store.addHistory("qq:h1", [
+      { id: "m1", role: "user", sender: "老王", text: "早", time: 1_000 },
+      { id: "m2", role: "bot", text: "早啊", time: 2_000 },
+    ]);
+    await store.addHistory("qq:h1", [{ id: "m1", role: "user", sender: "老王", text: "重复的", time: 1_000 }]);
+    assert.deepEqual(
+      (await store.history("qq:h1", 10_000, 10)).map((e) => [e.id, e.text, e.sender ?? null]),
+      [["m2", "早啊", null], ["m1", "早", "老王"]],
+    );
+    assert.deepEqual((await store.history("qq:h1", 2_000, 10)).map((e) => e.id), ["m1"], "before is exclusive");
+  });
+
+  await test("admin: chats list, recent events, unlocked append, unlock, problems", async () => {
+    const c = "qq:adm";
+    await store.ingest(msg(c, "adm0"));
+    await store.append(c, "owner-adm0", [{ type: "turn/end", data: { turn: 1, reason: "error", error: "boom" } }]);
+    const listed = (await store.chats("2026-11-06")).find((x) => x.chat === c)!;
+    assert.equal(listed.channel, "qq");
+    assert.equal(listed.locked, true);
+    assert.ok((await store.chats("2026-11-06")).some((x) => x.chat === "qq:h1"), "a chat with only history is listed");
+
+    const seq = await store.appendUnlocked(c, [{ type: "admin/message", data: { text: "hi" } }]);
+    assert.equal(seq, 2);
+    const recent = await store.recentEvents(c, Number.MAX_SAFE_INTEGER, 2);
+    assert.deepEqual(recent.events.map((e) => e.seq), [2, 1], "newest first");
+    assert.equal(recent.session?.nextSeq, 3);
+    assert.deepEqual((await store.recentEvents(c, 1, 10)).events.map((e) => e.seq), [0]);
+
+    const problems = await store.problems(Date.now() - 60_000, 10);
+    assert.ok(problems.some((p) => p.chat === c && p.reason === "error" && p.error === "boom"));
+
+    assert.equal(await store.unlock(c), true);
+    assert.equal(await store.unlock(c), false);
+    assert.equal(await store.lock(c, "someone", 60_000, "acquire"), true, "free again");
+  });
+
+  await test("admin: log and login failures", async () => {
+    await store.log("say", "qq:adm", { text: "hi" });
+    assert.deepEqual((await store.adminLog(1)).map((e) => [e.action, e.chat, e.detail]), [["say", "qq:adm", { text: "hi" }]]);
+    assert.equal(await store.loginFailures("1.2.3.4", false, 60), 0);
+    await store.loginFailures("1.2.3.4", true, 60);
+    assert.equal(await store.loginFailures("1.2.3.4", true, 60), 2);
+    assert.equal(await store.loginFailures("5.6.7.8", false, 60), 0);
   });
 
   return failed;

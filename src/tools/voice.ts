@@ -158,6 +158,7 @@ function description(): string {
 
 export const sendVoice: Tool = {
   name: "send_voice",
+  feature: "voice",
   role: "talk",
   get description() {
     return description();

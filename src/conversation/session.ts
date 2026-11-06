@@ -114,14 +114,18 @@ export class Session {
     return e && isEvent(e, "user/message") ? e : undefined;
   }
 
-  /** Visible user messages after `seq`, with @ marks from later user/mentioned events applied. */
+  /**
+   * Visible user messages after `seq` that a turn should handle, with @ marks
+   * from later user/mentioned events applied. Quiet messages (logged in
+   * record-only mode) are context, not work, so they're left out.
+   */
   messagesAfter(seq: number): SessionEvent<"user/message">[] {
     const { events } = visibleWindow(this.events);
     const mentioned = new Set(
       events.filter((e) => isEvent(e, "user/mentioned")).map((e) => (e as SessionEvent<"user/mentioned">).data.eventId),
     );
     return events
-      .filter((e): e is SessionEvent<"user/message"> => isEvent(e, "user/message") && e.seq > seq)
+      .filter((e): e is SessionEvent<"user/message"> => isEvent(e, "user/message") && e.seq > seq && !e.data.quiet)
       .map((e) => (mentioned.has(e.data.eventId) && !e.data.mentioned ? { ...e, data: { ...e.data, mentioned: true } } : e));
   }
 

@@ -40,6 +40,7 @@ const enabled = () => Boolean(config.memory.url && config.memory.token);
 
 export const remember: Tool = {
   name: "remember",
+  feature: "memory",
   description:
     "Save one self-contained fact to your long-term memory, shared across every chat you're in. " +
     "Because memories are searched by text across all chats long after the conversation is gone, every memory MUST be a " +
@@ -78,6 +79,7 @@ export const remember: Tool = {
 
 export const recall: Tool = {
   name: "recall",
+  feature: "memory",
   description:
     "Search your long-term memory (shared across all chats) by meaning. Use it before answering about a person, " +
     'something from the past, or when someone asks "还记得…吗". Include the person\'s nickname and #ID in `query` when ' +
@@ -118,6 +120,7 @@ export const recall: Tool = {
 
 export const forget: Tool = {
   name: "forget",
+  feature: "memory",
   description: "Delete memories by id (from recall), e.g. when a fact turned out wrong or someone asks you to forget it.",
   parameters: {
     type: "object",

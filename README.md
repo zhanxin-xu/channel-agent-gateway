@@ -57,15 +57,8 @@
 ## 快速开始
 
 1. **部署**：点击上方的 Deploy 按钮，或者克隆仓库后运行 `npx vercel`。
-2. **配置环境变量**：最少需要下面这些，完整列表见[配置参考](docs/configuration.md)。
-
-   | 变量 | 说明 |
-   |---|---|
-   | `OPENAI_RESPONSES_API_KEY` | 模型的 API Key。任何兼容 OpenAI Responses API 的服务都行，默认走 OpenRouter，换服务商时再设 `OPENAI_RESPONSES_BASE_URL` |
-   | `QQ_APP_ID` / `QQ_APP_SECRET` | QQ 机器人凭据（或者配置 Telegram、HTTP 渠道的凭据） |
-   | `SUPABASE_URL` / `SUPABASE_SECRET_KEY` | 在 Vercel Marketplace 添加 Supabase 后自动注入，再执行一次 [`supabase/schema.sql`](supabase/schema.sql)。会话、事件流和锁都在这里，生产环境必需 |
-
-3. **检查**：访问 `https://<你的域名>/api/health`，确认模型、渠道和工具都已就绪。
+2. **设置管理密码、连接数据库**：在 Vercel 项目里添加环境变量 `ADMIN_PASSWORD`，在 Storage 页面添加 Supabase（会自动注入数据库连接），然后重新部署。
+3. **打开管理端**：访问 `https://<你的域名>/admin`，按新手引导一步步来：建表、填模型 Key、接渠道、发条消息试试。其余配置都在管理端里填，改完不用重新部署，见[管理端](docs/admin.md)。也可以照旧用环境变量配置，见[配置参考](docs/configuration.md)。
 4. **接入渠道**：按[渠道接入](docs/channels.md)配置回调地址。QQ 机器人有两个最容易踩的坑：
    - **在中国大陆必须绑定自定义域名**：QQ 开放平台访问不了 `*.vercel.app`，回调地址会校验失败，原因见[部署文档](docs/deployment.md#自定义域名)。
    - **想让机器人看到群里没 @ 它的消息**：除了订阅 `GROUP_MESSAGE_CREATE`，还要群主在手机 QQ 里给机器人"设置权限"，开启"接收全量消息"，每个群单独开。
@@ -77,6 +70,7 @@
 | 文档 | 内容 |
 |---|---|
 | [部署](docs/deployment.md) | Vercel 部署、存储、自定义域名、免费额度与资源消耗 |
+| [管理端](docs/admin.md) | 新手引导、配置存进数据库、聊天记录与事件流、代发、每群额度 |
 | [渠道接入](docs/channels.md) | QQ、Telegram、HTTP 的配置方法，QQ 被动回复规则，如何新增渠道 |
 | [Agent 与对话](docs/agent.md) | 事件流格式、一个聊天一个 agent、挂断机制、步数与时间、上下文压缩、崩溃恢复 |
 | [工具](docs/tools.md) | 内置工具、长期记忆、沙盒工作区、表情包，如何新增工具 |
@@ -112,10 +106,24 @@ api/
   webhook/[channel].ts   Vercel Function 入口：POST /api/webhook/{qq|telegram|http}
   worker.ts              POST /api/worker：一轮做不完时由新的函数接着做（内部，带签名）
   health.ts              GET /api/health：配置自检
+  admin.ts               管理端：/admin 页面和 /api/admin/* 接口
 src/
   webhook.ts             路由：选择适配器 → 验签解析 → 回执 → 后台处理
   worker.ts              worker 请求的验签与接着运行
-  config.ts              环境变量
+  config.ts              配置：管理端 → 环境变量 → 默认值
+  settings/              存在数据库里的配置
+    catalog.ts           每项配置的默认值、类型与校验
+    service.ts           加载、保存、导入环境变量、换密码后重新加密
+    secrets.ts           key 的加密
+  chats/                 每个聊天
+    profile.ts           回复方式、插话频率、工具开关、额外设定、额度
+    usage.ts             用量统计与额度
+    history.ts           聊天记录
+  admin/                 管理端
+    handler.ts / routes/ 接口
+    auth.ts              登录
+    chat-actions.ts      代发、悄悄话、重置、解锁
+    ui/                  页面（原生 JS，没有构建步骤）
   channels/              消息通道
     types.ts             适配器接口
     qq.ts / telegram.ts / http.ts
@@ -127,6 +135,7 @@ src/
     lock.ts              运行锁（会话行上的租约）
     outbox.ts            按消息回复，5 次上限，QQ 的 msg_seq
     context.ts           工具上下文：工具怎么发消息、表情包、文件、语音
+    deliver.ts           把要发的内容变成渠道调用（工具和代发共用）
     handoff.ts           时间不够时交给 /api/worker 接着做
   conversation/          事件流
     events.ts            事件格式、可见窗口

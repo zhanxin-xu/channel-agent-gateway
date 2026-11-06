@@ -1,19 +1,38 @@
 /**
- * All runtime configuration comes from environment variables so the same
- * build can be deployed to any Vercel project. Values are read lazily
- * (on every access) so tests and the local dev server can override them.
+ * Runtime configuration. Each setting is read on every access (so tests, the
+ * local dev server and the admin console can change it) from, in order:
+ *   1. the admin console (src/settings: stored in the database, loaded by
+ *      refreshSettings at the start of each request),
+ *   2. the environment variable of the same name,
+ *   3. the default in src/settings/catalog.ts.
+ * Bootstrap values the gateway needs before it can reach the database come
+ * from the environment only (`env`).
  */
+import { DEFAULT_SELF_IMAGE, DEFAULT_VOICE_REFERENCE, settingDefault } from "./settings/catalog.js";
+import { overrideOf } from "./settings/overrides.js";
 
-function str(name: string, fallback = ""): string {
-  return process.env[name]?.trim() || fallback;
+export { DEFAULT_SELF_IMAGE, DEFAULT_VOICE_REFERENCE };
+
+/** A setting's own value, before defaults: the console's, else the environment's. */
+function raw(name: string): string | undefined {
+  return overrideOf(name) ?? process.env[name];
 }
 
-function int(name: string, fallback: number): number {
-  const n = Number.parseInt(process.env[name] ?? "", 10);
+function str(name: string, fallback = settingDefault(name)): string {
+  return raw(name)?.trim() || fallback;
+}
+
+function int(name: string, fallback = Number.parseInt(settingDefault(name), 10)): number {
+  const n = Number.parseInt(raw(name) ?? "", 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** Parse an env var holding a JSON object; fail loudly on malformed config. */
+/** An environment-only value (never set from the console). */
+function env(name: string): string {
+  return process.env[name]?.trim() ?? "";
+}
+
+/** Parse a setting holding a JSON object; fail loudly on malformed config. */
 function jsonObject(name: string): Record<string, unknown> {
   const raw = str(name);
   if (!raw) return {};
@@ -29,10 +48,7 @@ function jsonObject(name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-/** 大肥鱼's voice: a short clip in the repo (bundled via vercel.json includeFiles), cloned by send_voice. */
-export const DEFAULT_VOICE_REFERENCE = "assets/voice/dafeiyu.mp3";
-/** What 大肥鱼 looks like: a picture in the repo (bundled via vercel.json includeFiles), the reference when she draws herself. */
-export const DEFAULT_SELF_IMAGE = "assets/persona/dafeiyu.webp";
+/** What the built-in voice clip says (TTS_REFERENCE_TEXT's default while that clip is used). */
 const DEFAULT_VOICE_REFERENCE_TEXT = "嘿嘿，本鱼来啦！我是大肥鱼，住在深海里的小鲸鱼～有什么问题尽管问我，答对了要请我吃小鱼干哦！";
 
 /** Model settings: OPENAI_RESPONSES_<SUFFIX>, falling back to the old OPENROUTER_<SUFFIX> names. */
@@ -43,10 +59,25 @@ type LlmSuffix = (typeof LLM_SUFFIXES)[number];
 function llmEnv(suffix: LlmSuffix): string {
   const name = `OPENAI_RESPONSES_${suffix}`;
   const legacy = `OPENROUTER_${suffix}`;
-  return !str(name) && str(legacy) ? legacy : name;
+  return !raw(name)?.trim() && raw(legacy)?.trim() ? legacy : name;
 }
 
 export const config = {
+  /** The admin console (/admin). Environment only: it guards the console and encrypts the secrets set there. */
+  admin: {
+    get password() {
+      return env("ADMIN_PASSWORD");
+    },
+  },
+
+  /** How chats are handled by default (each chat can differ, src/chats/profile.ts). */
+  console: {
+    /** normal | mention | record | block, for chats without their own setting. */
+    get defaultMode() {
+      return str("CHAT_DEFAULT_MODE");
+    },
+  },
+
   /** Any server that speaks the OpenAI Responses API (POST {baseUrl}/responses). Defaults to OpenRouter. */
   llm: {
     get apiKey() {
@@ -54,10 +85,10 @@ export const config = {
     },
     /** Any Responses-API-compatible base URL; `/responses` is appended. */
     get baseUrl() {
-      return str(llmEnv("BASE_URL"), "https://openrouter.ai/api/v1").replace(/\/+$/, "");
+      return str(llmEnv("BASE_URL"), settingDefault("OPENAI_RESPONSES_BASE_URL")).replace(/\/+$/, "");
     },
     get model() {
-      return str(llmEnv("MODEL"), "openai/gpt-6-luna");
+      return str(llmEnv("MODEL"), settingDefault("OPENAI_RESPONSES_MODEL"));
     },
     /**
      * Extra fields merged into every Responses API request body (snake_case,
@@ -77,7 +108,15 @@ export const config = {
      * function's time budget does (agent/budget.ts), whichever comes first.
      */
     get timeoutMs() {
-      return int(llmEnv("TIMEOUT_MS"), 280_000);
+      return int(llmEnv("TIMEOUT_MS"), Number(settingDefault("OPENAI_RESPONSES_TIMEOUT_MS")));
+    },
+    /**
+     * USD per million tokens, to estimate what a turn cost when the API doesn't
+     * report it (OpenRouter does). Unset prices count as 0.
+     */
+    get prices() {
+      const price = (name: string) => Number(str(name)) || 0;
+      return { input: price("MODEL_PRICE_INPUT"), cached: price("MODEL_PRICE_CACHED"), output: price("MODEL_PRICE_OUTPUT") };
     },
     /** Old OPENROUTER_* names still in use (shown by /api/health so they can be renamed). */
     get legacyEnv(): string[] {
@@ -94,14 +133,14 @@ export const config = {
       return str("IMAGE_API_KEY");
     },
     get baseUrl() {
-      return str("IMAGE_BASE_URL", "https://openrouter.ai/api/v1").replace(/\/+$/, "");
+      return str("IMAGE_BASE_URL").replace(/\/+$/, "");
     },
     get model() {
-      return str("IMAGE_MODEL", "openai/gpt-image-2.6-sunburst");
+      return str("IMAGE_MODEL");
     },
     /** auto | low | medium | high | xhigh | max. Set here, not by the model: it drives the price. */
     get quality() {
-      return str("IMAGE_QUALITY", "low");
+      return str("IMAGE_QUALITY");
     },
     /**
      * 512 | 768 | 1K | 1.5K | 2K | 4K, for models that take it (see supported_parameters in
@@ -116,7 +155,7 @@ export const config = {
       return jsonObject("IMAGE_EXTRA_BODY");
     },
     get timeoutMs() {
-      return int("IMAGE_TIMEOUT_MS", 180_000);
+      return int("IMAGE_TIMEOUT_MS");
     },
     /**
      * A picture of the persona (a file in the deployment, or an https URL),
@@ -124,7 +163,7 @@ export const config = {
      * she looks the same every time. "none" turns it off.
      */
     get selfImage() {
-      const value = str("IMAGE_SELF_REFERENCE", DEFAULT_SELF_IMAGE);
+      const value = str("IMAGE_SELF_REFERENCE");
       return value.toLowerCase() === "none" ? "" : value;
     },
   },
@@ -135,11 +174,11 @@ export const config = {
       return str("TTS_API_KEY");
     },
     get baseUrl() {
-      return str("TTS_BASE_URL", "https://openrouter.ai/api/v1").replace(/\/+$/, "");
+      return str("TTS_BASE_URL").replace(/\/+$/, "");
     },
     /** The speech model (set here, not chosen by the agent). */
     get model() {
-      return str("TTS_MODEL", "fish-audio/drama-3");
+      return str("TTS_MODEL");
     },
     /** The API's `voice` (a provider voice ID). Empty: the reference audio sets the voice. */
     get voice() {
@@ -147,7 +186,7 @@ export const config = {
     },
     /** The voice to clone: a file in the deployment, or an https URL; "none" turns cloning off. */
     get referenceAudio() {
-      const value = str("TTS_REFERENCE_AUDIO", DEFAULT_VOICE_REFERENCE);
+      const value = str("TTS_REFERENCE_AUDIO");
       return value.toLowerCase() === "none" ? "" : value;
     },
     /** What the reference audio says (helps the clone). Defaults to the built-in clip's words when that clip is used. */
@@ -175,7 +214,7 @@ export const config = {
       return jsonObject("TTS_EXTRA_BODY");
     },
     get timeoutMs() {
-      return int("TTS_TIMEOUT_MS", 120_000);
+      return int("TTS_TIMEOUT_MS");
     },
   },
 
@@ -185,7 +224,7 @@ export const config = {
       return str("DEEPSEEK_API_KEY");
     },
     get baseUrl() {
-      return str("DEEPSEEK_BASE_URL", "https://api.deepseek.com").replace(/\/+$/, "");
+      return str("DEEPSEEK_BASE_URL").replace(/\/+$/, "");
     },
   },
 
@@ -198,25 +237,25 @@ export const config = {
   agent: {
     /** Time zone of the time stamp prepended to each user message. */
     get timezone() {
-      return str("AGENT_TIMEZONE", "Asia/Shanghai");
+      return str("AGENT_TIMEZONE");
     },
     /** Max model calls per turn, ambient or not (tool round-trips included). An ambient run that stays silent uses one. */
     get maxSteps() {
-      return int("AGENT_MAX_STEPS", 40);
+      return int("AGENT_MAX_STEPS");
     },
     /**
      * The function's time limit; keep in sync with maxDuration in vercel.json.
      * Runs plan their steps and calls around it (agent/budget.ts).
      */
     get maxDurationSeconds() {
-      return int("AGENT_MAX_DURATION_SECONDS", 300);
+      return Number.parseInt(env("AGENT_MAX_DURATION_SECONDS"), 10) || 300;
     },
     /**
      * The context budget in tokens. When a request's input passes 80% of it,
      * the older part of the conversation is summarized (see compaction.ts).
      */
     get contextTokens() {
-      return int("AGENT_CONTEXT_TOKENS", 200_000);
+      return int("AGENT_CONTEXT_TOKENS");
     },
     /**
      * Ordinary (non-@) group messages are always recorded; at most one per this
@@ -224,8 +263,8 @@ export const config = {
      * in. 0 = record only, never trigger the agent.
      */
     get ambientIntervalSeconds() {
-      const n = Number.parseInt(process.env.AGENT_AMBIENT_INTERVAL_SECONDS ?? "", 10);
-      return Number.isFinite(n) && n >= 0 ? n : 10;
+      const n = Number.parseInt(raw("AGENT_AMBIENT_INTERVAL_SECONDS") ?? "", 10);
+      return Number.isFinite(n) && n >= 0 ? n : Number(settingDefault("AGENT_AMBIENT_INTERVAL_SECONDS"));
     },
   },
 
@@ -264,10 +303,10 @@ export const config = {
     // integration injects SUPABASE_URL and the server keys. Without them the
     // store is per-instance memory (local development and tests only).
     get supabaseUrl() {
-      return str("SUPABASE_URL").replace(/\/+$/, "");
+      return env("SUPABASE_URL").replace(/\/+$/, "");
     },
     get supabaseKey() {
-      return str("SUPABASE_SECRET_KEY");
+      return env("SUPABASE_SECRET_KEY");
     },
   },
 
@@ -302,7 +341,7 @@ export const config = {
     /** On by default where credentials exist; SANDBOX_ENABLED=0 turns it off. */
     get enabled() {
       if (/^(0|false|off)$/i.test(str("SANDBOX_ENABLED"))) return false;
-      return Boolean(process.env.VERCEL || str("VERCEL_OIDC_TOKEN") || /^(1|true|on)$/i.test(str("SANDBOX_ENABLED")));
+      return Boolean(env("VERCEL") || env("VERCEL_OIDC_TOKEN") || /^(1|true|on)$/i.test(str("SANDBOX_ENABLED")));
     },
     /** Region for sandboxes and their drives (they must match). Default: Vercel's default, iad1. */
     get region() {
@@ -310,7 +349,7 @@ export const config = {
     },
     /** Per-command time limit. */
     get commandTimeoutSeconds() {
-      return int("SANDBOX_COMMAND_TIMEOUT_SECONDS", 60);
+      return int("SANDBOX_COMMAND_TIMEOUT_SECONDS");
     },
   },
 };

@@ -11,12 +11,24 @@
 --   gateway.images    images referenced by events, as data URLs.
 --   gateway.inbound   platform deliveries already seen (webhook retries).
 --
+-- For the admin console (/admin):
+--   gateway.meta           schema version.
+--   gateway.settings       configuration set in the console, by env var name;
+--                          secrets are encrypted by the gateway (src/settings).
+--   gateway.chat_profiles  per-chat settings: name, reply mode, quotas, tools.
+--                          Not tied to sessions, so they outlive an expired chat.
+--   gateway.usage_daily    per-chat counters per UTC day (turns, tokens, cost…).
+--   gateway.history        who said what, for people to read; unlike events it
+--                          isn't compacted away, and is kept HISTORY_RETENTION_DAYS.
+--   gateway.admin_log      what admins changed or sent.
+--
 -- The tables live in a private schema the Data API doesn't expose, with RLS on.
 -- The gateway calls the functions below over the Data API
 -- (POST /rest/v1/rpc/<name>) with the server key; each returns jsonb. Only
 -- service_role may execute them.
 --
--- Run this once in the SQL editor. It is safe to run again.
+-- Run this once in the SQL editor, or from the admin console's setup page. It
+-- is safe to run again, and running it again upgrades an older schema.
 
 create schema if not exists gateway;
 
@@ -294,20 +306,279 @@ language sql stable security definer set search_path = '' as $$
   select coalesce(jsonb_object_agg(key, data_url), '{}'::jsonb) from gateway.images where key = any (p_keys);
 $$;
 
+-- ── Admin console ──
+
+create table if not exists gateway.meta (
+  key text primary key,
+  value text not null
+);
+
+create table if not exists gateway.settings (
+  key text primary key, -- the env var it stands in for, e.g. OPENAI_RESPONSES_MODEL
+  value text not null,  -- secrets: ciphertext made by the gateway
+  secret boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists gateway.chat_profiles (
+  chat text primary key,
+  profile jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists gateway.usage_daily (
+  chat text not null,
+  day date not null, -- UTC, so a day ends at 08:00 Beijing time, with the providers' daily limits
+  counts jsonb not null, -- {"turns": 3, "cost_usd": 0.012, "images": 1, …}; numbers add up
+  primary key (chat, day)
+);
+create index if not exists usage_daily_day on gateway.usage_daily (day);
+
+create table if not exists gateway.history (
+  chat text not null,
+  id text not null, -- the platform's message id, or a generated one; repeats are ignored
+  time timestamptz not null default now(),
+  role text not null check (role in ('user', 'bot', 'admin', 'hint')),
+  sender text,
+  text text not null,
+  primary key (chat, id)
+);
+create index if not exists history_chat_time on gateway.history (chat, time desc);
+create index if not exists history_time on gateway.history (time);
+
+create table if not exists gateway.admin_log (
+  id bigint generated always as identity primary key,
+  time timestamptz not null default now(),
+  action text not null,
+  chat text,
+  detail jsonb not null default '{}'::jsonb
+);
+create index if not exists admin_log_time on gateway.admin_log (time desc);
+
+create table if not exists gateway.admin_login_failures (
+  ip text not null,
+  time timestamptz not null default now()
+);
+create index if not exists admin_login_failures_ip on gateway.admin_login_failures (ip, time);
+
+alter table gateway.meta enable row level security;
+alter table gateway.settings enable row level security;
+alter table gateway.chat_profiles enable row level security;
+alter table gateway.usage_daily enable row level security;
+alter table gateway.history enable row level security;
+alter table gateway.admin_log enable row level security;
+alter table gateway.admin_login_failures enable row level security;
+
+create or replace function gateway.epoch_ms(t timestamptz) returns bigint
+language sql immutable set search_path = '' as $$
+  select (extract(epoch from t) * 1000)::bigint;
+$$;
+
+create or replace function public.gateway_info() returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select jsonb_build_object('schemaVersion', (select value::int from gateway.meta where key = 'schema_version'));
+$$;
+
+-- Settings: [{key, value, secret, updatedAt}].
+create or replace function public.settings_list() returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'key', key, 'value', value, 'secret', secret, 'updatedAt', gateway.epoch_ms(updated_at)) order by key), '[]'::jsonb)
+  from gateway.settings;
+$$;
+
+-- [{key, value, secret}] in one transaction; a null value deletes the key.
+create or replace function public.settings_put(p_entries jsonb) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  e jsonb;
+begin
+  for e in select value from jsonb_array_elements(p_entries) loop
+    if e ->> 'value' is null then
+      delete from gateway.settings where key = e ->> 'key';
+    else
+      insert into gateway.settings (key, value, secret) values (e ->> 'key', e ->> 'value', coalesce((e ->> 'secret')::boolean, false))
+        on conflict (key) do update set value = excluded.value, secret = excluded.secret, updated_at = now();
+    end if;
+  end loop;
+  return to_jsonb(jsonb_array_length(p_entries));
+end;
+$$;
+
+create or replace function public.profile_get(p_chat text) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select profile from gateway.chat_profiles where chat = p_chat;
+$$;
+
+-- Replace a chat's profile; null deletes it.
+create or replace function public.profile_put(p_chat text, p_profile jsonb) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+begin
+  if p_profile is null then
+    delete from gateway.chat_profiles where chat = p_chat;
+  else
+    insert into gateway.chat_profiles (chat, profile) values (p_chat, p_profile)
+      on conflict (chat) do update set profile = excluded.profile, updated_at = now();
+  end if;
+  return 'true'::jsonb;
+end;
+$$;
+
+-- Add p_counts to the chat's counters for p_day, key by key.
+create or replace function public.usage_add(p_chat text, p_day date, p_counts jsonb) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+begin
+  insert into gateway.usage_daily as u (chat, day, counts) values (p_chat, p_day, p_counts)
+    on conflict (chat, day) do update set counts = (
+      select coalesce(jsonb_object_agg(k, coalesce((u.counts ->> k)::numeric, 0) + coalesce((p_counts ->> k)::numeric, 0)), '{}'::jsonb)
+      from jsonb_object_keys(u.counts || p_counts) as k);
+  return 'true'::jsonb;
+end;
+$$;
+
+-- A chat's counters from p_from to p_to: [{day, counts}], oldest first.
+create or replace function public.usage_list(p_chat text, p_from date, p_to date) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_agg(jsonb_build_object('day', day, 'counts', counts) order by day), '[]'::jsonb)
+  from gateway.usage_daily where chat = p_chat and day between p_from and p_to;
+$$;
+
+-- Every chat's counters for one day: {chat: counts}.
+create or replace function public.usage_day(p_day date) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_object_agg(chat, counts), '{}'::jsonb) from gateway.usage_daily where day = p_day;
+$$;
+
+-- [{id, role, sender, text, time?}]; an id seen before is skipped.
+create or replace function public.history_add(p_chat text, p_entries jsonb) returns jsonb
+language sql security definer set search_path = '' as $$
+  insert into gateway.history (chat, id, time, role, sender, text)
+  select p_chat, e ->> 'id', coalesce(to_timestamp((e ->> 'time')::bigint / 1000.0), now()), e ->> 'role', e ->> 'sender', e ->> 'text'
+  from jsonb_array_elements(p_entries) as e
+  on conflict do nothing;
+  select 'true'::jsonb;
+$$;
+
+-- Up to p_limit entries before p_before (epoch ms), newest first.
+create or replace function public.history_list(p_chat text, p_before bigint, p_limit int) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'id', id, 'time', gateway.epoch_ms(time), 'role', role, 'sender', sender, 'text', text) order by time desc), '[]'::jsonb)
+  from (
+    select * from gateway.history where chat = p_chat and time < to_timestamp(p_before / 1000.0)
+    order by time desc limit p_limit
+  ) h;
+$$;
+
+-- Every chat that has a session, a profile or history, most recently active first.
+create or replace function public.admin_chats(p_day date) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  with keys as (
+    select chat from gateway.sessions
+    union select chat from gateway.chat_profiles
+    union select chat from gateway.history
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'chat', k.chat, 'channel', s.channel, 'conversationId', s.conversation_id, 'chatType', s.chat_type,
+    'turn', s.turn, 'locked', coalesce(s.lock_expires_at > now(), false),
+    'lastActiveAt', gateway.epoch_ms(greatest(s.last_active_at, h.last)),
+    'profile', p.profile, 'usage', u.counts
+  ) order by greatest(s.last_active_at, h.last) desc nulls last), '[]'::jsonb)
+  from keys k
+  left join gateway.sessions s on s.chat = k.chat
+  left join gateway.chat_profiles p on p.chat = k.chat
+  left join gateway.usage_daily u on u.chat = k.chat and u.day = p_day
+  left join lateral (select max(time) as last from gateway.history where chat = k.chat) h on true;
+$$;
+
+-- The session and up to p_limit events before p_before, newest first.
+create or replace function public.admin_events(p_chat text, p_before bigint, p_limit int) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select jsonb_build_object(
+    'session', (select gateway.session_json(s) from gateway.sessions s where s.chat = p_chat),
+    'events', coalesce((
+      select jsonb_agg(gateway.event_json(e) order by e.seq desc) from (
+        select * from gateway.events where chat = p_chat and seq < p_before order by seq desc limit p_limit
+      ) e), '[]'::jsonb));
+$$;
+
+-- Append without holding the run lock (an admin's message); a running turn sees it at its next step.
+create or replace function public.admin_append(p_chat text, p_events jsonb) returns jsonb
+language sql security definer set search_path = '' as $$
+  select to_jsonb(gateway.append(p_chat, p_events));
+$$;
+
+-- Take the run lock away from whoever holds it; that run stops at its next write.
+create or replace function public.admin_unlock(p_chat text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+begin
+  update gateway.sessions set lock_owner = null, lock_expires_at = null where chat = p_chat and lock_owner is not null;
+  return to_jsonb(found);
+end;
+$$;
+
+-- Turns that ended badly since p_since (epoch ms), newest first.
+create or replace function public.admin_problems(p_since bigint, p_limit int) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'chat', chat, 'seq', seq, 'turn', turn, 'time', gateway.epoch_ms(time),
+    'reason', data ->> 'reason', 'error', data ->> 'error') order by time desc), '[]'::jsonb)
+  from (
+    select * from gateway.events
+    where type = 'turn/end' and data ->> 'reason' in ('error', 'unreachable', 'max-steps')
+      and time > to_timestamp(p_since / 1000.0)
+    order by time desc limit p_limit
+  ) e;
+$$;
+
+create or replace function public.admin_log_add(p_action text, p_chat text, p_detail jsonb) returns jsonb
+language sql security definer set search_path = '' as $$
+  insert into gateway.admin_log (action, chat, detail) values (p_action, p_chat, coalesce(p_detail, '{}'::jsonb));
+  select 'true'::jsonb;
+$$;
+
+create or replace function public.admin_log_list(p_limit int) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'time', gateway.epoch_ms(time), 'action', action, 'chat', chat, 'detail', detail) order by id desc), '[]'::jsonb)
+  from (select * from gateway.admin_log order by id desc limit p_limit) l;
+$$;
+
+-- Failed logins from p_ip in the last p_window_s seconds, after recording one more if p_record.
+create or replace function public.admin_login_failures(p_ip text, p_record boolean, p_window_s int) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+begin
+  if p_record then
+    insert into gateway.admin_login_failures (ip) values (p_ip);
+  end if;
+  return (select to_jsonb(count(*)) from gateway.admin_login_failures
+    where ip = p_ip and time > now() - p_window_s * interval '1 second');
+end;
+$$;
+
 -- ── Housekeeping ──
 
 -- Chats quiet for p_days go away with everything they own; retries are only
 -- tracked for an hour; images no event references are dropped after a day.
+-- History is kept HISTORY_RETENTION_DAYS (a setting, default 30), usage and
+-- the admin log 180 days. Chat profiles stay until an admin deletes them.
 create or replace function public.gateway_expire(p_days int default 7) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
   sessions_deleted int;
+  history_days int;
 begin
   delete from gateway.sessions where last_active_at < now() - p_days * interval '1 day';
   get diagnostics sessions_deleted = row_count;
   delete from gateway.inbound where seen_at < now() - interval '1 hour';
   delete from gateway.images i where i.created_at < now() - interval '1 day' and not exists (
     select from gateway.events e where e.chat = i.chat and e.data -> 'images' ? i.key);
+  select case when value ~ '^\d+$' then value::int end into history_days
+    from gateway.settings where key = 'HISTORY_RETENTION_DAYS' and not secret;
+  delete from gateway.history where time < now() - coalesce(history_days, 30) * interval '1 day';
+  delete from gateway.usage_daily where day < current_date - 180;
+  delete from gateway.admin_log where time < now() - interval '180 days';
+  delete from gateway.admin_login_failures where time < now() - interval '1 day';
   return jsonb_build_object('sessions', sessions_deleted);
 end;
 $$;
@@ -322,7 +593,13 @@ begin
     'chat_open(text,bigint)', 'chat_append(text,text,jsonb)', 'chat_trim(text,text,bigint)',
     'chat_lock(text,text,bigint,text)', 'chat_claim_ambient(text,int)', 'chat_begin_turn(text,text)',
     'chat_set_cursor(text,text,bigint)', 'reply_get(text,text)', 'reply_put(text,text,jsonb)',
-    'image_put(text,text,text)', 'image_get(text[])', 'gateway_expire(int)'
+    'image_put(text,text,text)', 'image_get(text[])', 'gateway_expire(int)',
+    'gateway_info()', 'settings_list()', 'settings_put(jsonb)', 'profile_get(text)', 'profile_put(text,jsonb)',
+    'usage_add(text,date,jsonb)', 'usage_list(text,date,date)', 'usage_day(date)',
+    'history_add(text,jsonb)', 'history_list(text,bigint,int)',
+    'admin_chats(date)', 'admin_events(text,bigint,int)', 'admin_append(text,jsonb)', 'admin_unlock(text)',
+    'admin_problems(bigint,int)', 'admin_log_add(text,text,jsonb)', 'admin_log_list(int)',
+    'admin_login_failures(text,boolean,int)'
   ] loop
     execute format('revoke all on function public.%s from public', fn);
     if exists (select from pg_roles where rolname = 'anon') then
@@ -346,3 +623,10 @@ exception when others then
   raise notice 'pg_cron not set up (%); run select public.gateway_expire(7) now and then', sqlerrm;
 end;
 $$;
+
+-- Keep in step with SCHEMA_VERSION in src/store/types.ts.
+insert into gateway.meta (key, value) values ('schema_version', '2')
+  on conflict (key) do update set value = excluded.value;
+
+-- Let the Data API see new functions right away.
+notify pgrst, 'reload schema';

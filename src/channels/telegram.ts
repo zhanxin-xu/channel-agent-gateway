@@ -34,14 +34,17 @@ async function tgFailed(method: string, res: Response): Promise<never> {
   throw new Err(`Telegram ${method} failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
-async function tg(method: string, body: unknown): Promise<void> {
+async function tg<T = unknown>(method: string, body: unknown): Promise<T> {
   const res = await platformFetch(`https://api.telegram.org/bot${config.telegram.botToken}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!res.ok) await tgFailed(method, res);
+  return ((await res.json().catch(() => ({}))) as { result: T }).result;
 }
+
+const getMe = () => tg<{ username?: string; first_name?: string }>("getMe", {});
 
 /** Multipart upload (sendPhoto / sendAnimation / sendDocument with file bytes). */
 async function tgUpload(method: string, fields: Record<string, string>, field: string, file: OutgoingFile): Promise<void> {
@@ -58,6 +61,23 @@ export const telegramAdapter: ChannelAdapter = {
 
   isConfigured() {
     return Boolean(config.telegram.botToken && config.telegram.webhookSecret);
+  },
+
+  async verify() {
+    const me = await getMe();
+    return `机器人 @${me.username ?? me.first_name ?? "?"}`;
+  },
+
+  // setWebhook with a secret Telegram sends back on every update; keeps an existing secret.
+  async connect(origin) {
+    const me = await getMe();
+    const secret = config.telegram.webhookSecret || crypto.randomBytes(24).toString("base64url");
+    const url = `${origin}/api/webhook/telegram`;
+    await tg("setWebhook", { url, secret_token: secret, drop_pending_updates: false });
+    return {
+      message: `已把 @${me.username ?? "?"} 的 Webhook 设为 ${url}`,
+      settings: { TELEGRAM_WEBHOOK_SECRET: secret, ...(me.username ? { TELEGRAM_BOT_USERNAME: me.username } : {}) },
+    };
   },
 
   async receive(req, rawBody): Promise<ReceiveResult> {

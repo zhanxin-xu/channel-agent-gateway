@@ -43,6 +43,12 @@ export interface InboundMessage {
   replyContext: Record<string, string>;
   /** Outgoing only: show the reply as a quote of this message, where the platform can (QQ's 回复 box). */
   quote?: boolean;
+  /**
+   * Not from the platform: an admin's instruction to the bot (admin/whisper.ts),
+   * which the chat doesn't see. Its replies go through the platform message
+   * `replyVia` (an eventId in this chat).
+   */
+  adminHint?: { replyVia: string };
 }
 
 export type ReceiveResult =
@@ -101,6 +107,16 @@ export interface ChannelAdapter {
   sendMentions?(message: InboundMessage, parts: TextPart[]): Promise<void>;
   /** Optional "typing…" indicator shown while the agent runs. */
   typing?(message: InboundMessage): Promise<void>;
+  /**
+   * Admin console: check that the credentials work (e.g. get a token).
+   * Returns what was found, for people to read; throws when they don't work.
+   */
+  verify?(): Promise<string>;
+  /**
+   * Admin console: register this deployment's webhook with the platform
+   * (`origin` is its public origin). Returns settings to save along the way.
+   */
+  connect?(origin: string): Promise<{ message: string; settings?: Record<string, string> }>;
 }
 
 export function json(body: unknown, status = 200): Response {

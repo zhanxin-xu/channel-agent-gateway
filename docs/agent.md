@@ -165,6 +165,28 @@
 | `chat_lock` / `chat_claim_ambient` | 运行锁的获取、续期、释放；旁观采样 |
 | `chat_begin_turn` / `chat_set_cursor` | 轮次计数、游标 |
 | `reply_get` / `reply_put`、`image_put` / `image_get` | 回复状态、图片 |
-| `gateway_expire` | 每天清理：删除 7 天没有新消息的会话 |
+| `gateway_expire` | 每天清理：删除 7 天没有新消息的会话，以及过期的聊天记录、用量和操作记录 |
 
 发送 `/reset` 会删除当前会话之前的全部事件、图片和回复状态，seq 继续往后编号。
+
+管理端另有几张表，都不挂在 `sessions` 上，会话过期以后它们还在，详见[管理端](admin.md)：
+
+| 表 | 内容 |
+|---|---|
+| `meta` | 表结构版本号 |
+| `settings` | 管理端里填的配置，按环境变量名存，key 是加密后的 |
+| `chat_profiles` | 每个聊天的设置：备注名、回复方式、插话频率、工具开关、额外设定、额度 |
+| `usage_daily` | 每个聊天每个 UTC 日的用量（轮次、token、花费、画图 / 语音 / 搜索次数） |
+| `history` | 聊天记录：谁说了什么，不受压缩影响，保留 `HISTORY_RETENTION_DAYS` 天 |
+| `admin_log`、`admin_login_failures` | 管理操作记录；登录失败次数 |
+
+每个聊天的设置会影响一轮对话：
+
+- 系统提示后面会加上这个聊天的额外设定。
+- 关掉的工具不提供给模型。
+- 当天的花费额度用完时不开新的一轮。
+- 一轮结束后，用量从这一轮的事件里累加，见 [`src/chats/usage.ts`](../src/chats/usage.ts)。
+
+“只记录”模式下收到的消息带 `quiet` 标记，模型以后能看到它们，但它们不算待处理的消息。
+
+管理员代发的话记为 `admin/message`，模型会把它当成自己说过的话。

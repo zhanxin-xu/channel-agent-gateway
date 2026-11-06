@@ -71,10 +71,12 @@ export function qqVerify(secret: string, timestamp: string, body: string, signat
 
 // ── Access token (cached per warm instance; valid ~7200s) ──
 
-let cachedToken: { value: string; expiresAt: number } | undefined;
+/** Keyed by the credentials it was issued for: they can change in the admin console. */
+let cachedToken: { credentials: string; value: string; expiresAt: number } | undefined;
 
 async function getAccessToken(): Promise<string> {
-  if (cachedToken && Date.now() < cachedToken.expiresAt - 5 * 60_000) return cachedToken.value;
+  const credentials = `${config.qq.appId}\n${config.qq.appSecret}`;
+  if (cachedToken?.credentials === credentials && Date.now() < cachedToken.expiresAt - 5 * 60_000) return cachedToken.value;
   const res = await platformFetch(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -85,7 +87,7 @@ async function getAccessToken(): Promise<string> {
     const Err = res.status >= 500 ? ChannelUnreachableError : Error;
     throw new Err(`QQ getAppAccessToken failed: HTTP ${res.status} ${JSON.stringify(data).slice(0, 200)}`);
   }
-  cachedToken = { value: data.access_token, expiresAt: Date.now() + Number(data.expires_in ?? 7200) * 1000 };
+  cachedToken = { credentials, value: data.access_token, expiresAt: Date.now() + Number(data.expires_in ?? 7200) * 1000 };
   return cachedToken.value;
 }
 
@@ -427,6 +429,11 @@ export const qqAdapter: ChannelAdapter = {
 
   isConfigured() {
     return Boolean(config.qq.appId && config.qq.appSecret);
+  },
+
+  async verify() {
+    await getAccessToken();
+    return `AppID ${config.qq.appId} 拿到了 access token`;
   },
 
   async receive(req, rawBody): Promise<ReceiveResult> {

@@ -2024,6 +2024,189 @@ await test("out of credit: an @ or a DM is told, an ordinary group message is sk
   assert.equal(outOfCreditText(), "没余额了，暂时回不了消息。", "a 402 says no reset time");
 });
 
+// ── Admin console ──
+const { saveSettings, refreshSettings, describeSettings, rekeySecrets, importEnv } = await import("../src/settings/service.js");
+const { saveChatProfile } = await import("../src/chats/profile.js");
+const { quotaPolicy, turnUsage } = await import("../src/chats/usage.js");
+const { utcDay } = await import("../src/chats/day.js");
+const { Toolset } = await import("../src/tools/registry.js");
+
+await test("settings: the console's values win over the environment; secrets are stored encrypted under ADMIN_PASSWORD", async () => {
+  process.env.ADMIN_PASSWORD = "pw-one";
+  try {
+    await saveSettings({ OPENAI_RESPONSES_MODEL: "x/console-model", DEEPSEEK_API_KEY: "ds-from-console" });
+    assert.equal(config.llm.model, "x/console-model");
+    assert.equal(config.deepseek.apiKey, "ds-from-console");
+    const stored = (await getStore().listSettings()).find((r) => r.key === "DEEPSEEK_API_KEY")!;
+    assert.equal(stored.secret, true);
+    assert.ok(!stored.value.includes("ds-from-console"), "ciphertext at rest");
+    const view = (await describeSettings()).values.find((v) => v.key === "DEEPSEEK_API_KEY")!;
+    assert.equal(view.source, "db");
+    assert.ok(!view.value.includes("from-console"), "only a masked preview leaves the server");
+
+    process.env.ADMIN_PASSWORD = "pw-two";
+    await refreshSettings({ force: true });
+    assert.equal(config.deepseek.apiKey, "ds-key", "unreadable under another password: the environment's value");
+    assert.equal(config.llm.model, "x/console-model", "plain settings aren't affected");
+    assert.equal(await rekeySecrets("pw-one"), 1);
+    assert.equal(config.deepseek.apiKey, "ds-from-console");
+
+    await assert.rejects(saveSettings({ OPENAI_RESPONSES_EXTRA_BODY: "[1]", AGENT_MAX_STEPS: "0" }), (err: any) => {
+      assert.deepEqual(Object.keys(err.errors).sort(), ["AGENT_MAX_STEPS", "OPENAI_RESPONSES_EXTRA_BODY"]);
+      return true;
+    });
+    await assert.rejects(saveSettings({ NOT_A_SETTING: "x" }), /NOT_A_SETTING/);
+
+    await saveSettings({ OPENAI_RESPONSES_MODEL: null, DEEPSEEK_API_KEY: "" });
+    assert.equal(config.llm.model, "openai/gpt-6-luna", "cleared: back to the environment");
+    assert.equal(config.deepseek.apiKey, "ds-key");
+
+    const imported = await importEnv();
+    assert.ok(imported.includes("QQ_APP_SECRET") && imported.includes("OPENAI_RESPONSES_EXTRA_BODY"));
+    assert.equal((await getStore().listSettings()).find((r) => r.key === "QQ_APP_SECRET")!.secret, true);
+    assert.equal(config.qq.appSecret, process.env.QQ_APP_SECRET);
+  } finally {
+    await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null, secret: r.secret })));
+    delete process.env.ADMIN_PASSWORD;
+    await refreshSettings({ force: true });
+  }
+});
+
+await test("admin api: login, cookie session, same-origin JSON only; a new ADMIN_PASSWORD ends sessions; the page has a CSP", async () => {
+  const { handleAdmin } = await import("../src/admin/handler.js");
+  const req = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
+    handleAdmin(
+      new Request(`https://bot.example.com/api/admin/${path}`, {
+        method,
+        headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
+  process.env.ADMIN_PASSWORD = "admin-pw";
+  try {
+    assert.deepEqual(await (await req("GET", "session")).json(), { passwordSet: true, loggedIn: false });
+    assert.equal((await req("GET", "settings")).status, 401);
+    assert.equal((await req("POST", "session", { password: "nope" })).status, 401);
+    assert.equal((await req("POST", "session", { password: "admin-pw" }, { origin: "https://evil.example" })).status, 403);
+    const login = await req("POST", "session", { password: "admin-pw" });
+    const cookie = login.headers.get("set-cookie")!;
+    assert.match(cookie, /HttpOnly; SameSite=Strict; Max-Age=\d+; Secure/);
+    const auth = { cookie: cookie.split(";")[0]! };
+    assert.equal((await req("GET", "settings", undefined, auth)).status, 200);
+    const status = (await (await req("GET", "status", undefined, auth)).json()) as any;
+    assert.equal(status.model, true);
+    assert.equal(status.channels.find((c: any) => c.name === "qq").webhook, "https://bot.example.com/api/webhook/qq");
+    assert.ok(status.envOnly.includes("OPENAI_RESPONSES_API_KEY"));
+    assert.equal((await req("PUT", "settings", { changes: { AGENT_MAX_STEPS: "abc" } }, auth)).status, 400);
+    assert.equal((await req("GET", "nope", undefined, auth)).status, 404);
+
+    process.env.ADMIN_PASSWORD = "changed";
+    assert.equal((await req("GET", "settings", undefined, auth)).status, 401, "changing the password ends sessions");
+
+    const page = await handleAdmin(new Request("https://bot.example.com/api/admin?__ui="));
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get("content-security-policy")!, /script-src 'self'/);
+    assert.equal((await handleAdmin(new Request("https://bot.example.com/api/admin?__ui=..%2Fpackage.json"))).status, 404);
+  } finally {
+    delete process.env.ADMIN_PASSWORD;
+  }
+});
+
+await test("chat profiles: block drops, record keeps quiet context, mention never chimes in, the chat's prompt is added", async () => {
+  await saveChatProfile("qq:group:GBLOCK", { mode: "block" });
+  await handleWebhook(groupAt("GBLOCK", "k1", " 在吗"), "qq");
+  await drain();
+  assert.equal(llmCalls, 0);
+  assert.equal((await events("qq:group:GBLOCK")).length, 0, "not even logged");
+
+  await saveChatProfile("qq:group:GREC", { mode: "record" });
+  await handleWebhook(groupAt("GREC", "r1", " 记住这个"), "qq");
+  await drain();
+  assert.equal(llmCalls, 0, "record only: never answered");
+  await saveChatProfile("qq:group:GREC", { prompt: "这个群说话要学术一点" });
+  await handleWebhook(groupAt("GREC", "r2", " 现在呢"), "qq");
+  await drain();
+  const req = llmRequests()[0]!;
+  assert.match(req.body.instructions, /# 这个聊天的额外设定\n\n这个群说话要学术一点$/);
+  assert.deepEqual(userLines(req).map((l: string) => l.split("\n")[1]), ["记住这个", "现在呢"], "the quiet message is context");
+  assert.match(req.body.input.at(-1).content, /待处理的消息：第1条（#MB，@你）。/, "but not work");
+
+  const before = llmCalls;
+  await saveChatProfile("qq:group:GMENTION", { mode: "mention" });
+  await handleWebhook(groupMsg("GMENTION", "m1", "今天吃啥"), "qq");
+  await drain();
+  assert.equal(llmCalls, before, "only @ wakes it");
+  await handleWebhook(groupAt("GMENTION", "m2", " 你说呢"), "qq");
+  await drain();
+  assert.ok(llmCalls > before);
+});
+
+await test("usage and quotas: each turn's usage is added up per chat per day; a used-up cost quota stops turns", async () => {
+  await handleWebhook(c2c("u1", "你好", "QUOTAUSER"), "qq");
+  await drain();
+  const day = utcDay();
+  const [today] = await getStore().usage("qq:c2c:QUOTAUSER", day, day);
+  assert.equal(today!.counts.turns, 1);
+  assert.equal(today!.counts.model_calls, llmCalls);
+  assert.ok(today!.counts.input_tokens! > 0);
+
+  await saveChatProfile("qq:c2c:QUOTAUSER", { quota: { cost_usd: 0 } });
+  const before = llmCalls;
+  await handleWebhook(c2c("u2", "还在吗", "QUOTAUSER"), "qq");
+  await drain();
+  assert.equal(llmCalls, before, "no model call");
+  assert.match(sentTo("/v2/users/QUOTAUSER/messages").at(-1).content, /^这里今天的额度用完了，北京时间 \d+月\d+日 08:00 恢复。$/);
+  await saveChatProfile("qq:c2c:QUOTAUSER", {});
+});
+
+await test("usage and quotas: tool calls are counted from the log; a used-up tool quota refuses the tool; disabled tools aren't offered", async () => {
+  const ev = (seq: number, type: string, data: unknown) => ({ seq, type, time: 0, data }) as any;
+  const counts = turnUsage([
+    ev(0, "turn/start", { turn: 1, trigger: "direct" }),
+    ev(1, "assistant/message", { turn: 1, step: 1, output: [], usage: { input_tokens: 1000, output_tokens: 10, input_tokens_details: { cached_tokens: 800 }, cost: 0.002 } }),
+    ev(2, "tool/call", { turn: 1, step: 1, callId: "a", name: "web_search" }),
+    ev(3, "tool/call", { turn: 1, step: 1, callId: "b", name: "generate_image" }),
+    ev(4, "tool/result", { turn: 1, step: 1, callId: "a", output: "results…" }),
+    ev(5, "tool/result", { turn: 1, step: 1, callId: "b", output: "Error: refused" }),
+  ]);
+  assert.deepEqual(counts, { turns: 1, model_calls: 1, input_tokens: 1000, cached_tokens: 800, output_tokens: 10, cost_usd: 0.002, searches: 1 });
+
+  const toolset = new Toolset(quotaPolicy({ quota: { searches: 1 }, disabledTools: ["memory"] }, { searches: 1 }));
+  assert.match(await toolset.run("web_search", '{"query":"x"}', noCtx), /^Error: this chat's daily quota for web_search \(1\) is used up/);
+  assert.ok(!toolset.tools.some((t) => t.feature === "memory"));
+  assert.ok(toolset.tools.some((t) => t.name === "web_fetch"));
+});
+
+await test("admin: say speaks in the bot's name on the newest open message, and the model reads it as its own; whisper makes it answer", async () => {
+  const { say, whisper, replyWindow } = await import("../src/admin/chat-actions.js");
+  await handleWebhook(groupMsg("GADMIN", "s1", "有人吗"), "qq");
+  await drain();
+  const window = await replyWindow("qq:group:GADMIN");
+  assert.equal(window.open, true);
+  assert.equal(window.seq, 0);
+
+  await say("qq:group:GADMIN", "管理员替我说的");
+  const said = sentTo("/v2/groups/GADMIN/messages");
+  assert.equal(said.at(-1).content, "管理员替我说的");
+  assert.equal(said.at(-1).msg_id, "s1", "a passive reply to the platform message");
+  assert.equal((await events("qq:group:GADMIN")).at(-1)!.type, "admin/message");
+
+  const background: Promise<unknown>[] = [];
+  await whisper("qq:group:GADMIN", "提醒大家开会", "https://bot.example.com", (p) => background.push(p));
+  await Promise.all(background);
+  await drain();
+  const req = llmRequests().at(-1)!;
+  assert.ok(req.body.input.some((i: any) => i.role === "assistant" && i.content === "管理员替我说的"));
+  assert.match(userLines(req).at(-1), /管理员悄悄告诉你，群里看不到这句）提醒大家开会$/);
+  const all = sentTo("/v2/groups/GADMIN/messages");
+  assert.ok(all.length > said.length, "she answered");
+  assert.ok(all.every((b) => b.msg_id === "s1"), "through the same platform message");
+  assert.equal(new Set(all.map((b) => b.msg_seq)).size, all.length, "with its msg_seq counting on");
+
+  const roles = new Set((await getStore().history("qq:group:GADMIN", Date.now() + 1, 50)).map((e) => e.role));
+  assert.deepEqual([...roles].sort(), ["admin", "bot", "hint", "user"]);
+});
+
 await test("unknown channel → 404", async () => {
   assert.equal((await handleWebhook(new Request("http://x/api/webhook/nope", { method: "POST" }), "nope")).status, 404);
 });
