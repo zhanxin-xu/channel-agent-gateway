@@ -94,6 +94,10 @@ export function memoryRpc(store: MemoryStore): Rpc {
         return store.usageOfDay(a.p_day);
       case "admin_chats":
         return store.chats(a.p_day);
+      case "admin_chat":
+        return store.chat(a.p_chat, a.p_day);
+      case "admin_has_chats":
+        return store.hasChats();
       case "admin_events":
         return store.recentEvents(a.p_chat, a.p_before, a.p_limit);
       case "admin_append":

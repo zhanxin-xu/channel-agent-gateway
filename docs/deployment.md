@@ -24,6 +24,7 @@
    | `store` | `supabase` 或 `memory` |
    | `memory` / `sandbox` | 长期记忆和沙盒是否启用 |
    | `channels` | 各渠道是否已配置凭据 |
+   | `admin` | 是否设置了 `ADMIN_PASSWORD`（管理端能否登录） |
 
 **在管理端改的配置 30 秒内生效**，不用重新部署。**直接改环境变量后要重新部署**，已经在运行的部署不会读到新值。可以在 Deployments 页面对最新一次部署点 Redeploy，或者再运行一次 `npx vercel --prod`。
 

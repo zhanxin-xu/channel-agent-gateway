@@ -4,7 +4,6 @@
  */
 import { createResponse, outputText } from "../../agent/model.js";
 import { channels } from "../../channels/index.js";
-import { utcDay } from "../../chats/day.js";
 import { config } from "../../config.js";
 import { saveSettings } from "../../settings/service.js";
 import { getStore, SCHEMA_VERSION, storeBackend } from "../../store/index.js";
@@ -40,13 +39,13 @@ export const setupRoutes: Route[] = [
     path: "status",
     async handler(req) {
       const database = await databaseStatus();
-      const chats = database.ready ? await getStore().chats(utcDay()) : [];
       return {
         origin: req.origin,
         database,
         model: Boolean(config.llm.apiKey),
         channels: [...channels.values()].map((c) => ({
           name: c.name,
+          label: c.label,
           configured: c.isConfigured(),
           webhook: `${req.origin}/api/webhook/${c.name}`,
           canVerify: Boolean(c.verify),
@@ -59,7 +58,7 @@ export const setupRoutes: Route[] = [
           memory: Boolean(config.memory.url && config.memory.token),
           sandbox: config.sandbox.enabled,
         },
-        firstMessage: chats.length > 0,
+        firstMessage: database.ready && (await getStore().hasChats()),
       };
     },
   },

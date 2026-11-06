@@ -1,7 +1,7 @@
 // One chat (#/chat/<chat>/<tab>): its history with the composer, its event log, and its settings.
 import { api, ApiError } from "./api.js";
 import { action, confirmAction, every, fill, fmtClock, fmtTime, fmtTokens, fmtUsd, h, pill, toast } from "./dom.js";
-import { chatKind, chatName, MODES, speakersText } from "./view-chats.js";
+import { chatKind, chatName, modePill, speakersText } from "./labels.js";
 
 const BOT = "大肥鱼";
 const TABS = [
@@ -20,7 +20,7 @@ export async function renderChat(main, [chat, tabId], app) {
       "header",
       { class: "page-head" },
       h("p", null, h("a", { href: "#/chats" }, "← 聊天")),
-      h("h1", null, chatName(info), " ", pill(...MODES[info.mode]), info.locked ? [" ", pill("info", "运行中")] : null),
+      h("h1", null, chatName(info), " ", modePill(info), info.locked ? [" ", pill("info", "运行中")] : null),
       info.chatType === "group" && speakersText(info) ? h("p", null, `最近说话的人：${speakersText(info)}`) : null,
       h("p", { class: "muted mono small" }, `${chatKind(info)} · ${chat}${info.turn ? ` · 第 ${info.turn} 轮` : ""}`),
     ),
@@ -54,16 +54,17 @@ function renderHistory(body, chat, info) {
     fill(list, sorted.length ? sorted.map(bubble) : h("p", { class: "muted" }, "还没有消息。"));
     if (stick) list.scrollTop = list.scrollHeight;
   };
-  const load = async (before) => {
-    const page = await api.get("chat/history", { chat, before, limit: 100 });
-    for (const e of page) entries.set(e.id, e);
-    // A short page means the log has nothing older.
-    return page.length === 100;
+  // The newest event read so far: polling asks only for what's after it.
+  let through = -1;
+  const add = (page) => {
+    for (const e of page.lines) entries.set(e.id, e);
+    through = Math.max(through, page.through);
+    return page;
   };
   more.addEventListener("click", async () => {
     const oldest = Math.min(...[...entries.values()].map((e) => e.seq));
     const height = list.scrollHeight;
-    more.hidden = !(await load(oldest));
+    more.hidden = !add(await api.get("chat/history", { chat, before: oldest, limit: 100 })).more;
     draw(false);
     list.scrollTop = list.scrollHeight - height;
   });
@@ -73,11 +74,11 @@ function renderHistory(body, chat, info) {
   const refresh = async (stick) => {
     const before = entries.size;
     const wasNear = nearBottom();
-    await load();
+    add(await api.get("chat/history", { chat, after: through }));
     if (entries.size !== before || stick) draw(stick || wasNear);
   };
-  load().then((hasMore) => {
-    more.hidden = !hasMore;
+  api.get("chat/history", { chat, limit: 100 }).then((page) => {
+    more.hidden = !add(page).more;
     draw(true);
   });
   const stops = [every(4000, () => refresh(false)), composer.stop];
@@ -86,6 +87,8 @@ function renderHistory(body, chat, info) {
 
 function renderComposer(chat, info, onSent) {
   let mode = "say";
+  // A record-only or blocked chat never answers, so there's no one to whisper to.
+  const canWhisper = info.mode === "normal" || info.mode === "mention";
   const text = h("textarea", { id: "compose", rows: 3, placeholder: `以${BOT}的身份说点什么…  @#XXXXXX 可以 @ 群友` });
   const windowLine = h("span", { class: "window" });
   let state = info.replyWindow;
@@ -102,6 +105,8 @@ function renderComposer(chat, info, onSent) {
       h("button", {
         type: "button",
         class: value === mode ? "on" : "",
+        disabled: value === "whisper" && !canWhisper,
+        title: value === "whisper" && !canWhisper ? `这个聊天是“${info.modeLabel}”，她不会回复` : null,
         onClick(e) {
           mode = value;
           for (const b of seg.children) b.classList.toggle("on", b === e.currentTarget);
@@ -330,15 +335,16 @@ function renderEvents(body, chat, info) {
         : h("p", { class: "muted" }, "没有事件。"),
     );
   };
-  const load = async (before) => {
-    const page = await api.get("chat/events", { chat, before, limit: 150 });
+  const load = async (params) => {
+    const page = await api.get("chat/events", { chat, limit: 150, ...params });
     session = page.session ?? session;
     for (const e of page.events) events.set(e.seq, e);
     return page.events.length;
   };
+  const newest = () => (events.size ? Math.max(...events.keys()) : -1);
   more.addEventListener("click", async () => {
     const oldest = Math.min(...events.keys());
-    if (!(await load(oldest))) more.hidden = true;
+    if (!(await load({ before: oldest }))) more.hidden = true;
     draw();
   });
 
@@ -371,7 +377,7 @@ function renderEvents(body, chat, info) {
           const { released } = await api.post("chat/unlock", { chat });
           toast(released ? "已释放" : "没有锁");
         }) : null,
-        confirmAction("重置上下文", "她会忘掉之前的对话（聊天记录还在），确定？", async () => {
+        confirmAction("重置上下文", "她会忘掉之前的对话，事件和聊天记录都会清空，确定？", async () => {
           await api.post("chat/reset", { chat });
           toast("已重置");
           events.clear();
@@ -386,30 +392,19 @@ function renderEvents(body, chat, info) {
   );
   load().then(draw);
   return every(3000, async () => {
-    const before = events.size;
-    await load();
-    if (events.size !== before) draw();
+    if ((await load({ after: newest() })) > 0) draw();
   });
 }
 
 // ── Settings and quotas ──
 
-const FEATURES = [
-  ["image", "画图"],
-  ["voice", "语音"],
-  ["search", "搜索"],
-  ["memory", "记忆"],
-  ["sandbox", "沙盒"],
-];
-const QUOTAS = [
-  ["cost_usd", "模型花费（美元）", (n) => fmtUsd(n)],
-  ["images", "画图（张）", String],
-  ["voices", "语音（条）", String],
-  ["searches", "搜索（次）", String],
-];
+/** How today's count of a quota reads: dollars for cost, a number for the rest. */
+const showCount = (key, n) => (key === "cost_usd" ? fmtUsd(n) : String(n));
 
 function renderSettings(body, chat, info, app) {
   const p = info.profile ?? {};
+  const { modes, features, quotas: quotaChoices } = info.choices;
+  const labelOf = (value) => modes.find((o) => o.value === value)?.label ?? value;
   const today = info.usageByDay.at(-1)?.day === new Date().toISOString().slice(0, 10) ? info.usageByDay.at(-1).counts : {};
   const errors = {};
   const errorSlot = (key) => (errors[key] = h("p", { class: "field-error", hidden: true }));
@@ -420,20 +415,20 @@ function renderSettings(body, chat, info, app) {
   const mode = h(
     "select",
     { id: "profile-mode" },
-    h("option", { value: "", selected: !p.mode }, `跟随默认（${MODES[info.defaults.mode]?.[1] ?? info.defaults.mode}）`),
-    Object.entries(MODES).map(([value, [, label]]) => h("option", { value, selected: p.mode === value }, label)),
+    h("option", { value: "", selected: !p.mode }, `跟随默认（${labelOf(info.defaults.mode)}）`),
+    modes.map((o) => h("option", { value: o.value, selected: p.mode === o.value }, o.label)),
   );
   const interval = h("input", { id: "profile-interval", type: "text", inputmode: "numeric", value: p.ambientIntervalSeconds ?? "", placeholder: `默认 ${info.defaults.ambientIntervalSeconds}` });
   const disabled = new Set(p.disabledTools ?? []);
-  const tools = FEATURES.map(([id, label]) => {
+  const tools = features.map(({ value: id, label }) => {
     const box = h("input", { id: `profile-tool-${id}`, type: "checkbox", checked: !disabled.has(id) });
     return { id, box, el: h("label", { class: "check", for: `profile-tool-${id}` }, box, label) };
   });
   const prompt = h("textarea", { id: "profile-prompt", rows: 4, maxlength: 2000, placeholder: "比如：这是一个研究海洋生物的群，说话可以更学术一点。" });
   prompt.value = p.prompt ?? "";
-  const quotas = QUOTAS.map(([key, label, show]) => {
+  const quotas = quotaChoices.map(({ value: key, label }) => {
     const input = h("input", { id: `profile-quota-${key}`, type: "text", inputmode: "decimal", value: p.quota?.[key] ?? "", placeholder: "不限" });
-    return { key, input, row: h("tr", null, h("td", null, h("label", { for: `profile-quota-${key}` }, label)), h("td", { class: "num" }, show(today[key] ?? 0)), h("td", null, input), h("td", null, errorSlot(`quota.${key}`))) };
+    return { key, input, row: h("tr", null, h("td", null, h("label", { for: `profile-quota-${key}` }, label)), h("td", { class: "num" }, showCount(key, today[key] ?? 0)), h("td", null, input), h("td", null, errorSlot(`quota.${key}`))) };
   });
 
   const save = action("保存", async () => {

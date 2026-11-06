@@ -26,7 +26,8 @@ import { runTurn, type TurnResult } from "../agent/loop.js";
 import { OutOfCreditError } from "../agent/model.js";
 import { SYSTEM_PROMPT } from "../agent/system-prompt.js";
 import { ambientInterval, chatProfile, type ChatProfile } from "../chats/profile.js";
-import { costQuotaUsed, quotaPolicy, quotaResetText, recordUsage, turnUsage, usageToday } from "../chats/usage.js";
+import { beijingTime, nextDayStart } from "../chats/day.js";
+import { costQuotaUsed, quotaPolicy, recordUsage, turnUsage, usageToday } from "../chats/usage.js";
 import type { SessionEvent } from "../conversation/events.js";
 import { recoverOpenTurn, unfinishedTurn } from "../conversation/recovery.js";
 import { Session } from "../conversation/session.js";
@@ -50,16 +51,12 @@ const ERROR_TEXT = "抱歉，处理消息时出错了，请稍后再试。";
 
 /** What an @ or a DM gets while the model key has no money left; ordinary group messages get nothing. */
 export function outOfCreditText(resetsAt?: number): string {
-  if (resetsAt === undefined) return "没余额了，暂时回不了消息。";
-  // Beijing has no DST: UTC+8 all year.
-  const t = new Date(resetsAt + 8 * 3600_000);
-  const hm = `${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`;
-  return `没余额了，暂时回不了消息（北京时间 ${t.getUTCMonth() + 1}月${t.getUTCDate()}日 ${hm} 恢复）。`;
+  return resetsAt === undefined ? "没余额了，暂时回不了消息。" : `没余额了，暂时回不了消息（${beijingTime(resetsAt)} 恢复）。`;
 }
 
 /** What an @ or a DM gets once the chat's daily cost quota is used up. */
-export const quotaUsedText = (scene: "群聊" | "私聊") =>
-  `${scene === "群聊" ? "这个群" : "这里"}今天的额度用完了，${quotaResetText()} 恢复。`;
+const quotaUsedText = (scene: "群聊" | "私聊") =>
+  `${scene === "群聊" ? "这个群" : "这里"}今天的额度用完了，${beijingTime(nextDayStart())} 恢复。`;
 
 /** The persona, the channel's formatting hint, and the chat's own instructions. */
 function systemPrompt(adapter: ChannelAdapter, profile: ChatProfile): string {

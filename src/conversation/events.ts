@@ -65,9 +65,9 @@ export interface EventMap {
     /** The channel's reply context (msg_id, chat_id, …) as received; not model-visible. */
     reply: Record<string, string>;
     /**
-     * Replies to this message go through that platform message (its eventId)
-     * and share its reply count: an admin's whisper (admin/whisper.ts) has no
-     * platform message of its own.
+     * Set on an admin's whisper (see isWhisper), which has no platform message
+     * of its own: replies to it go through this platform message (its
+     * eventId) and share its reply count.
      */
     replyVia?: string;
     /**
@@ -116,6 +116,9 @@ export type SessionEvent<K extends EventType = EventType> = {
 
 export const isEvent = <K extends EventType>(e: SessionEvent, type: K): e is Extract<SessionEvent, { type: K }> =>
   e.type === type;
+
+/** An admin's instruction to the bot that the chat didn't see (admin/chat-actions.ts), not something someone in the chat wrote. */
+export const isWhisper = (e: SessionEvent<"user/message">): boolean => e.data.replyVia !== undefined;
 
 /** The model-visible message number of a user/message: its seq. */
 export const messageLabel = (seq: number) => `第${seq}条`;

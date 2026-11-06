@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const URL_VARS = ["POSTGRES_URL_NON_POOLING", "DATABASE_URL", "POSTGRES_URL"];
-export const SCHEMA_FILE = "supabase/schema.sql";
+const SCHEMA_FILE = "supabase/schema.sql";
 
 /** The name of the variable holding a direct connection string, if any. */
 export function connectionVar(): string | undefined {

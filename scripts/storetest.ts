@@ -183,12 +183,12 @@ async function contract(name: string, store: Store) {
   await test("admin: schema version, settings put / replace / delete", async () => {
     assert.equal(await store.schemaVersion(), SCHEMA_VERSION);
     await store.putSettings([
-      { key: "B", value: "1", secret: false },
-      { key: "A", value: "x", secret: true },
+      { key: "B", value: "1" },
+      { key: "A", value: "x" },
     ]);
-    await store.putSettings([{ key: "B", value: "2", secret: false }]);
-    assert.deepEqual((await store.listSettings()).map((r) => [r.key, r.value, r.secret]), [["A", "x", true], ["B", "2", false]]);
-    await store.putSettings([{ key: "A", value: null, secret: true }]);
+    await store.putSettings([{ key: "B", value: "2" }]);
+    assert.deepEqual((await store.listSettings()).map((r) => [r.key, r.value]), [["A", "x"], ["B", "2"]]);
+    await store.putSettings([{ key: "A", value: null }]);
     assert.deepEqual((await store.listSettings()).map((r) => r.key), ["B"]);
   });
 
@@ -215,6 +215,9 @@ async function contract(name: string, store: Store) {
     const listed = (await store.chats("2026-11-06")).find((x) => x.chat === c)!;
     assert.equal(listed.channel, "qq");
     assert.equal(listed.locked, true);
+    assert.deepEqual(await store.chat(c, "2026-11-06"), listed, "one chat, as the list has it");
+    assert.equal(await store.chat("qq:nobody", "2026-11-06"), null);
+    assert.equal(await store.hasChats(), true);
     await store.putProfile("qq:only-profile", { title: "x" });
     assert.ok((await store.chats("2026-11-06")).some((x) => x.chat === "qq:only-profile"), "a chat with only a profile is listed");
 

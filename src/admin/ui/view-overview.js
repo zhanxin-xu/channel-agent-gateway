@@ -1,14 +1,8 @@
 // The overview: spend against the provider's limits, today's usage across chats, recent problems.
 import { api } from "./api.js";
-import { every, fill, fmtAgo, fmtInt, fmtTokens, fmtUsd, h, pill } from "./dom.js";
+import { every, fill, fmtAgo, fmtInt, fmtTokens, fmtUsd, h, meter, pill } from "./dom.js";
 
 const REASONS = { error: "出错", unreachable: "平台连不上", "max-steps": "步数用完" };
-
-/** A bar from 0 to 1, amber past 80%. */
-export function meter(ratio) {
-  const r = Math.max(0, Math.min(1, ratio));
-  return h("div", { class: "meter" }, h("b", { class: r >= 0.8 ? "hot" : "", style: `width:${(r * 100).toFixed(1)}%` }));
-}
 
 /** One OpenRouter key: spend today against its daily (or overall) limit. */
 function keyTile(title, report) {

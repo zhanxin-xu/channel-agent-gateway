@@ -7,8 +7,8 @@ import { callBudgetMs } from "../agent/budget.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import { chatPeople } from "../conversation/people.js";
 import type { Session } from "../conversation/session.js";
-import type { Outgoing, ToolContext } from "../tools/types.js";
-import { deliverOutgoing, VOICE_LABEL } from "./deliver.js";
+import { describeOutgoing, type Outgoing, type ToolContext } from "../tools/types.js";
+import { deliverOutgoing } from "./deliver.js";
 import type { Outbox } from "./outbox.js";
 import type { ChatMeta } from "./types.js";
 
@@ -37,14 +37,7 @@ export function makeToolContext(
       // The copy keeps the same replyContext object: the adapter's updates to it (QQ's msg_seq) are saved.
       const target = replyTo ?? turnState.main;
       const status = await outbox.deliver(target, (msg) => deliver(message, opts?.quote ? { ...msg, quote: true } : msg));
-      const said =
-        message.kind === "text"
-          ? message.text
-          : message.kind === "image"
-            ? message.label
-            : message.kind === "voice"
-              ? `${VOICE_LABEL}${message.voice.text}`
-              : `[文件：${message.file.name}]`;
+      const said = describeOutgoing(message);
       this.sent.push(said);
       // Delivered whatever happens next: a failure to log it mustn't turn into a failed send.
       await session

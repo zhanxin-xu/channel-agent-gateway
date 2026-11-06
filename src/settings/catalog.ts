@@ -31,6 +31,10 @@ export interface SettingDef {
   options?: SettingOption[];
   /** For "int" and "number": the smallest value accepted (int: 1 unless set). */
   min?: number;
+  /** A secret the console can make up (a random token) instead of someone typing it. */
+  generate?: true;
+  /** Filled in by the channel's connect (ChannelAdapter.connect), not typed by hand. */
+  setByConnect?: true;
 }
 
 export type SettingGroupId = "llm" | "image" | "tts" | "search" | "memory" | "sandbox" | "qq" | "telegram" | "http" | "agent" | "console";
@@ -41,6 +45,8 @@ export interface SettingGroup {
   help: string;
   /** The setting that turns the feature on when filled in. */
   enabledBy?: string;
+  /** The channel (ChannelAdapter.name) these are the credentials of. */
+  channel?: string;
 }
 
 const OPENROUTER = "https://openrouter.ai/api/v1";
@@ -55,9 +61,15 @@ export const SETTING_GROUPS: SettingGroup[] = [
   { id: "search", label: "搜索", help: "DeepSeek 的 web_search / web_fetch，每千次约 ¥5。", enabledBy: "DEEPSEEK_API_KEY" },
   { id: "memory", label: "长期记忆", help: "remember / recall / forget，存在 Upstash Vector（Dense，TEXT_EMBEDDING_3_SMALL，COSINE）。", enabledBy: "UPSTASH_VECTOR_REST_TOKEN" },
   { id: "sandbox", label: "沙盒", help: "bash、读写文件、发文件，每个聊天一个 Vercel Sandbox 工作区。部署在 Vercel 上时自动认证。" },
-  { id: "qq", label: "QQ", help: "QQ 开放平台的机器人。回调地址填 https://你的域名/api/webhook/qq，大陆必须绑自定义域名。", enabledBy: "QQ_APP_SECRET" },
-  { id: "telegram", label: "Telegram", help: "@BotFather 给的 token。保存后点“设置 Webhook”。", enabledBy: "TELEGRAM_BOT_TOKEN" },
-  { id: "http", label: "HTTP", help: "通用 HTTP 接口：POST /api/webhook/http，带 Authorization: Bearer <token>。", enabledBy: "HTTP_CHANNEL_TOKEN" },
+  {
+    id: "qq",
+    label: "QQ",
+    help: "QQ 开放平台的机器人。把下面的回调地址填进 QQ 开放平台；大陆的 QQ 服务器访问不了 *.vercel.app，必须先绑定自定义域名。",
+    enabledBy: "QQ_APP_SECRET",
+    channel: "qq",
+  },
+  { id: "telegram", label: "Telegram", help: "@BotFather 给的 token。保存后点“设置 Webhook”。", enabledBy: "TELEGRAM_BOT_TOKEN", channel: "telegram" },
+  { id: "http", label: "HTTP", help: "通用 HTTP 接口：POST /api/webhook/http，带 Authorization: Bearer <token>。", enabledBy: "HTTP_CHANNEL_TOKEN", channel: "http" },
   { id: "agent", label: "Agent 参数", help: "步数、上下文、插话频率等。" },
   { id: "console", label: "管理", help: "管理端自己的设置。" },
 ];
@@ -161,9 +173,16 @@ export const SETTINGS: SettingDef[] = [
   { key: "QQ_APP_ID", group: "qq", label: "AppID", kind: "text" },
   { key: "QQ_APP_SECRET", group: "qq", label: "AppSecret", kind: "secret" },
   { key: "TELEGRAM_BOT_TOKEN", group: "telegram", label: "Bot Token", kind: "secret" },
-  { key: "TELEGRAM_WEBHOOK_SECRET", group: "telegram", label: "Webhook Secret", kind: "secret", help: "设置 Webhook 时自动生成。" },
-  { key: "TELEGRAM_BOT_USERNAME", group: "telegram", label: "机器人用户名", kind: "text", help: "不带 @。设置 Webhook 时自动填。填了以后群里只回 @ 它的消息。" },
-  { key: "HTTP_CHANNEL_TOKEN", group: "http", label: "Bearer Token", kind: "secret" },
+  { key: "TELEGRAM_WEBHOOK_SECRET", group: "telegram", label: "Webhook Secret", kind: "secret", help: "设置 Webhook 时自动生成。", setByConnect: true },
+  {
+    key: "TELEGRAM_BOT_USERNAME",
+    group: "telegram",
+    label: "机器人用户名",
+    kind: "text",
+    help: "不带 @。设置 Webhook 时自动填。填了以后群里只回 @ 它的消息。",
+    setByConnect: true,
+  },
+  { key: "HTTP_CHANNEL_TOKEN", group: "http", label: "Bearer Token", kind: "secret", generate: true },
 
   // ── Agent ──
   { key: "AGENT_TIMEZONE", group: "agent", label: "时区", kind: "text", default: "Asia/Shanghai", help: "每条消息前的时间用这个时区。" },
@@ -195,7 +214,7 @@ export const SETTINGS: SettingDef[] = [
     ],
     help: "第一次出现的群和私聊按这个处理，可以在聊天页里单独改。",
   },
-  { key: "WORKER_SECRET", group: "console", label: "Worker 签名密钥", kind: "secret", help: "一轮跑不完交给新函数时用来签名。留空时由其他密钥拼出来。" },
+  { key: "WORKER_SECRET", group: "console", label: "Worker 签名密钥", kind: "secret", help: "一轮跑不完交给新函数时用来签名。留空时由其他密钥拼出来。", generate: true },
 ];
 
 const byKey = new Map(SETTINGS.map((d) => [d.key, d]));

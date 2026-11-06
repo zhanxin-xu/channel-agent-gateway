@@ -116,18 +116,17 @@ export class SchemaOutdatedError extends Error {
   }
 }
 
-/** A setting as stored. `secret`: shown masked in the console, never returned whole. */
+/** A setting as stored; what it means (and whether it's a secret) is up to src/settings/catalog.ts. */
 export interface StoredSetting {
   key: string;
   value: string;
-  secret: boolean;
   updatedAt: number;
 }
 
 export interface SettingsStore {
   listSettings(): Promise<StoredSetting[]>;
   /** In one transaction; a null value deletes the key. */
-  putSettings(entries: Array<{ key: string; value: string | null; secret: boolean }>): Promise<void>;
+  putSettings(entries: Array<{ key: string; value: string | null }>): Promise<void>;
 }
 
 /** Per-chat settings, stored as JSON; their meaning lives in src/chats/profile.ts. */
@@ -179,12 +178,20 @@ export interface AdminLogEntry {
   detail: Record<string, unknown>;
 }
 
-/** What only the admin console reads or does. */
+/**
+ * What only the admin console reads or does. Unlike ChatStore, some of these
+ * look inside events, to summarize them for people in one query: who wrote
+ * recently (user/message senders) and which turns went wrong (turn/end reasons).
+ */
 export interface ConsoleStore {
   /** Null when the database has no admin schema at all. */
   schemaVersion(): Promise<number | null>;
   /** `day`: whose usage to include, "YYYY-MM-DD" UTC. */
   chats(day: string): Promise<ChatSummary[]>;
+  /** One chat, as chats() lists it; null when it has neither a session nor a profile. */
+  chat(chat: string, day: string): Promise<ChatSummary | null>;
+  /** Whether any chat has a session yet. */
+  hasChats(): Promise<boolean>;
   /** The session and up to `limit` events before `beforeSeq`, newest first. */
   recentEvents(chat: string, beforeSeq: number, limit: number): Promise<{ session: SessionState | null; events: StoredEvent[] }>;
   /** Append without the run lock (an admin's message). Returns the first seq. */

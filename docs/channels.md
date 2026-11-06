@@ -156,6 +156,7 @@ curl -X POST https://<域名>/api/webhook/http \
 | 成员 | 必需 | 作用 |
 |---|---|---|
 | `name` | 是 | 渠道名，也是 URL 里的路径 |
+| `label` | 是 | 给人看的平台名（“QQ”），管理端显示用 |
 | `isConfigured()` | 是 | 凭据是否齐全，不齐全时返回 503 |
 | `receive(req, rawBody)` | 是 | 验签并解析成 `InboundMessage`；也可以直接返回一个响应（比如地址校验） |
 | `send(message, text)` | 否 | 发送一条文字回复。不实现时，该渠道为同步模式 |
@@ -164,5 +165,10 @@ curl -X POST https://<域名>/api/webhook/http \
 | `typing(message)` | 否 | 显示"正在输入" |
 | `promptHint` | 否 | 追加到系统提示词后面的格式要求，例如"不要用 Markdown" |
 | `maxRepliesPerMessage` | 否 | 平台对一条消息最多允许几次回复（QQ 是 5）。不设置时用网关默认的 5 次，防止模型刷屏 |
+| `replyRule` | 否 | 给人看的发送限制（QQ：只能回复最近的消息），管理端代发发不出去时显示 |
+| `verify()` | 否 | 管理端的“检查”：验证凭据能用（比如取一次 token） |
+| `connect(origin)` | 否 | 管理端的“设置 Webhook”：向平台登记回调地址，返回要顺便保存的设置 |
+
+渠道的凭据写在配置目录 [`src/settings/catalog.ts`](../src/settings/catalog.ts) 里：加一个 `channel` 指向渠道名的设置组，管理端的引导页和配置页就会显示它。`connect` 会自动填的项标 `setByConnect`，可以由管理端随机生成的密钥标 `generate`。
 
 `InboundMessage.replyContext` 用来保存回复时需要的平台信息（比如 QQ 的 `msg_id` 和 `msg_seq` 计数），在同一轮的多次发送之间共享。

@@ -10,6 +10,24 @@ export type Outgoing =
   | { kind: "file"; file: OutgoingFile }
   | { kind: "voice"; voice: OutgoingVoice };
 
+/** How a voice message reads as text: "[语音] " + its words. */
+export const VOICE_LABEL = "[语音] ";
+export const fileLabel = (name: string) => `[文件：${name}]`;
+
+/** How something delivered reads as text: in `sent`, in the chat's history, and on channels that can only send text. */
+export function describeOutgoing(m: Outgoing): string {
+  switch (m.kind) {
+    case "text":
+      return m.text;
+    case "image":
+      return m.label;
+    case "voice":
+      return `${VOICE_LABEL}${m.voice.text}`;
+    case "file":
+      return fileLabel(m.file.name);
+  }
+}
+
 /** Per-run context handed to tools (one agent run may hold several turns). */
 export interface ToolContext {
   /** What was delivered this turn: texts, image labels, files as "[文件：name]". */

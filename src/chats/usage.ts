@@ -16,14 +16,14 @@ import { isEvent, type SessionEvent, type Usage } from "../conversation/events.j
 import { getStore, SchemaOutdatedError, type UsageCounts, type UsageStore } from "../store/index.js";
 import { toolFeature, type ToolPolicy } from "../tools/registry.js";
 import type { ToolFeature } from "../tools/types.js";
-import { nextDayStart, utcDay } from "./day.js";
+import { beijingTime, nextDayStart, utcDay } from "./day.js";
 import type { ChatProfile, QuotaKey } from "./profile.js";
 
 /** The counters a tool feature adds to (and whose quota it is under). */
 const METERED: Partial<Record<ToolFeature, QuotaKey>> = { image: "images", voice: "voices", search: "searches" };
 
 /** What a call cost: as reported, else estimated from the configured prices. */
-export function callCost(usage: Usage): number {
+function callCost(usage: Usage): number {
   if (typeof usage.cost === "number" && Number.isFinite(usage.cost)) return usage.cost;
   const { input, cached, output } = config.llm.prices;
   const inTokens = usage.input_tokens ?? 0;
@@ -50,7 +50,8 @@ export function turnUsage(events: SessionEvent[]): UsageCounts {
     else if (isEvent(e, "assistant/message")) add(e.data.usage);
     else if (isEvent(e, "compaction/summary")) add(e.data.usage);
     else if (isEvent(e, "tool/call") && !failed.has(e.data.callId)) {
-      const counter = METERED[toolFeature(e.data.name)!];
+      const feature = toolFeature(e.data.name);
+      const counter = feature && METERED[feature];
       if (counter) counts[counter] = (counts[counter] ?? 0) + 1;
     }
   }
@@ -89,11 +90,6 @@ export async function recordUsage(chat: string, counts: UsageCounts, store: Usag
   }
 }
 
-/** "明天 08:00" in Beijing time: when today's quotas reset. */
-export function quotaResetText(): string {
-  const t = new Date(nextDayStart() + 8 * 3600_000);
-  return `北京时间 ${t.getUTCMonth() + 1}月${t.getUTCDate()}日 ${String(t.getUTCHours()).padStart(2, "0")}:00`;
-}
 
 /** True when the chat's cost quota for today is used up. */
 export function costQuotaUsed(profile: ChatProfile, today: UsageCounts): boolean {
@@ -114,7 +110,7 @@ export function quotaPolicy(profile: ChatProfile, today: UsageCounts): ToolPolic
       const counter = counterOf(tool.feature);
       const limit = counter ? profile.quota?.[counter] : undefined;
       if (counter && limit !== undefined && (used[counter] ?? 0) >= limit) {
-        return `this chat's daily quota for ${tool.name} (${limit}) is used up; it resets at ${quotaResetText()}. Tell them in your own words, don't retry.`;
+        return `this chat's daily quota for ${tool.name} (${limit}) is used up; it resets at ${beijingTime(nextDayStart())}. Tell them in your own words, don't retry.`;
       }
       return undefined;
     },

@@ -193,10 +193,10 @@ export class MemoryStore implements Store {
     return [...this.settings.values()].sort((a, b) => a.key.localeCompare(b.key)).map((x) => ({ ...x }));
   }
 
-  async putSettings(entries: Array<{ key: string; value: string | null; secret: boolean }>) {
+  async putSettings(entries: Array<{ key: string; value: string | null }>) {
     for (const e of entries) {
       if (e.value === null) this.settings.delete(e.key);
-      else this.settings.set(e.key, { key: e.key, value: e.value, secret: e.secret, updatedAt: Date.now() });
+      else this.settings.set(e.key, { key: e.key, value: e.value, updatedAt: Date.now() });
     }
   }
 
@@ -238,25 +238,33 @@ export class MemoryStore implements Store {
     return SCHEMA_VERSION;
   }
 
+  private summary(chat: string, day: string): ChatSummary {
+    const s = this.sessions.get(chat);
+    return {
+      chat,
+      channel: s?.channel ?? null,
+      conversationId: s?.conversationId ?? null,
+      chatType: s?.chatType ?? null,
+      turn: s?.turn ?? null,
+      locked: (s?.lockExpiresAt ?? 0) > Date.now(),
+      lastActiveAt: s?.lastActiveAt ?? null,
+      profile: this.profiles.get(chat) ?? null,
+      usage: this.usageDays.get(chat)?.get(day) ?? null,
+      speakers: recentSpeakers(s?.events ?? []),
+    };
+  }
+
   async chats(day: string) {
     const keys = new Set([...this.sessions.keys(), ...this.profiles.keys()]);
-    const now = Date.now();
-    const summaries: ChatSummary[] = [...keys].map((chat) => {
-      const s = this.sessions.get(chat);
-      return {
-        chat,
-        channel: s?.channel ?? null,
-        conversationId: s?.conversationId ?? null,
-        chatType: s?.chatType ?? null,
-        turn: s?.turn ?? null,
-        locked: (s?.lockExpiresAt ?? 0) > now,
-        lastActiveAt: s?.lastActiveAt ?? null,
-        profile: this.profiles.get(chat) ?? null,
-        usage: this.usageDays.get(chat)?.get(day) ?? null,
-        speakers: recentSpeakers(s?.events ?? []),
-      };
-    });
-    return summaries.sort((a, b) => (b.lastActiveAt ?? -1) - (a.lastActiveAt ?? -1));
+    return [...keys].map((chat) => this.summary(chat, day)).sort((a, b) => (b.lastActiveAt ?? -1) - (a.lastActiveAt ?? -1));
+  }
+
+  async chat(chat: string, day: string) {
+    return this.sessions.has(chat) || this.profiles.has(chat) ? this.summary(chat, day) : null;
+  }
+
+  async hasChats() {
+    return this.sessions.size > 0;
   }
 
   async recentEvents(chat: string, beforeSeq: number, limit: number) {

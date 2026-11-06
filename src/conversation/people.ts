@@ -11,7 +11,7 @@
  */
 import { shortId } from "../channels/format.js";
 import type { TextPart } from "../channels/types.js";
-import { isEvent, type SessionEvent } from "./events.js";
+import { isEvent, isWhisper, type SessionEvent } from "./events.js";
 
 export interface ChatPerson {
   /** "#3B6834". */
@@ -43,8 +43,7 @@ export function chatPeople(events: SessionEvent[]): ChatPerson[] {
     });
   };
   for (const e of events) {
-    // An admin's whisper (replyVia) isn't from someone in the chat.
-    if (!isEvent(e, "user/message") || e.data.replyVia) continue;
+    if (!isEvent(e, "user/message") || isWhisper(e)) continue;
     const sender = parseLabel(e.data.sender);
     if (sender) see(sender.id, { userId: e.data.userId, name: sender.name }, e.time);
     for (const m of e.data.mentions ?? []) see(shortId(m.userId), m, e.time);

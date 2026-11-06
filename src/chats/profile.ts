@@ -7,6 +7,7 @@
  * change reaches every instance within that time.
  */
 import { config } from "../config.js";
+import { settingDef, type SettingOption } from "../settings/catalog.js";
 import { getStore, SchemaOutdatedError, type ProfileStore } from "../store/index.js";
 import type { ToolFeature } from "../tools/types.js";
 
@@ -17,13 +18,34 @@ import type { ToolFeature } from "../tools/types.js";
  *   block:   messages are dropped, not even logged.
  */
 export type ReplyMode = "normal" | "mention" | "record" | "block";
-export const REPLY_MODES: ReplyMode[] = ["normal", "mention", "record", "block"];
-
-export const TOOL_FEATURES: ToolFeature[] = ["image", "voice", "search", "memory", "sandbox"];
 
 /** Daily limits; see usage.ts for how each is counted. */
 export type QuotaKey = "cost_usd" | "images" | "voices" | "searches";
-export const QUOTA_KEYS: QuotaKey[] = ["cost_usd", "images", "voices", "searches"];
+
+/**
+ * What a chat's settings can be, with their names for people (the console
+ * shows these). The reply modes are CHAT_DEFAULT_MODE's options in the catalog.
+ */
+export const PROFILE_CHOICES: { modes: SettingOption[]; features: SettingOption[]; quotas: SettingOption[] } = {
+  modes: settingDef("CHAT_DEFAULT_MODE")!.options!,
+  features: [
+    { value: "image", label: "画图" },
+    { value: "voice", label: "语音" },
+    { value: "search", label: "搜索" },
+    { value: "memory", label: "记忆" },
+    { value: "sandbox", label: "沙盒" },
+  ],
+  quotas: [
+    { value: "cost_usd", label: "模型花费（美元）" },
+    { value: "images", label: "画图（张）" },
+    { value: "voices", label: "语音（条）" },
+    { value: "searches", label: "搜索（次）" },
+  ],
+};
+const REPLY_MODES = PROFILE_CHOICES.modes.map((o) => o.value) as ReplyMode[];
+const TOOL_FEATURES = PROFILE_CHOICES.features.map((o) => o.value) as ToolFeature[];
+const QUOTA_KEYS = PROFILE_CHOICES.quotas.map((o) => o.value) as QuotaKey[];
+const isReplyMode = (value: unknown): value is ReplyMode => REPLY_MODES.includes(value as ReplyMode);
 
 export interface ChatProfile {
   title?: string;
@@ -54,8 +76,8 @@ export function validateProfile(input: unknown): { profile: ChatProfile } | { er
     else profile.title = raw.title.trim();
   }
   if (raw.mode !== undefined && raw.mode !== null && raw.mode !== "") {
-    if (!REPLY_MODES.includes(raw.mode as ReplyMode)) errors.mode = `只能是 ${REPLY_MODES.join("、")}`;
-    else profile.mode = raw.mode as ReplyMode;
+    if (!isReplyMode(raw.mode)) errors.mode = `只能是 ${REPLY_MODES.join("、")}`;
+    else profile.mode = raw.mode;
   }
   if (raw.ambientIntervalSeconds !== undefined && raw.ambientIntervalSeconds !== null && raw.ambientIntervalSeconds !== "") {
     const n = Number(raw.ambientIntervalSeconds);
@@ -99,7 +121,12 @@ export function parseProfile(stored: unknown): ChatProfile {
   return "profile" in retry ? retry.profile : {};
 }
 
-export const replyMode = (p: ChatProfile): ReplyMode => p.mode ?? (config.console.defaultMode as ReplyMode);
+/** The chat's mode, else CHAT_DEFAULT_MODE; an environment value that isn't a mode counts as "normal". */
+export function replyMode(p: ChatProfile): ReplyMode {
+  if (p.mode) return p.mode;
+  const fallback = config.chats.defaultMode;
+  return isReplyMode(fallback) ? fallback : "normal";
+}
 
 /** Seconds between ambient samples in this chat; 0 = never chime in. */
 export function ambientInterval(p: ChatProfile): number {
@@ -109,7 +136,7 @@ export function ambientInterval(p: ChatProfile): number {
 
 // ── Reading and writing, cached per instance ──
 
-export const CACHE_MS = 30_000;
+const CACHE_MS = 30_000;
 const cache = new Map<string, { profile: ChatProfile; at: number }>();
 let warned = false;
 
@@ -132,9 +159,4 @@ export async function chatProfile(chat: string, store: ProfileStore = getStore()
 export async function saveChatProfile(chat: string, profile: ChatProfile, store: ProfileStore = getStore()): Promise<void> {
   await store.putProfile(chat, Object.keys(profile).length ? (profile as Record<string, unknown>) : null);
   cache.set(chat, { profile, at: Date.now() });
-}
-
-/** Tests change profiles behind the cache's back. */
-export function clearProfileCache(): void {
-  cache.clear();
 }

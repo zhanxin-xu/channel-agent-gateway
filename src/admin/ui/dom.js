@@ -124,6 +124,12 @@ export function confirmAction(label, question, fn) {
   return wrap;
 }
 
+/** A bar from 0 to 1, amber past 80%. */
+export function meter(ratio) {
+  const r = Math.max(0, Math.min(1, ratio));
+  return h("div", { class: "meter" }, h("b", { class: r >= 0.8 ? "hot" : "", style: `width:${(r * 100).toFixed(1)}%` }));
+}
+
 /** Run `fn` every `ms` while the page is visible; returns a stop function. */
 export function every(ms, fn) {
   const id = setInterval(() => {

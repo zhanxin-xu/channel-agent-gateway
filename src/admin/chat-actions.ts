@@ -13,10 +13,11 @@
 import crypto from "node:crypto";
 import { channels } from "../channels/index.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
-import { isEvent, type SessionEvent } from "../conversation/events.js";
+import { chatProfile, replyMode } from "../chats/profile.js";
+import { isEvent, isWhisper, type SessionEvent } from "../conversation/events.js";
 import { chatPeople } from "../conversation/people.js";
 import { deliverOutgoing } from "../runtime/deliver.js";
-import { handleMessage } from "../runtime/ingress.js";
+import { handleMessage, resetLog } from "../runtime/ingress.js";
 import { Outbox, type MessageLookup } from "../runtime/outbox.js";
 import type { ChatMeta } from "../runtime/types.js";
 import { getStore, type SessionState } from "../store/index.js";
@@ -52,7 +53,7 @@ async function openChat(chat: string, origin?: string): Promise<ChatContext> {
 
 /** The newest message from the platform (not an admin's whisper) that can still take a reply. */
 async function replyTarget(c: ChatContext): Promise<SessionEvent<"user/message"> | undefined> {
-  const messages = c.events.filter((e): e is SessionEvent<"user/message"> => isEvent(e, "user/message") && !e.data.replyVia);
+  const messages = c.events.filter((e): e is SessionEvent<"user/message"> => isEvent(e, "user/message") && !isWhisper(e));
   for (let i = messages.length - 1; i >= 0; i--) if (await c.outbox.canReply(messages[i]!.seq)) return messages[i];
   return undefined;
 }
@@ -82,7 +83,7 @@ export async function replyWindow(chat: string): Promise<ReplyWindow> {
   if (!target) {
     return {
       open: false,
-      reason: c.adapter.name === "qq" ? "QQ 只能回复最近的消息：群里 5 分钟内、私聊 60 分钟内要有人说话，每条最多回 5 次" : "最近没有能回复的消息",
+      reason: c.adapter.replyRule ?? "最近没有能回复的消息",
     };
   }
   const state = await c.outbox.replyState(target.seq);
@@ -118,6 +119,10 @@ export async function say(chat: string, text: string): Promise<{ seq: number; st
  */
 export async function whisper(chat: string, text: string, origin: string, background: (p: Promise<unknown>) => void): Promise<{ eventId: string }> {
   const body = checkText(text);
+  // A record-only or blocked chat would log the whisper and never answer it.
+  if (["record", "block"].includes(replyMode(await chatProfile(chat)))) {
+    throw new HttpError(409, "这个聊天设成了只记录或屏蔽，她不会回复。先在“设置与额度”里改回正常或只回 @");
+  }
   const c = await openChat(chat, origin);
   const target = await replyTarget(c);
   if (!target) throw new HttpError(409, (await replyWindow(chat)).reason ?? "现在发不出去");
@@ -132,33 +137,16 @@ export async function whisper(chat: string, text: string, origin: string, backgr
     senderName: "管理员",
     text: `（管理员悄悄告诉你，${c.meta.chatType === "group" ? "群里" : "对方"}看不到这句）${body}`,
     replyContext: { ...target.data.reply },
-    adminHint: { replyVia: target.data.eventId },
   };
   await getStore().log("whisper", chat, { text: body, replyTo: target.seq });
-  background(handleMessage(c.adapter, message, { origin }).catch((err) => console.error(`[admin] whisper to ${chat} failed`, err)));
+  background(handleMessage(c.adapter, message, { origin, replyVia: target.data.eventId }).catch((err) => console.error(`[admin] whisper to ${chat} failed`, err)));
   return { eventId };
 }
 
 /** Start the chat's context over, like /reset. */
 export async function resetChat(chat: string): Promise<void> {
-  const store = getStore();
-  const { session } = await store.open(chat, Number.MAX_SAFE_INTEGER);
-  if (!session) throw new HttpError(404, "这个聊天没有进行中的会话");
-  await store.ingest({
-    chat,
-    channel: session.channel,
-    conversationId: session.conversationId,
-    chatType: session.chatType,
-    eventId: `admin-reset-${crypto.randomUUID()}`,
-    direct: false,
-    event: { type: "session/reset", data: {} },
-    reset: true,
-    wake: false,
-    ambientIntervalSeconds: 0,
-    lockOwner: "admin",
-    lockTtlMs: 0,
-  });
-  await store.log("reset", chat, {});
+  if (!(await resetLog(chat))) throw new HttpError(404, "这个聊天没有进行中的会话");
+  await getStore().log("reset", chat, {});
 }
 
 export async function unlockChat(chat: string): Promise<boolean> {

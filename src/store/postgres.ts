@@ -106,7 +106,7 @@ export class PostgresStore implements Store {
     return this.rpc<StoredSetting[]>("settings_list", {});
   }
 
-  async putSettings(entries: Array<{ key: string; value: string | null; secret: boolean }>) {
+  async putSettings(entries: Array<{ key: string; value: string | null }>) {
     await this.rpc("settings_put", { p_entries: entries });
   }
 
@@ -141,6 +141,14 @@ export class PostgresStore implements Store {
 
   chats(day: string) {
     return this.rpc<ChatSummary[]>("admin_chats", { p_day: day });
+  }
+
+  chat(chat: string, day: string) {
+    return this.rpc<ChatSummary | null>("admin_chat", { p_chat: chat, p_day: day });
+  }
+
+  async hasChats() {
+    return Boolean(await this.rpc("admin_has_chats", {}));
   }
 
   recentEvents(chat: string, beforeSeq: number, limit: number) {

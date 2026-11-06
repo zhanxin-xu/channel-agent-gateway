@@ -57,6 +57,7 @@ async function tgUpload(method: string, fields: Record<string, string>, field: s
 
 export const telegramAdapter: ChannelAdapter = {
   name: "telegram",
+  label: "Telegram",
   promptHint: "This is Telegram: reply in plain text, no Markdown syntax.",
 
   isConfigured() {

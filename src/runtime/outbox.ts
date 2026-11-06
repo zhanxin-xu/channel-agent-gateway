@@ -2,17 +2,10 @@ import { unreachableReason } from "../channels/net.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import { messageLabel, type SessionEvent } from "../conversation/events.js";
 import { REPLY_WINDOW_CLOSED } from "../conversation/undelivered.js";
-
 import type { ChatStore } from "../store/index.js";
 import type { ChatMeta } from "./types.js";
 
-/**
- * Replies go to a specific message (QQ: passive replies need its msg_id).
- * Each message's reply context is kept in the store as replies update it
- * (QQ's msg_seq, Telegram's quote-once flag, the reply count), so a later
- * turn or another instance continues where the last one stopped.
- */
-/** The messages replies can go to: a running Session, or a snapshot of recent events (admin/send.ts). */
+/** The messages replies can go to: a running Session, or a snapshot of recent events (admin/chat-actions.ts). */
 export interface MessageLookup {
   readonly chatKey: string;
   message(seq: number): SessionEvent<"user/message"> | undefined;
@@ -21,6 +14,12 @@ export interface MessageLookup {
 /** Replies per inbound message when the channel sets no limit of its own: a cap on a looping model. */
 const DEFAULT_MAX_REPLIES = 5;
 
+/**
+ * Replies go to a specific message (QQ: passive replies need its msg_id).
+ * Each message's reply context is kept in the store as replies update it
+ * (QQ's msg_seq, Telegram's quote-once flag, the reply count), so a later
+ * turn or another instance continues where the last one stopped.
+ */
 export class Outbox {
   /**
    * Set when the platform couldn't be reached (after the adapter's own retry):

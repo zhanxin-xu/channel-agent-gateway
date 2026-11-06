@@ -5,7 +5,7 @@ import { config } from "../../config.js";
 import { messageLabel } from "../../conversation/events.js";
 import type { ImagePart } from "../../media/images.js";
 import { QUOTE, REPLY_TO, replyTo, sendOptions } from "../chat.js";
-import type { Tool, ToolContext } from "../types.js";
+import { fileLabel, type Tool, type ToolContext } from "../types.js";
 import { WORKDIR, workspaceFor } from "./workspace.js";
 
 const MAX_OUTPUT_CHARS = 8_000;
@@ -237,7 +237,7 @@ export const sendFile: Tool = {
     properties: { path: { type: "string", description: `File path (relative paths are under ${WORKDIR}).` }, reply_to: REPLY_TO, quote: QUOTE },
     required: ["path"],
   },
-  historyLine: (args) => `[文件：${path.posix.basename(String(args.path ?? ""))}]`,
+  historyLine: (args) => fileLabel(path.posix.basename(String(args.path ?? ""))),
   enabled,
   async run(args, ctx) {
     const file = resolvePath(String(args.path ?? ""));

@@ -55,11 +55,21 @@ const DEFAULT_VOICE_REFERENCE_TEXT = "嘿嘿，本鱼来啦！我是大肥鱼，
 const LLM_SUFFIXES = ["API_KEY", "BASE_URL", "MODEL", "EXTRA_BODY", "EXTRA_HEADERS", "TIMEOUT_MS"] as const;
 type LlmSuffix = (typeof LLM_SUFFIXES)[number];
 
+/** The old name of a model setting (OPENROUTER_<SUFFIX>), still read when only it is set. */
+const legacyName = (name: string): string | undefined =>
+  name.startsWith("OPENAI_RESPONSES_") ? name.replace("OPENAI_RESPONSES_", "OPENROUTER_") : undefined;
+
 /** The variable to read for a model setting: the new name, unless only the old one is set. */
 function llmEnv(suffix: LlmSuffix): string {
   const name = `OPENAI_RESPONSES_${suffix}`;
-  const legacy = `OPENROUTER_${suffix}`;
+  const legacy = legacyName(name)!;
   return !raw(name)?.trim() && raw(legacy)?.trim() ? legacy : name;
+}
+
+/** What the environment says for a setting (its old name too), ignoring the console: "" when unset. */
+export function environmentValue(name: string): string {
+  const legacy = legacyName(name);
+  return env(name) || (legacy ? env(legacy) : "");
 }
 
 export const config = {
@@ -71,7 +81,7 @@ export const config = {
   },
 
   /** How chats are handled by default (each chat can differ, src/chats/profile.ts). */
-  console: {
+  chats: {
     /** normal | mention | record | block, for chats without their own setting. */
     get defaultMode() {
       return str("CHAT_DEFAULT_MODE");

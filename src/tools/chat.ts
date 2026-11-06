@@ -45,6 +45,9 @@ export const sendMessage: Tool = {
   },
 };
 
+/** How a sticker reads as text: in the chat's history, and where images can't be sent. */
+const stickerLabel = (name: string) => `[表情包：${name}]`;
+
 export const sendSticker: Tool = {
   name: "send_sticker",
   role: "talk",
@@ -56,11 +59,11 @@ export const sendSticker: Tool = {
     properties: { name: { type: "string", enum: STICKER_NAMES, description: "Sticker name." }, reply_to: REPLY_TO, quote: QUOTE },
     required: ["name"],
   },
-  historyLine: (args) => `[表情包：${String(args.name ?? "")}]`,
+  historyLine: (args) => stickerLabel(String(args.name ?? "")),
   async run(args, ctx) {
     const name = String(args.name ?? "");
     if (!isStickerName(name)) throw new Error(`unknown sticker "${name}"`);
-    return `${await ctx.send({ kind: "image", url: stickerUrl(config.stickerBaseUrl || DEFAULT_STICKER_BASE_URL, name), label: `[表情包：${name}]` }, replyTo(args), sendOptions(args))}. If you're done, call end_turn (in the same step as your last message).`;
+    return `${await ctx.send({ kind: "image", url: stickerUrl(config.stickerBaseUrl || DEFAULT_STICKER_BASE_URL, name), label: stickerLabel(name) }, replyTo(args), sendOptions(args))}. If you're done, call end_turn (in the same step as your last message).`;
   },
 };
 

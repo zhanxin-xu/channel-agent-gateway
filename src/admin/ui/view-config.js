@@ -1,40 +1,20 @@
 // Every setting, by group (#/config/<group>), with each group's checks.
 import { api } from "./api.js";
 import { action, copyable, fill, h, pill, toast } from "./dom.js";
-import { checkButton, loadSettings, settingsForm } from "./form.js";
-
-/** Checks and actions shown beside a group's save button. `form` saves first where a check should use what was typed. */
-function groupActions(group, form, status, slot) {
-  const channel = status.channels.find((c) => c.name === group);
-  if (group === "llm") return checkButton("测试", "checks/model", () => form.save());
-  if (group === "search") return checkButton("查余额", "checks/search", () => form.save());
-  if (channel) {
-    return [
-      channel.canVerify ? checkButton("检查", `channels/${group}/verify`, () => form.save()) : null,
-      channel.canConnect ? checkButton("设置 Webhook", `channels/${group}/connect`, () => form.save()) : null,
-      group === "http"
-        ? action("生成新 Token", async () => {
-            const { value } = await api.post("settings/generate", { key: "HTTP_CHANNEL_TOKEN" });
-            fill(slot, "新的 Token（只显示这一次）：", copyable(value));
-          })
-        : null,
-    ];
-  }
-  return null;
-}
+import { groupActions, loadSettings, settingsForm } from "./form.js";
 
 export async function renderConfig(main, [groupId], app) {
   const [index, status] = [await loadSettings(), app.status ?? (await app.refreshStatus())];
   const group = index.groups.find((g) => g.id === groupId) ?? index.groups[0];
-  const channel = status.channels.find((c) => c.name === group.id);
+  const channel = group.channel ? status.channels.find((c) => c.name === group.channel) : undefined;
   const slot = h("p", { class: "check-result" });
   const form = settingsForm(index, index.keysOf(group.id), {
     onSaved: async () => {
       await app.refreshStatus();
       app.go(`#/config/${group.id}`);
     },
+    actions: (f) => groupActions(index, group, status, f, slot),
   });
-  form.el.querySelector(".row")?.append(...[groupActions(group.id, form, status, slot)].flat().filter(Boolean));
 
   fill(
     main,

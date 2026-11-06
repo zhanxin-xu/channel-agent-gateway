@@ -2,7 +2,7 @@
 // Steps are derived from GET status, so the guide also works as a checklist later.
 import { api } from "./api.js";
 import { action, copy, copyable, every, fill, h, pill, toast } from "./dom.js";
-import { checkButton, checkResult, loadSettings, settingsForm } from "./form.js";
+import { checkResult, groupActions, loadSettings, settingsForm } from "./form.js";
 
 const SKIP_KEY = "admin.setup.skipFeatures";
 const skippedFeatures = () => {
@@ -34,7 +34,7 @@ export function setupProgress(status) {
 const FEATURE_CARDS = [
   { group: "image", keys: ["IMAGE_API_KEY"], status: "image", note: "画图还需要沙盒开着。" },
   { group: "tts", keys: ["TTS_API_KEY"], status: "tts" },
-  { group: "search", keys: ["DEEPSEEK_API_KEY"], status: "search", check: "checks/search" },
+  { group: "search", keys: ["DEEPSEEK_API_KEY"], status: "search" },
   { group: "memory", keys: ["UPSTASH_VECTOR_REST_URL", "UPSTASH_VECTOR_REST_TOKEN"], status: "memory" },
   { group: "sandbox", keys: ["SANDBOX_ENABLED"], status: "sandbox" },
 ];
@@ -157,9 +157,10 @@ const STEP_VIEWS = {
   async model(panel, status, app, next) {
     if (!requireDb(panel, status)) return;
     const index = await loadSettings();
+    const llm = index.groups.find((g) => g.id === "llm");
     const form = settingsForm(index, ["OPENAI_RESPONSES_BASE_URL", "OPENAI_RESPONSES_API_KEY", "OPENAI_RESPONSES_MODEL"], {
       onSaved: () => app.refreshStatus(),
-      extra: checkButton("测试", "checks/model", () => form.save()),
+      actions: (f) => groupActions(index, llm, status, f, null),
     });
     fill(
       panel,
@@ -178,32 +179,20 @@ const STEP_VIEWS = {
       app.go("#/setup/channels");
     };
     const card = (channel) => {
-      const group = index.groups.find((g) => g.id === channel.name);
-      const tokenSlot = h("p", { class: "check-result" });
-      const extra = [
-        channel.canVerify ? checkButton("检查", `channels/${channel.name}/verify`) : null,
-        channel.canConnect
-          ? checkButton("保存并设置 Webhook", `channels/${channel.name}/connect`, () => form.save())
-          : null,
-        channel.name === "http"
-          ? action("生成 Token", async () => {
-              const { value } = await api.post("settings/generate", { key: "HTTP_CHANNEL_TOKEN" });
-              fill(tokenSlot, "新的 Token（只显示这一次）：", copyable(value));
-              await app.refreshStatus();
-            })
-          : null,
-      ];
-      const keys = index.keysOf(channel.name).filter((k) => !(channel.canConnect && k !== "TELEGRAM_BOT_TOKEN"));
-      const form = settingsForm(index, keys, { onSaved: refresh, extra });
+      const group = index.groups.find((g) => g.channel === channel.name);
+      if (!group) return null;
+      const slot = h("p", { class: "check-result" });
+      // What connect fills in isn't typed by hand.
+      const keys = index.keysOf(group.id).filter((k) => !index.defs.get(k).setByConnect);
+      const form = settingsForm(index, keys, { onSaved: refresh, actions: (f) => groupActions(index, group, status, f, slot) });
       return h(
         "div",
         { class: "card" },
-        h("h3", null, group?.label ?? channel.name, " ", channel.configured ? pill("ok", "已配置") : pill("mute", "未配置")),
-        group ? h("p", { class: "muted" }, group.help) : null,
+        h("h3", null, channel.label, " ", channel.configured ? pill("ok", "已配置") : pill("mute", "未配置")),
+        h("p", { class: "muted" }, group.help),
         h("p", null, "回调地址：", copyable(channel.webhook)),
-        channel.name === "qq" ? h("p", { class: "help" }, "在 QQ 开放平台把这个地址填进回调配置。大陆的 QQ 服务器访问不了 *.vercel.app，必须先绑定自定义域名。") : null,
         form.el,
-        tokenSlot,
+        slot,
       );
     };
     fill(
@@ -224,7 +213,7 @@ const STEP_VIEWS = {
       h("p", { class: "muted" }, "都可以跳过，以后在配置页再开。这里只填最少的，其余参数在配置页。"),
       FEATURE_CARDS.map((f) => {
         const group = index.groups.find((g) => g.id === f.group);
-        const form = settingsForm(index, f.keys, { onSaved: () => app.refreshStatus(), extra: f.check ? checkButton("检查", f.check) : null });
+        const form = settingsForm(index, f.keys, { onSaved: () => app.refreshStatus(), actions: (form) => groupActions(index, group, status, form, null) });
         return h(
           "div",
           { class: "card" },

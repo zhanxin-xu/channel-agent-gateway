@@ -43,12 +43,6 @@ export interface InboundMessage {
   replyContext: Record<string, string>;
   /** Outgoing only: show the reply as a quote of this message, where the platform can (QQ's 回复 box). */
   quote?: boolean;
-  /**
-   * Not from the platform: an admin's instruction to the bot (admin/whisper.ts),
-   * which the chat doesn't see. Its replies go through the platform message
-   * `replyVia` (an eventId in this chat).
-   */
-  adminHint?: { replyVia: string };
 }
 
 export type ReceiveResult =
@@ -79,6 +73,13 @@ export interface OutgoingVoice {
 
 export interface ChannelAdapter {
   readonly name: string;
+  /** How people call the platform ("QQ"), for the admin console. */
+  readonly label: string;
+  /**
+   * For people (the admin console): when the platform takes a message from
+   * the bot, if it limits that (QQ only takes replies to recent messages).
+   */
+  readonly replyRule?: string;
   /** Extra instructions appended to the system prompt, e.g. formatting limits. */
   readonly promptHint?: string;
   /** How many replies one inbound message can take on this platform. Unset: the gateway's default (5). */

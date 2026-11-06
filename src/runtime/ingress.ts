@@ -7,6 +7,7 @@
  * counts from this request. A turn that outlasts the function is continued
  * in /api/worker (handoff.ts).
  */
+import crypto from "node:crypto";
 import { messageHeader, senderLabel } from "../channels/format.js";
 import { ambientInterval, chatProfile, replyMode } from "../chats/profile.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
@@ -18,10 +19,40 @@ import { LOCK_TTL_MS, RunLock } from "./lock.js";
 import { runChat } from "./runner.js";
 import type { ChatMeta } from "./types.js";
 
+/**
+ * Start a chat's log over from outside a message (the admin console), the way
+ * /reset does. False when the chat has no session.
+ */
+export async function resetLog(chat: string): Promise<boolean> {
+  const store = getStore();
+  const { session } = await store.open(chat, Number.MAX_SAFE_INTEGER);
+  if (!session) return false;
+  await store.ingest({
+    chat,
+    channel: session.channel,
+    conversationId: session.conversationId,
+    chatType: session.chatType,
+    eventId: `reset-${crypto.randomUUID()}`,
+    direct: false,
+    event: { type: "session/reset", data: {} },
+    reset: true,
+    wake: false,
+    ambientIntervalSeconds: 0,
+    lockOwner: "",
+    lockTtlMs: 0,
+  });
+  return true;
+}
+
 export interface HandleOptions {
   origin?: string;
   /** Sync channels (no `send`): replies are collected here instead of sent. */
   collect?: string[];
+  /**
+   * The message is an admin's whisper, not from the platform (admin/chat-actions.ts):
+   * replies go through this platform message (an eventId in the chat).
+   */
+  replyVia?: string;
 }
 
 /**
@@ -45,7 +76,6 @@ export async function handleMessage(
   const chat = `${message.channel}:${message.conversationId}`;
   const direct = message.mode !== "ambient";
   const meta: ChatMeta = { channel: message.channel, conversationId: message.conversationId, chatType: message.chatType, origin: opts.origin };
-  const reset = direct && message.text.trim() === "/reset";
   const profile = await chatProfile(chat);
   const mode = replyMode(profile);
   if (mode === "block") {
@@ -53,6 +83,8 @@ export async function handleMessage(
     return "ignored";
   }
   const quiet = mode === "record";
+  // A record-only chat answers nothing, /reset included: it's logged like any other message.
+  const reset = direct && !quiet && message.text.trim() === "/reset";
 
   // Images are stored before the message that references them (a retry stores them again under the same keys).
   const images =
@@ -75,7 +107,7 @@ export async function handleMessage(
           ...(images.failed ? { imagesFailed: images.failed } : {}),
           ...(message.attachments?.length ? { attachments: message.attachments } : {}),
           reply: message.replyContext,
-          ...(message.adminHint ? { replyVia: message.adminHint.replyVia } : {}),
+          ...(opts.replyVia ? { replyVia: opts.replyVia } : {}),
           ...(quiet ? { quiet: true as const } : {}),
         },
       };
@@ -104,7 +136,6 @@ export async function handleMessage(
     return "duplicate";
   }
   if (reset) {
-    if (quiet) return "recorded";
     const done = "已清空本会话的历史记录。";
     if (opts.collect) opts.collect.push(done);
     else await adapter.send?.(message, done);

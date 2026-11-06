@@ -4,8 +4,8 @@
  * log (see supabase/schema.sql): a session row holding the log's header and
  * the run state, and events numbered by a contiguous per-chat `seq`.
  *
- * The admin console's tables (settings, chat profiles, usage, history, admin
- * log) sit beside them, each behind its own small interface (types.ts).
+ * The admin console's tables (settings, chat profiles, usage, admin log) sit
+ * beside them, each behind its own small interface (types.ts).
  *
  * Two implementations of one contract (scripts/storetest.ts runs the same
  * cases against both):

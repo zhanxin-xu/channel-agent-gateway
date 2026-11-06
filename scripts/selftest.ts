@@ -2045,7 +2045,6 @@ await test("settings: the console's values win over the environment; secrets onl
     await saveSettings({ OPENAI_RESPONSES_MODEL: "x/console-model", DEEPSEEK_API_KEY: "ds-from-console-123" });
     assert.equal(config.llm.model, "x/console-model");
     assert.equal(config.deepseek.apiKey, "ds-from-console-123");
-    assert.equal((await getStore().listSettings()).find((r) => r.key === "DEEPSEEK_API_KEY")!.secret, true);
     const view = (await describeSettings()).values.find((v) => v.key === "DEEPSEEK_API_KEY")!;
     assert.deepEqual([view.source, view.value], ["db", "ds-fro…-123"], "a masked preview");
     assert.deepEqual((await getStore().adminLog(1))[0]!.detail, { keys: ["OPENAI_RESPONSES_MODEL", "DEEPSEEK_API_KEY"] }, "the log has names, not values");
@@ -2061,7 +2060,7 @@ await test("settings: the console's values win over the environment; secrets onl
     assert.equal(config.deepseek.apiKey, "ds-key");
     assert.equal((await describeSettings()).values.find((v) => v.key === "QQ_APP_SECRET")!.source, "env", "not in the console: the environment's");
   } finally {
-    await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null, secret: r.secret })));
+    await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null })));
     await refreshSettings({ force: true });
   }
 });
@@ -2101,7 +2100,7 @@ await test("admin api: login, cookie session, same-origin JSON only; a new ADMIN
     assert.match(page.headers.get("content-security-policy")!, /script-src 'self'/);
     assert.equal((await handleAdmin(new Request("https://bot.example.com/api/admin?__ui=..%2Fpackage.json"))).status, 404);
   } finally {
-    await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null, secret: r.secret })));
+    await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null })));
     delete process.env.ADMIN_PASSWORD;
     await refreshSettings({ force: true });
   }
@@ -2145,15 +2144,24 @@ await test("chat profiles: block drops, record keeps quiet context, mention neve
 
   await saveChatProfile("qq:group:GREC", { mode: "record" });
   await handleWebhook(groupAt("GREC", "r1", " 记住这个"), "qq");
+  await handleWebhook(groupAt("GREC", "r0", " /reset"), "qq");
   await drain();
   assert.equal(llmCalls, 0, "record only: never answered");
+  assert.deepEqual((await events("qq:group:GREC")).map((e) => e.type), ["user/message", "user/message"], "not even /reset: it's logged like the rest");
+  const { whisper } = await import("../src/admin/chat-actions.js");
+  await assert.rejects(whisper("qq:group:GREC", "说点什么", "https://bot.example.com", () => {}), /只记录或屏蔽/, "no one would answer a whisper");
   await saveChatProfile("qq:group:GREC", { prompt: "这个群说话要学术一点" });
   await handleWebhook(groupAt("GREC", "r2", " 现在呢"), "qq");
   await drain();
   const req = llmRequests()[0]!;
   assert.match(req.body.instructions, /# 这个聊天的额外设定\n\n这个群说话要学术一点$/);
-  assert.deepEqual(userLines(req).map((l: string) => l.split("\n")[1]), ["记住这个", "现在呢"], "the quiet message is context");
-  assert.match(req.body.input.at(-1).content, /待处理的消息：第1条（#MB，@你）。/, "but not work");
+  assert.deepEqual(userLines(req).map((l: string) => l.split("\n")[1]), ["记住这个", "/reset", "现在呢"], "the quiet messages are context");
+  assert.match(req.body.input.at(-1).content, /待处理的消息：第2条（#MB，@你）。/, "but not work");
+
+  const { replyMode } = await import("../src/chats/profile.js");
+  process.env.CHAT_DEFAULT_MODE = "mute";
+  assert.equal(replyMode({}), "normal", "a default that isn't a mode counts as normal");
+  delete process.env.CHAT_DEFAULT_MODE;
 
   const before = llmCalls;
   await saveChatProfile("qq:group:GMENTION", { mode: "mention" });
@@ -2265,10 +2273,18 @@ await test("admin: say speaks in the bot's name on the newest open message, and 
   assert.ok(all.every((b) => b.msg_id === "s1"), "through the same platform message");
   assert.equal(new Set(all.map((b) => b.msg_seq)).size, all.length, "with its msg_seq counting on");
 
-  const { historyFromEvents } = await import("../src/chats/history.js");
-  const history = historyFromEvents((await getStore().open("qq:group:GADMIN", -1)).events as any);
-  assert.deepEqual([...new Set(history.map((l) => l.role))].sort(), ["admin", "bot", "hint", "user"], "the console's history is rendered from the log");
-  assert.deepEqual(history.slice(0, 2).map((l) => [l.role, l.text]), [["user", "有人吗"], ["admin", "管理员替我说的"]]);
+  const { historyAfter, historyBefore } = await import("../src/chats/history.js");
+  const page = await historyBefore(getStore(), "qq:group:GADMIN", Number.MAX_SAFE_INTEGER, 100);
+  assert.deepEqual([...new Set(page.lines.map((l) => l.role))].sort(), ["admin", "bot", "hint", "user"], "the console's history is rendered from the log");
+  assert.deepEqual(page.lines.slice(0, 2).map((l) => [l.role, l.text]), [["user", "有人吗"], ["admin", "管理员替我说的"]]);
+  assert.equal(page.more, false);
+  const last2 = await historyBefore(getStore(), "qq:group:GADMIN", Number.MAX_SAFE_INTEGER, 2);
+  assert.deepEqual(last2.lines, page.lines.slice(-2), "the newest lines");
+  assert.equal(last2.more, true);
+  assert.deepEqual((await historyAfter(getStore(), "qq:group:GADMIN", page.through)).lines, [], "nothing new since");
+  await handleWebhook(groupMsg("GADMIN", "s9", "还有人吗"), "qq");
+  await drain();
+  assert.deepEqual((await historyAfter(getStore(), "qq:group:GADMIN", page.through)).lines.map((l) => l.text)[0], "还有人吗", "polling reads only what's new");
 });
 
 await test("unknown channel → 404", async () => {

@@ -2,9 +2,8 @@
 import { waitUntil } from "@vercel/functions";
 import { channels } from "../../channels/index.js";
 import { daysBefore, utcDay } from "../../chats/day.js";
-import { historyFromEvents } from "../../chats/history.js";
-import type { SessionEvent } from "../../conversation/events.js";
-import { ambientInterval, parseProfile, replyMode, saveChatProfile, validateProfile } from "../../chats/profile.js";
+import { historyAfter, historyBefore } from "../../chats/history.js";
+import { ambientInterval, parseProfile, PROFILE_CHOICES, replyMode, saveChatProfile, validateProfile } from "../../chats/profile.js";
 import { config } from "../../config.js";
 import { getStore, type ChatSummary } from "../../store/index.js";
 import { replyWindow, resetChat, say, unlockChat, whisper } from "../chat-actions.js";
@@ -18,6 +17,12 @@ function chatParam(req: AdminRequest): string {
   return chat;
 }
 
+/** A seq from the query string, or undefined. */
+function seqParam(req: AdminRequest, name: string): number | undefined {
+  const value = req.query.get(name);
+  return value !== null && /^-?\d+$/.test(value) ? Number(value) : undefined;
+}
+
 function limitParam(req: AdminRequest): number {
   const n = Number(req.query.get("limit") ?? PAGE);
   return Number.isInteger(n) && n > 0 ? Math.min(n, 500) : PAGE;
@@ -27,13 +32,17 @@ function limitParam(req: AdminRequest): number {
 function view(c: ChatSummary) {
   const profile = parseProfile(c.profile ?? {});
   const channel = c.channel ?? c.chat.split(":")[0]!;
+  const adapter = channels.get(channel);
+  const mode = replyMode(profile);
   return {
     ...c,
     channel,
+    channelLabel: adapter?.label ?? channel,
     profile,
-    mode: replyMode(profile),
+    mode,
+    modeLabel: PROFILE_CHOICES.modes.find((o) => o.value === mode)?.label ?? mode,
     ambientIntervalSeconds: ambientInterval(profile),
-    canSend: Boolean(channels.get(channel)?.send),
+    canSend: Boolean(adapter?.send),
   };
 }
 
@@ -51,7 +60,7 @@ export const chatRoutes: Route[] = [
       const store = getStore();
       const today = utcDay();
       const [summary, usage, window] = await Promise.all([
-        store.chats(today).then((all) => all.find((c) => c.chat === chat)),
+        store.chat(chat, today),
         store.usage(chat, daysBefore(today, 6), today),
         replyWindow(chat),
       ]);
@@ -60,27 +69,32 @@ export const chatRoutes: Route[] = [
         ...view(summary),
         usageByDay: usage,
         replyWindow: window,
-        defaults: { mode: config.console.defaultMode, ambientIntervalSeconds: config.agent.ambientIntervalSeconds },
+        defaults: { mode: replyMode({}), ambientIntervalSeconds: config.agent.ambientIntervalSeconds },
+        choices: PROFILE_CHOICES,
       };
     },
   },
   {
     method: "GET",
-    // Who said what, rendered from the event log: up to `limit` lines before event `before`, newest first.
+    // Who said what, rendered from the event log: what's new after event `after`, else a page before event `before`.
     path: "chat/history",
-    async handler(req) {
-      const before = Number(req.query.get("before")) || Number.MAX_SAFE_INTEGER;
-      const { events } = await getStore().open(chatParam(req), -1);
-      return historyFromEvents(events as SessionEvent[])
-        .filter((line) => line.seq < before)
-        .reverse()
-        .slice(0, limitParam(req));
+    handler(req) {
+      const chat = chatParam(req);
+      const after = seqParam(req, "after");
+      if (after !== undefined) return historyAfter(getStore(), chat, after);
+      return historyBefore(getStore(), chat, seqParam(req, "before") ?? Number.MAX_SAFE_INTEGER, limitParam(req));
     },
   },
   {
     method: "GET",
+    // The raw log: new events after `after` (polling), else a page before `before`, newest first.
     path: "chat/events",
-    handler: (req) => getStore().recentEvents(chatParam(req), Number(req.query.get("before")) || Number.MAX_SAFE_INTEGER, limitParam(req)),
+    handler(req) {
+      const chat = chatParam(req);
+      const after = seqParam(req, "after");
+      if (after !== undefined) return getStore().open(chat, after);
+      return getStore().recentEvents(chat, seqParam(req, "before") ?? Number.MAX_SAFE_INTEGER, limitParam(req));
+    },
   },
   { method: "GET", path: "chat/reply-window", handler: (req) => replyWindow(chatParam(req)) },
   {

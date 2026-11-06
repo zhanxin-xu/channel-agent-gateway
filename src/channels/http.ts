@@ -27,6 +27,7 @@ function safeEqual(a: string, b: string): boolean {
 
 export const httpAdapter: ChannelAdapter = {
   name: "http",
+  label: "HTTP",
 
   isConfigured() {
     return Boolean(config.http.token);

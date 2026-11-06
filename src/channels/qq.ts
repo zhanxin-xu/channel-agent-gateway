@@ -423,6 +423,8 @@ const ACK = () => json({ op: OP_HTTP_CALLBACK_ACK, d: 0 });
 
 export const qqAdapter: ChannelAdapter = {
   name: "qq",
+  label: "QQ",
+  replyRule: "QQ 只能回复最近的消息：群里 5 分钟内、私聊 60 分钟内要有人说话，每条消息最多回 5 次",
   promptHint: "This is QQ: reply in plain text, no Markdown syntax. Keep replies under 1500 characters.",
   /** Passive replies: 5 per inbound message (bot-docs send.md). */
   maxRepliesPerMessage: 5,

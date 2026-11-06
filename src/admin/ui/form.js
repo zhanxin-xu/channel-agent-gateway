@@ -2,7 +2,7 @@
 // one input per setting, a pill saying where its value comes from, and a save that
 // sends only what changed.
 import { api, ApiError } from "./api.js";
-import { action, fill, h, pill, toast } from "./dom.js";
+import { action, copyable, fill, h, pill, toast } from "./dom.js";
 
 const SOURCES = {
   db: ["info", "数据库"],
@@ -66,7 +66,7 @@ function plainEditor(def, view, id) {
 }
 
 /** One setting: label, where it comes from, the editor, help and an error slot. */
-export function settingField(def, view) {
+function settingField(def, view) {
   const id = `setting-${def.key}`;
   const editor = def.kind === "secret" ? secretEditor(def, view, id) : plainEditor(def, view, id);
   const [kind, text] = SOURCES[view.source];
@@ -92,10 +92,11 @@ export function settingField(def, view) {
 }
 
 /**
- * A form for some settings; "保存" sends only the changed ones. `extra`
- * goes beside the button (tests, connect); `onSaved` runs after a save.
+ * A form for some settings; "保存" sends only the changed ones. `actions(form)`
+ * returns what goes beside the button (checks that save the form first);
+ * `onSaved` runs after a save.
  */
-export function settingsForm(index, keys, { onSaved, extra, saveLabel = "保存" } = {}) {
+export function settingsForm(index, keys, { onSaved, actions, saveLabel = "保存" } = {}) {
   const fields = keys.filter((k) => index.defs.has(k)).map((k) => settingField(index.defs.get(k), index.values.get(k)));
   const save = async () => {
     const changes = {};
@@ -119,9 +120,11 @@ export function settingsForm(index, keys, { onSaved, extra, saveLabel = "保存"
     "form",
     { class: "settings-form", onSubmit: (e) => e.preventDefault() },
     h("div", { class: "fields" }, fields.map((f) => f.el)),
-    h("div", { class: "row" }, action(saveLabel, async () => (await save()) || toast("没有改动", "mute"), { primary: true }), extra),
+    h("div", { class: "row" }, action(saveLabel, async () => (await save()) || toast("没有改动", "mute"), { primary: true })),
   );
-  return { el, save };
+  const form = { el, save };
+  el.querySelector(".row").append(...[actions?.(form)].flat().filter(Boolean));
+  return form;
 }
 
 /** A check's result line ({ok, message, ms}). */
@@ -130,7 +133,7 @@ export function checkResult(slot, result) {
 }
 
 /** A button that runs a check (POST path) and shows its result next to it. */
-export function checkButton(label, path, before) {
+function checkButton(label, path, before) {
   const slot = h("span", { class: "check-result" });
   const btn = action(label, async () => {
     fill(slot, h("span", { class: "muted" }, "检查中…"));
@@ -138,4 +141,32 @@ export function checkButton(label, path, before) {
     checkResult(slot, await api.post(path));
   });
   return h("span", { class: "check" }, btn, slot);
+}
+
+/** The check a settings group offers, by group id (src/settings/catalog.ts): [label, API path]. */
+const GROUP_CHECKS = { llm: ["测试", "checks/model"], search: ["查余额", "checks/search"] };
+
+/**
+ * What goes beside a group's save button: its check, its channel's verify and
+ * connect (which save the form first, so they use what was typed), and
+ * "生成" for each secret the console can make up (shown once, in `slot`; none without one).
+ */
+export function groupActions(index, group, status, form, slot) {
+  const items = [];
+  const check = GROUP_CHECKS[group.id];
+  if (check) items.push(checkButton(check[0], check[1], () => form.save()));
+  const channel = group.channel ? status.channels.find((c) => c.name === group.channel) : undefined;
+  if (channel?.canVerify) items.push(checkButton("检查", `channels/${channel.name}/verify`, () => form.save()));
+  if (channel?.canConnect) items.push(checkButton("保存并设置 Webhook", `channels/${channel.name}/connect`, () => form.save()));
+  if (!slot) return items;
+  for (const key of index.keysOf(group.id).filter((k) => index.defs.get(k).generate)) {
+    const { label } = index.defs.get(key);
+    items.push(
+      action(`生成 ${label}`, async () => {
+        const { value } = await api.post("settings/generate", { key });
+        fill(slot, `新的 ${label}（只显示这一次）：`, copyable(value));
+      }),
+    );
+  }
+  return items;
 }

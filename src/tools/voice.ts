@@ -11,7 +11,7 @@
 import { config } from "../config.js";
 import { bundledDataUrl } from "../media/assets.js";
 import { QUOTE, REPLY_TO, replyTo, sendOptions } from "./chat.js";
-import type { Tool } from "./types.js";
+import { VOICE_LABEL, type Tool } from "./types.js";
 
 /** Long text makes a long, slow message; chat voice should be short. */
 const MAX_TEXT_CHARS = 500;
@@ -160,7 +160,7 @@ export const sendVoice: Tool = {
   name: "send_voice",
   feature: "voice",
   role: "talk",
-  historyLine: (args) => `[语音] ${String(args.text ?? "").trim()}`,
+  historyLine: (args) => `${VOICE_LABEL}${String(args.text ?? "").trim()}`,
   get description() {
     return description();
   },

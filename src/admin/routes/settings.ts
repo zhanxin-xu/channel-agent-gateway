@@ -4,9 +4,6 @@ import { settingDef } from "../../settings/catalog.js";
 import { describeSettings, saveSettings, SettingsError } from "../../settings/service.js";
 import { field, HttpError, type Route } from "../http.js";
 
-/** Secrets the console can make up itself. */
-const GENERATED = new Set(["HTTP_CHANNEL_TOKEN", "WORKER_SECRET", "TELEGRAM_WEBHOOK_SECRET"]);
-
 /** Turn a settings validation error into a 400 naming each field. */
 async function checked<T>(fn: () => Promise<T>): Promise<T> {
   try {
@@ -37,10 +34,10 @@ export const settingsRoutes: Route[] = [
     path: "settings/generate",
     async handler(req) {
       const key = field(await req.json(), "key");
-      if (!GENERATED.has(key) || settingDef(key)?.kind !== "secret") throw new HttpError(400, `${key} 不能自动生成`);
+      if (!settingDef(key)?.generate) throw new HttpError(400, `${key} 不能自动生成`);
       const value = crypto.randomBytes(24).toString("base64url");
       await checked(() => saveSettings({ [key]: value }));
-      // Shown once, so it can be copied to whoever calls the HTTP channel.
+      // Shown once, so it can be copied to whoever needs it (e.g. the HTTP channel's callers).
       return { saved: [key], value };
     },
   },

@@ -5,17 +5,19 @@
  * that time without a redeploy.
  *
  * Values are stored as typed. The table sits in a private schema with RLS, and
- * only the server key may call its functions; secrets (`secret`) never leave
- * the server whole: the console shows a masked preview only.
+ * only the server key may call its functions. Secrets (settings of kind
+ * "secret" in the catalog) never leave the server whole: the console shows a
+ * masked preview only.
  *
  * Until the database has the admin schema, nothing is overridden and the
  * gateway runs on its environment variables, as before.
  */
+import { environmentValue } from "../config.js";
 import { getStore, SchemaOutdatedError, type SettingsStore, type StoredSetting } from "../store/index.js";
-import { SETTING_GROUPS, SETTINGS, settingDef, validateSetting, type SettingDef } from "./catalog.js";
+import { SETTING_GROUPS, SETTINGS, settingDef, validateSetting } from "./catalog.js";
 import { setOverrides } from "./overrides.js";
 
-export const RELOAD_MS = 30_000;
+const RELOAD_MS = 30_000;
 
 let loadedAt = -Infinity;
 let loading: Promise<void> | undefined;
@@ -69,13 +71,8 @@ export interface SettingView {
 }
 
 /** How a secret is shown: enough to recognize it, not to use it. */
-export function maskSecret(plain: string): string {
+function maskSecret(plain: string): string {
   return plain.length > 12 ? `${plain.slice(0, 6)}…${plain.slice(-4)}` : "••••••";
-}
-
-function envValue(def: SettingDef): string {
-  const legacy = def.key.startsWith("OPENAI_RESPONSES_") ? process.env[def.key.replace("OPENAI_RESPONSES_", "OPENROUTER_")] : undefined;
-  return (process.env[def.key] ?? legacy ?? "").trim();
 }
 
 /** Every setting with where its value comes from. Reads the table now, so it is current. */
@@ -86,7 +83,7 @@ export async function describeSettings(): Promise<{ groups: typeof SETTING_GROUP
   const stored = new Map(rows.map((r) => [r.key, r]));
   const values = SETTINGS.map((def): SettingView => {
     const row = stored.get(def.key);
-    const fromEnv = envValue(def);
+    const fromEnv = environmentValue(def.key);
     const source: SettingSource = row ? "db" : fromEnv ? "env" : "default";
     const value = row?.value ?? (fromEnv || def.default || "");
     return {
@@ -113,7 +110,7 @@ export class SettingsError extends Error {
  */
 export async function saveSettings(changes: Record<string, string | null>, action = "settings"): Promise<string[]> {
   const errors: Record<string, string> = {};
-  const entries: Array<{ key: string; value: string | null; secret: boolean }> = [];
+  const entries: Array<{ key: string; value: string | null }> = [];
   for (const [key, input] of Object.entries(changes)) {
     const def = settingDef(key);
     if (!def) {
@@ -122,7 +119,7 @@ export async function saveSettings(changes: Record<string, string | null>, actio
     }
     const checked = validateSetting(def, input ?? "");
     if ("error" in checked) errors[key] = checked.error;
-    else entries.push({ key, value: checked.value || null, secret: def.kind === "secret" });
+    else entries.push({ key, value: checked.value || null });
   }
   if (Object.keys(errors).length) throw new SettingsError(errors);
   if (!entries.length) return [];

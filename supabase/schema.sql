@@ -13,8 +13,7 @@
 --
 -- For the admin console (/admin):
 --   gateway.meta           schema version.
---   gateway.settings       configuration set in the console, by env var name;
---                          secrets are flagged so the console only shows them masked.
+--   gateway.settings       configuration set in the console, by env var name.
 --   gateway.chat_profiles  per-chat settings: name, reply mode, quotas, tools.
 --                          Not tied to sessions, so they outlive an expired chat.
 --   gateway.usage_daily    per-chat counters per UTC day (turns, tokens, cost…).
@@ -314,9 +313,10 @@ create table if not exists gateway.meta (
 create table if not exists gateway.settings (
   key text primary key, -- the env var it stands in for, e.g. OPENAI_RESPONSES_MODEL
   value text not null,
-  secret boolean not null default false,
   updated_at timestamptz not null default now()
 );
+-- Schema v2 had a `secret` flag (dropped in v3): which settings are secrets is up to the gateway's catalog.
+alter table gateway.settings drop column if exists secret;
 
 create table if not exists gateway.chat_profiles (
   chat text primary key,
@@ -332,7 +332,7 @@ create table if not exists gateway.usage_daily (
 );
 create index if not exists usage_daily_day on gateway.usage_daily (day);
 
--- An earlier version kept a separate chat history; the console now renders it from the events.
+-- Schema v2 (deployed 2026-11-06) kept a separate chat history; from v3 the console renders it from the events.
 drop function if exists public.history_add(text, jsonb);
 drop function if exists public.history_list(text, bigint, int);
 drop table if exists gateway.history;
@@ -369,19 +369,19 @@ language sql stable security definer set search_path = '' as $$
   select jsonb_build_object('schemaVersion', (select value::int from gateway.meta where key = 'schema_version'));
 $$;
 
--- Gone since the one-time import from the environment was removed.
+-- Schema v2 used these for a one-time import of env vars, removed in v3.
 drop function if exists public.meta_get(text);
 drop function if exists public.meta_put(text, text);
 
--- Settings: [{key, value, secret, updatedAt}].
+-- Settings: [{key, value, updatedAt}].
 create or replace function public.settings_list() returns jsonb
 language sql stable security definer set search_path = '' as $$
   select coalesce(jsonb_agg(jsonb_build_object(
-    'key', key, 'value', value, 'secret', secret, 'updatedAt', gateway.epoch_ms(updated_at)) order by key), '[]'::jsonb)
+    'key', key, 'value', value, 'updatedAt', gateway.epoch_ms(updated_at)) order by key), '[]'::jsonb)
   from gateway.settings;
 $$;
 
--- [{key, value, secret}] in one transaction; a null value deletes the key.
+-- [{key, value}] in one transaction; a null value deletes the key.
 create or replace function public.settings_put(p_entries jsonb) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -391,8 +391,8 @@ begin
     if e ->> 'value' is null then
       delete from gateway.settings where key = e ->> 'key';
     else
-      insert into gateway.settings (key, value, secret) values (e ->> 'key', e ->> 'value', coalesce((e ->> 'secret')::boolean, false))
-        on conflict (key) do update set value = excluded.value, secret = excluded.secret, updated_at = now();
+      insert into gateway.settings (key, value) values (e ->> 'key', e ->> 'value')
+        on conflict (key) do update set value = excluded.value, updated_at = now();
     end if;
   end loop;
   return to_jsonb(jsonb_array_length(p_entries));
@@ -443,36 +443,49 @@ language sql stable security definer set search_path = '' as $$
   select coalesce(jsonb_object_agg(chat, counts), '{}'::jsonb) from gateway.usage_daily where day = p_day;
 $$;
 
--- Every chat that has a session or a profile, most recently active first.
--- `speakers`: who wrote among the last 50 messages, most recent first (at most 5),
--- so a chat can be told apart when the platform gives no name (QQ).
-create or replace function public.admin_chats(p_day date) returns jsonb
-language sql stable security definer set search_path = '' as $$
-  with keys as (
-    select chat from gateway.sessions
-    union select chat from gateway.chat_profiles
-  )
-  select coalesce(jsonb_agg(jsonb_build_object(
-    'chat', k.chat, 'channel', s.channel, 'conversationId', s.conversation_id, 'chatType', s.chat_type,
+-- A chat as the console lists it. `speakers`: who wrote among the last 50
+-- messages, most recent first (at most 5), admins' whispers left out, so a
+-- chat can be told apart when the platform gives no name (QQ).
+create or replace function gateway.chat_summary(p_chat text, p_day date) returns jsonb
+language sql stable set search_path = '' as $$
+  select jsonb_build_object(
+    'chat', p_chat, 'channel', s.channel, 'conversationId', s.conversation_id, 'chatType', s.chat_type,
     'turn', s.turn, 'locked', coalesce(s.lock_expires_at > now(), false),
     'lastActiveAt', gateway.epoch_ms(s.last_active_at),
-    'profile', p.profile, 'usage', u.counts, 'speakers', w.speakers
-  ) order by s.last_active_at desc nulls last), '[]'::jsonb)
-  from keys k
-  left join gateway.sessions s on s.chat = k.chat
-  left join gateway.chat_profiles p on p.chat = k.chat
-  left join gateway.usage_daily u on u.chat = k.chat and u.day = p_day
-  left join lateral (
-    select coalesce(jsonb_agg(sender order by last_seq desc), '[]'::jsonb) as speakers from (
-      select m.sender, max(m.seq) as last_seq from (
-        select e.seq, e.data ->> 'sender' as sender from gateway.events e
-        where e.chat = k.chat and e.type = 'user/message' and not (e.data ? 'replyVia')
-        order by e.seq desc limit 50
-      ) m
-      where m.sender is not null
-      group by m.sender order by last_seq desc limit 5
-    ) recent
-  ) w on true;
+    'profile', (select profile from gateway.chat_profiles where chat = p_chat),
+    'usage', (select counts from gateway.usage_daily where chat = p_chat and day = p_day),
+    'speakers', (
+      select coalesce(jsonb_agg(sender order by last_seq desc), '[]'::jsonb) from (
+        select m.sender, max(m.seq) as last_seq from (
+          select e.seq, e.data ->> 'sender' as sender from gateway.events e
+          where e.chat = p_chat and e.type = 'user/message' and not (e.data ? 'replyVia')
+          order by e.seq desc limit 50
+        ) m
+        where m.sender is not null
+        group by m.sender order by last_seq desc limit 5
+      ) recent))
+  from (select) one
+  left join gateway.sessions s on s.chat = p_chat;
+$$;
+
+-- Every chat that has a session or a profile, most recently active first.
+create or replace function public.admin_chats(p_day date) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_agg(gateway.chat_summary(k.chat, p_day) order by s.last_active_at desc nulls last), '[]'::jsonb)
+  from (select chat from gateway.sessions union select chat from gateway.chat_profiles) k
+  left join gateway.sessions s on s.chat = k.chat;
+$$;
+
+-- One chat, or null when it has neither a session nor a profile.
+create or replace function public.admin_chat(p_chat text, p_day date) returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select gateway.chat_summary(p_chat, p_day)
+  where exists (select from gateway.sessions where chat = p_chat) or exists (select from gateway.chat_profiles where chat = p_chat);
+$$;
+
+create or replace function public.admin_has_chats() returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select to_jsonb(exists (select from gateway.sessions));
 $$;
 
 -- The session and up to p_limit events before p_before, newest first.
@@ -575,7 +588,7 @@ begin
     'image_put(text,text,text)', 'image_get(text[])', 'gateway_expire(int)',
     'gateway_info()', 'settings_list()', 'settings_put(jsonb)', 'profile_get(text)', 'profile_put(text,jsonb)',
     'usage_add(text,date,jsonb)', 'usage_list(text,date,date)', 'usage_day(date)',
-    'admin_chats(date)', 'admin_events(text,bigint,int)', 'admin_append(text,jsonb)', 'admin_unlock(text)',
+    'admin_chats(date)', 'admin_chat(text,date)', 'admin_has_chats()', 'admin_events(text,bigint,int)', 'admin_append(text,jsonb)', 'admin_unlock(text)',
     'admin_problems(bigint,int)', 'admin_log_add(text,text,jsonb)', 'admin_log_list(int)',
     'admin_login_failures(text,boolean,int)'
   ] loop
