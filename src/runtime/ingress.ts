@@ -8,7 +8,6 @@
  * in /api/worker (handoff.ts).
  */
 import { messageHeader, senderLabel } from "../channels/format.js";
-import { recordHistory } from "../chats/history.js";
 import { ambientInterval, chatProfile, replyMode } from "../chats/profile.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
 import { config } from "../config.js";
@@ -83,36 +82,23 @@ export async function handleMessage(
 
   // One transaction: de-duplicate, log, and if this wakes the agent, take the lock.
   const lock = new RunLock(store, chat);
-  const [{ status }] = await Promise.all([
-    store.ingest({
-      chat,
-      channel: message.channel,
-      conversationId: message.conversationId,
-      chatType: message.chatType,
-      origin: opts.origin,
-      eventId: message.eventId,
-      direct,
-      event,
-      // /reset starts the log over; a message seen before that comes back as an @ is marked, not logged twice.
-      reset,
-      upgrade: direct ? { type: "user/mentioned", data: { eventId: message.eventId } } : undefined,
-      wake: !reset && !quiet,
-      ambientIntervalSeconds: ambientInterval(profile),
-      lockOwner: lock.owner,
-      lockTtlMs: LOCK_TTL_MS,
-    }),
-    // Keyed by the platform's id, so a retry isn't recorded twice.
-    reset
-      ? undefined
-      : recordHistory(chat, [
-          {
-            id: message.eventId,
-            role: message.adminHint ? "hint" : "user",
-            sender: senderLabel(message),
-            text: [message.text, images.keys.length ? `[图片×${images.keys.length}]` : ""].filter(Boolean).join(" "),
-          },
-        ]),
-  ]);
+  const { status } = await store.ingest({
+    chat,
+    channel: message.channel,
+    conversationId: message.conversationId,
+    chatType: message.chatType,
+    origin: opts.origin,
+    eventId: message.eventId,
+    direct,
+    event,
+    // /reset starts the log over; a message seen before that comes back as an @ is marked, not logged twice.
+    reset,
+    upgrade: direct ? { type: "user/mentioned", data: { eventId: message.eventId } } : undefined,
+    wake: !reset && !quiet,
+    ambientIntervalSeconds: ambientInterval(profile),
+    lockOwner: lock.owner,
+    lockTtlMs: LOCK_TTL_MS,
+  });
   if (status === "duplicate") {
     console.log(`[ingress] duplicate event ${message.channel}:${message.eventId}, skipped`);
     return "duplicate";

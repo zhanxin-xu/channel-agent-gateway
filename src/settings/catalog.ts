@@ -195,7 +195,6 @@ export const SETTINGS: SettingDef[] = [
     ],
     help: "第一次出现的群和私聊按这个处理，可以在聊天页里单独改。",
   },
-  { key: "HISTORY_RETENTION_DAYS", group: "console", label: "聊天记录保留天数", kind: "int", default: "30" },
   { key: "WORKER_SECRET", group: "console", label: "Worker 签名密钥", kind: "secret", help: "一轮跑不完交给新函数时用来签名。留空时由其他密钥拼出来。" },
 ];
 

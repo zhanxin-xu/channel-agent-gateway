@@ -147,28 +147,9 @@ export interface UsageStore {
   usageOfDay(day: string): Promise<Record<string, UsageCounts>>;
 }
 
-export type HistoryRole = "user" | "bot" | "admin" | "hint";
-
-/** One line of a chat's readable history. */
-export interface HistoryEntry {
-  /** Unique per chat; an entry with an id seen before is ignored. */
-  id: string;
-  /** Epoch ms. */
-  time: number;
-  role: HistoryRole;
-  sender?: string | null;
-  text: string;
-}
-
-export interface HistoryStore {
-  addHistory(chat: string, entries: Array<Omit<HistoryEntry, "time"> & { time?: number }>): Promise<void>;
-  /** Up to `limit` entries before `beforeMs`, newest first. */
-  history(chat: string, beforeMs: number, limit: number): Promise<HistoryEntry[]>;
-}
-
 export interface ChatSummary {
   chat: string;
-  /** Absent for a chat whose session expired (it still has a profile or history). */
+  /** Absent for a chat whose session expired (it still has a profile). */
   channel?: string | null;
   conversationId?: string | null;
   chatType?: "private" | "group" | null;
@@ -216,4 +197,4 @@ export interface ConsoleStore {
 }
 
 /** Everything one backend provides. */
-export type Store = ChatStore & SettingsStore & ProfileStore & UsageStore & HistoryStore & ConsoleStore;
+export type Store = ChatStore & SettingsStore & ProfileStore & UsageStore & ConsoleStore;

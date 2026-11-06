@@ -237,6 +237,7 @@ export const sendFile: Tool = {
     properties: { path: { type: "string", description: `File path (relative paths are under ${WORKDIR}).` }, reply_to: REPLY_TO, quote: QUOTE },
     required: ["path"],
   },
+  historyLine: (args) => `[文件：${path.posix.basename(String(args.path ?? ""))}]`,
   enabled,
   async run(args, ctx) {
     const file = resolvePath(String(args.path ?? ""));

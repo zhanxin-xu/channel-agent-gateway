@@ -18,8 +18,6 @@
 --   gateway.chat_profiles  per-chat settings: name, reply mode, quotas, tools.
 --                          Not tied to sessions, so they outlive an expired chat.
 --   gateway.usage_daily    per-chat counters per UTC day (turns, tokens, cost…).
---   gateway.history        who said what, for people to read; unlike events it
---                          isn't compacted away, and is kept HISTORY_RETENTION_DAYS.
 --   gateway.admin_log      what admins changed or sent.
 --
 -- The tables live in a private schema the Data API doesn't expose, with RLS on.
@@ -334,17 +332,10 @@ create table if not exists gateway.usage_daily (
 );
 create index if not exists usage_daily_day on gateway.usage_daily (day);
 
-create table if not exists gateway.history (
-  chat text not null,
-  id text not null, -- the platform's message id, or a generated one; repeats are ignored
-  time timestamptz not null default now(),
-  role text not null check (role in ('user', 'bot', 'admin', 'hint')),
-  sender text,
-  text text not null,
-  primary key (chat, id)
-);
-create index if not exists history_chat_time on gateway.history (chat, time desc);
-create index if not exists history_time on gateway.history (time);
+-- An earlier version kept a separate chat history; the console now renders it from the events.
+drop function if exists public.history_add(text, jsonb);
+drop function if exists public.history_list(text, bigint, int);
+drop table if exists gateway.history;
 
 create table if not exists gateway.admin_log (
   id bigint generated always as identity primary key,
@@ -365,7 +356,6 @@ alter table gateway.meta enable row level security;
 alter table gateway.settings enable row level security;
 alter table gateway.chat_profiles enable row level security;
 alter table gateway.usage_daily enable row level security;
-alter table gateway.history enable row level security;
 alter table gateway.admin_log enable row level security;
 alter table gateway.admin_login_failures enable row level security;
 
@@ -453,46 +443,23 @@ language sql stable security definer set search_path = '' as $$
   select coalesce(jsonb_object_agg(chat, counts), '{}'::jsonb) from gateway.usage_daily where day = p_day;
 $$;
 
--- [{id, role, sender, text, time?}]; an id seen before is skipped.
-create or replace function public.history_add(p_chat text, p_entries jsonb) returns jsonb
-language sql security definer set search_path = '' as $$
-  insert into gateway.history (chat, id, time, role, sender, text)
-  select p_chat, e ->> 'id', coalesce(to_timestamp((e ->> 'time')::bigint / 1000.0), now()), e ->> 'role', e ->> 'sender', e ->> 'text'
-  from jsonb_array_elements(p_entries) as e
-  on conflict do nothing;
-  select 'true'::jsonb;
-$$;
-
--- Up to p_limit entries before p_before (epoch ms), newest first.
-create or replace function public.history_list(p_chat text, p_before bigint, p_limit int) returns jsonb
-language sql stable security definer set search_path = '' as $$
-  select coalesce(jsonb_agg(jsonb_build_object(
-    'id', id, 'time', gateway.epoch_ms(time), 'role', role, 'sender', sender, 'text', text) order by time desc), '[]'::jsonb)
-  from (
-    select * from gateway.history where chat = p_chat and time < to_timestamp(p_before / 1000.0)
-    order by time desc limit p_limit
-  ) h;
-$$;
-
--- Every chat that has a session, a profile or history, most recently active first.
+-- Every chat that has a session or a profile, most recently active first.
 create or replace function public.admin_chats(p_day date) returns jsonb
 language sql stable security definer set search_path = '' as $$
   with keys as (
     select chat from gateway.sessions
     union select chat from gateway.chat_profiles
-    union select chat from gateway.history
   )
   select coalesce(jsonb_agg(jsonb_build_object(
     'chat', k.chat, 'channel', s.channel, 'conversationId', s.conversation_id, 'chatType', s.chat_type,
     'turn', s.turn, 'locked', coalesce(s.lock_expires_at > now(), false),
-    'lastActiveAt', gateway.epoch_ms(greatest(s.last_active_at, h.last)),
+    'lastActiveAt', gateway.epoch_ms(s.last_active_at),
     'profile', p.profile, 'usage', u.counts
-  ) order by greatest(s.last_active_at, h.last) desc nulls last), '[]'::jsonb)
+  ) order by s.last_active_at desc nulls last), '[]'::jsonb)
   from keys k
   left join gateway.sessions s on s.chat = k.chat
   left join gateway.chat_profiles p on p.chat = k.chat
-  left join gateway.usage_daily u on u.chat = k.chat and u.day = p_day
-  left join lateral (select max(time) as last from gateway.history where chat = k.chat) h on true;
+  left join gateway.usage_daily u on u.chat = k.chat and u.day = p_day;
 $$;
 
 -- The session and up to p_limit events before p_before, newest first.
@@ -564,22 +531,17 @@ $$;
 
 -- Chats quiet for p_days go away with everything they own; retries are only
 -- tracked for an hour; images no event references are dropped after a day.
--- History is kept HISTORY_RETENTION_DAYS (a setting, default 30), usage and
--- the admin log 180 days. Chat profiles stay until an admin deletes them.
+-- Usage and the admin log are kept 180 days. Chat profiles stay until an admin deletes them.
 create or replace function public.gateway_expire(p_days int default 7) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare
   sessions_deleted int;
-  history_days int;
 begin
   delete from gateway.sessions where last_active_at < now() - p_days * interval '1 day';
   get diagnostics sessions_deleted = row_count;
   delete from gateway.inbound where seen_at < now() - interval '1 hour';
   delete from gateway.images i where i.created_at < now() - interval '1 day' and not exists (
     select from gateway.events e where e.chat = i.chat and e.data -> 'images' ? i.key);
-  select case when value ~ '^\d+$' then value::int end into history_days
-    from gateway.settings where key = 'HISTORY_RETENTION_DAYS' and not secret;
-  delete from gateway.history where time < now() - coalesce(history_days, 30) * interval '1 day';
   delete from gateway.usage_daily where day < current_date - 180;
   delete from gateway.admin_log where time < now() - interval '180 days';
   delete from gateway.admin_login_failures where time < now() - interval '1 day';
@@ -600,7 +562,6 @@ begin
     'image_put(text,text,text)', 'image_get(text[])', 'gateway_expire(int)',
     'gateway_info()', 'settings_list()', 'settings_put(jsonb)', 'profile_get(text)', 'profile_put(text,jsonb)',
     'usage_add(text,date,jsonb)', 'usage_list(text,date,date)', 'usage_day(date)',
-    'history_add(text,jsonb)', 'history_list(text,bigint,int)',
     'admin_chats(date)', 'admin_events(text,bigint,int)', 'admin_append(text,jsonb)', 'admin_unlock(text)',
     'admin_problems(bigint,int)', 'admin_log_add(text,text,jsonb)', 'admin_log_list(int)',
     'admin_login_failures(text,boolean,int)'

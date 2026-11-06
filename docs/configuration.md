@@ -51,7 +51,6 @@ OPENAI_RESPONSES_EXTRA_BODY='{"provider":{"only":["openai"],"allow_fallbacks":fa
 |---|---|---|
 | `ADMIN_PASSWORD` | 空 | 管理端密码，只能用环境变量设置。不设置时管理端打不开，也不能在管理端保存 key |
 | `CHAT_DEFAULT_MODE` | `normal` | 没单独设置过的聊天怎么回复：`normal`、`mention`（只回 @）、`record`（只记录）、`block`（屏蔽），见[每个聊天的设置](admin.md#每个聊天的设置) |
-| `HISTORY_RETENTION_DAYS` | `30` | 管理端里的聊天记录保留多少天 |
 
 ## 渠道
 

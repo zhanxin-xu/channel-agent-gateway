@@ -2,6 +2,8 @@
 import { waitUntil } from "@vercel/functions";
 import { channels } from "../../channels/index.js";
 import { daysBefore, utcDay } from "../../chats/day.js";
+import { historyFromEvents } from "../../chats/history.js";
+import type { SessionEvent } from "../../conversation/events.js";
 import { ambientInterval, parseProfile, replyMode, saveChatProfile, validateProfile } from "../../chats/profile.js";
 import { config } from "../../config.js";
 import { getStore, type ChatSummary } from "../../store/index.js";
@@ -64,8 +66,16 @@ export const chatRoutes: Route[] = [
   },
   {
     method: "GET",
+    // Who said what, rendered from the event log: up to `limit` lines before event `before`, newest first.
     path: "chat/history",
-    handler: (req) => getStore().history(chatParam(req), Number(req.query.get("before")) || Date.now() + 1, limitParam(req)),
+    async handler(req) {
+      const before = Number(req.query.get("before")) || Number.MAX_SAFE_INTEGER;
+      const { events } = await getStore().open(chatParam(req), -1);
+      return historyFromEvents(events as SessionEvent[])
+        .filter((line) => line.seq < before)
+        .reverse()
+        .slice(0, limitParam(req));
+    },
   },
   {
     method: "GET",

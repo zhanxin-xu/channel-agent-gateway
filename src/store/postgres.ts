@@ -3,7 +3,6 @@ import {
   SchemaOutdatedError,
   type AdminLogEntry,
   type ChatSummary,
-  type HistoryEntry,
   type IngestInput,
   type IngestStatus,
   type LockMode,
@@ -129,14 +128,6 @@ export class PostgresStore implements Store {
 
   usageOfDay(day: string) {
     return this.rpc<Record<string, UsageCounts>>("usage_day", { p_day: day });
-  }
-
-  async addHistory(chat: string, entries: Array<Omit<HistoryEntry, "time"> & { time?: number }>) {
-    if (entries.length) await this.rpc("history_add", { p_chat: chat, p_entries: entries });
-  }
-
-  history(chat: string, beforeMs: number, limit: number) {
-    return this.rpc<HistoryEntry[]>("history_list", { p_chat: chat, p_before: Math.round(beforeMs), p_limit: limit });
   }
 
   async schemaVersion() {

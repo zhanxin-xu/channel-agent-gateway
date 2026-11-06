@@ -13,7 +13,6 @@
 import crypto from "node:crypto";
 import { channels } from "../channels/index.js";
 import type { ChannelAdapter, InboundMessage } from "../channels/types.js";
-import { recordHistory } from "../chats/history.js";
 import { isEvent, type SessionEvent } from "../conversation/events.js";
 import { chatPeople } from "../conversation/people.js";
 import { deliverOutgoing } from "../runtime/deliver.js";
@@ -108,7 +107,6 @@ export async function say(chat: string, text: string): Promise<{ seq: number; st
   );
   const store = getStore();
   const seq = await store.appendUnlocked(chat, [{ type: "admin/message", data: { text: body } }]);
-  await recordHistory(chat, [{ role: "admin", text: body }]);
   await store.log("say", chat, { text: body, replyTo: target.seq });
   return { seq, status };
 }

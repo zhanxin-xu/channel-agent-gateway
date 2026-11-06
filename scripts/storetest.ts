@@ -192,7 +192,7 @@ async function contract(name: string, store: Store) {
     assert.deepEqual((await store.listSettings()).map((r) => r.key), ["B"]);
   });
 
-  await test("admin: profiles, usage that adds up, history without repeats", async () => {
+  await test("admin: profiles, usage that adds up", async () => {
     await store.putProfile("qq:p1", { mode: "record", quota: { images: 2 } });
     assert.deepEqual(await store.getProfile("qq:p1"), { mode: "record", quota: { images: 2 } });
     await store.putProfile("qq:p1", null);
@@ -206,17 +206,6 @@ async function contract(name: string, store: Store) {
       { day: "2026-11-06", counts: { turns: 3, cost_usd: 0.5, images: 1 } },
     ]);
     assert.deepEqual((await store.usageOfDay("2026-11-06"))["qq:u1"], { turns: 3, cost_usd: 0.5, images: 1 });
-
-    await store.addHistory("qq:h1", [
-      { id: "m1", role: "user", sender: "老王", text: "早", time: 1_000 },
-      { id: "m2", role: "bot", text: "早啊", time: 2_000 },
-    ]);
-    await store.addHistory("qq:h1", [{ id: "m1", role: "user", sender: "老王", text: "重复的", time: 1_000 }]);
-    assert.deepEqual(
-      (await store.history("qq:h1", 10_000, 10)).map((e) => [e.id, e.text, e.sender ?? null]),
-      [["m2", "早啊", null], ["m1", "早", "老王"]],
-    );
-    assert.deepEqual((await store.history("qq:h1", 2_000, 10)).map((e) => e.id), ["m1"], "before is exclusive");
   });
 
   await test("admin: chats list, recent events, unlocked append, unlock, problems", async () => {
@@ -226,7 +215,8 @@ async function contract(name: string, store: Store) {
     const listed = (await store.chats("2026-11-06")).find((x) => x.chat === c)!;
     assert.equal(listed.channel, "qq");
     assert.equal(listed.locked, true);
-    assert.ok((await store.chats("2026-11-06")).some((x) => x.chat === "qq:h1"), "a chat with only history is listed");
+    await store.putProfile("qq:only-profile", { title: "x" });
+    assert.ok((await store.chats("2026-11-06")).some((x) => x.chat === "qq:only-profile"), "a chat with only a profile is listed");
 
     const seq = await store.appendUnlocked(c, [{ type: "admin/message", data: { text: "hi" } }]);
     assert.equal(seq, 2);

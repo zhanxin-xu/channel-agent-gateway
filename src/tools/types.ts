@@ -63,6 +63,12 @@ export interface Tool {
   parameters: Record<string, unknown>;
   role?: ToolRole;
   feature?: ToolFeature;
+  /**
+   * For tools that deliver to the chat: how a successful call reads in the
+   * admin console's history ("[表情包：红温了]"). Only for logs older than the
+   * bot/sent event, which records every delivery itself.
+   */
+  historyLine?(args: Record<string, unknown>): string | undefined;
   /** Hide the tool from the model when its backing service isn't configured. */
   enabled?(): boolean;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<string> | string;

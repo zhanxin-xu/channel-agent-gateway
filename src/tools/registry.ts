@@ -98,5 +98,16 @@ export class Toolset {
 /** The feature of a tool by name (also of tools that are off right now). */
 export const toolFeature = (name: string): ToolFeature | undefined => tools.find((t) => t.name === name)?.feature;
 
+/** How a successful call of tool `name` with these (JSON) arguments read in the chat; undefined for tools that don't deliver. */
+export function historyLine(name: string, rawArgs: string): string | undefined {
+  const tool = tools.find((t) => t.name === name);
+  if (!tool?.historyLine) return undefined;
+  try {
+    return tool.historyLine(rawArgs ? (JSON.parse(rawArgs) as Record<string, unknown>) : {});
+  } catch {
+    return undefined;
+  }
+}
+
 /** Every active tool, no chat policy: for health checks, scripts and tests. */
 export const runTool = (name: string, rawArgs: string, ctx: ToolContext) => new Toolset().run(name, rawArgs, ctx);

@@ -546,6 +546,8 @@ await test("qq: c2c → ACK, turn on the event log, tool loop, passive reply", a
       "assistant/message",
       "step/end",
       "turn/end",
+      // The plain-text answer, sent by the runner after the turn.
+      "bot/sent",
     ],
   );
 });
@@ -2199,6 +2201,44 @@ await test("usage and quotas: tool calls are counted from the log; a used-up too
   assert.ok(toolset.tools.some((t) => t.name === "web_fetch"));
 });
 
+await test("history from the log: what people and the bot said; older logs fall back to the sending tools' calls", async () => {
+  const { historyFromEvents } = await import("../src/chats/history.js");
+  const ev = (seq: number, type: string, data: unknown) => ({ seq, type, time: seq * 1000, data }) as any;
+  const call = (id: string, name: string, args: unknown) => ({ type: "function_call", call_id: id, name, arguments: JSON.stringify(args) });
+  const lines = historyFromEvents([
+    ev(0, "user/message", { eventId: "m0", sender: "老王 #3B6834", text: "看图", images: ["k1", "k2"], mentioned: true, reply: {} }),
+    ev(1, "turn/start", { turn: 1, trigger: "direct" }),
+    ev(2, "developer/message", { turn: 1, text: "（系统提示）…" }),
+    ev(3, "assistant/message", { turn: 1, step: 1, output: [{ type: "reasoning" }, call("a", "send_sticker", { name: "吃瓜" }), call("b", "send_message", { text: "发不出去" }), call("c", "web_search", { query: "x" })] }),
+    ev(4, "tool/result", { turn: 1, step: 1, callId: "a", output: "sent as a reply to 第0条 (1/5)" }),
+    ev(5, "tool/result", { turn: 1, step: 1, callId: "b", output: "Error: reply window closed" }),
+    ev(6, "tool/result", { turn: 1, step: 1, callId: "c", output: "results" }),
+    ev(7, "user/message", { eventId: "admin-1", sender: "管理员 #ADMIN", text: "（管理员悄悄告诉你）开会", mentioned: true, reply: {}, replyVia: "m0" }),
+    ev(8, "assistant/message", { turn: 2, step: 1, output: [call("d", "send_voice", { text: "开会啦" })] }),
+    ev(9, "tool/result", { turn: 2, step: 1, callId: "d", output: "sent" }),
+    // From here on every delivery is logged, the runner's own answers included; tool calls no longer count.
+    ev(10, "user/message", { eventId: "m2", sender: "老王 #3B6834", text: "在吗", mentioned: true, reply: {} }),
+    ev(11, "bot/sent", { turn: 3, text: "答案是 20", replyTo: 10 }),
+    ev(12, "assistant/message", { turn: 4, step: 1, output: [call("e", "send_message", { text: "不该重复" })] }),
+    ev(13, "bot/sent", { turn: 4, text: "不该重复", replyTo: 10 }),
+    ev(14, "tool/result", { turn: 4, step: 1, callId: "e", output: "sent" }),
+    ev(15, "admin/message", { text: "管理员说的" }),
+  ]);
+  assert.deepEqual(
+    lines.map((l) => [l.role, l.text, l.time]),
+    [
+      ["user", "看图 [图片×2]", 0],
+      ["bot", "[表情包：吃瓜]", 4000],
+      ["hint", "（管理员悄悄告诉你）开会", 7000],
+      ["bot", "[语音] 开会啦", 9000],
+      ["user", "在吗", 10000],
+      ["bot", "答案是 20", 11000],
+      ["bot", "不该重复", 13000],
+      ["admin", "管理员说的", 15000],
+    ],
+  );
+});
+
 await test("admin: say speaks in the bot's name on the newest open message, and the model reads it as its own; whisper makes it answer", async () => {
   const { say, whisper, replyWindow } = await import("../src/admin/chat-actions.js");
   await handleWebhook(groupMsg("GADMIN", "s1", "有人吗"), "qq");
@@ -2225,8 +2265,10 @@ await test("admin: say speaks in the bot's name on the newest open message, and 
   assert.ok(all.every((b) => b.msg_id === "s1"), "through the same platform message");
   assert.equal(new Set(all.map((b) => b.msg_seq)).size, all.length, "with its msg_seq counting on");
 
-  const roles = new Set((await getStore().history("qq:group:GADMIN", Date.now() + 1, 50)).map((e) => e.role));
-  assert.deepEqual([...roles].sort(), ["admin", "bot", "hint", "user"]);
+  const { historyFromEvents } = await import("../src/chats/history.js");
+  const history = historyFromEvents((await getStore().open("qq:group:GADMIN", -1)).events as any);
+  assert.deepEqual([...new Set(history.map((l) => l.role))].sort(), ["admin", "bot", "hint", "user"], "the console's history is rendered from the log");
+  assert.deepEqual(history.slice(0, 2).map((l) => [l.role, l.text]), [["user", "有人吗"], ["admin", "管理员替我说的"]]);
 });
 
 await test("unknown channel → 404", async () => {

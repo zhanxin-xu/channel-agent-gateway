@@ -160,6 +160,7 @@ export const sendVoice: Tool = {
   name: "send_voice",
   feature: "voice",
   role: "talk",
+  historyLine: (args) => `[语音] ${String(args.text ?? "").trim()}`,
   get description() {
     return description();
   },

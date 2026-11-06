@@ -161,7 +161,7 @@ async function drain(
 
   const outbox = new Outbox(store, adapter, session, meta, opts.collect);
   const profile = await chatProfile(chatKey);
-  const turnState = { main: -1 };
+  const turnState: { main: number; turn?: number } = { main: -1 };
   const { ctx, endRun } = makeToolContext(adapter, meta, chatKey, deadline, outbox, session, turnState, opts.collect);
   let ambientClaimed = opts.ambientClaimed;
 
@@ -184,6 +184,7 @@ async function drain(
       }
 
       const direct = trigger === "direct";
+      turnState.turn = undefined;
       const today = await usageToday(chatKey);
       if (costQuotaUsed(profile, today)) {
         // Like running out of credit: those who called hear about it once per batch, the rest wait for tomorrow.
@@ -203,6 +204,7 @@ async function drain(
       ctx.sent = [];
       ctx.chat.sender = main.data.sender;
       const turn = await session.nextTurn();
+      turnState.turn = turn;
       const started = Date.now();
       const firstSeq = session.state.nextSeq;
       try {

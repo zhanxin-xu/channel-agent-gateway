@@ -49,19 +49,20 @@ function renderHistory(body, chat, info) {
   const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 80;
 
   const draw = (stick) => {
-    const sorted = [...entries.values()].sort((a, b) => a.time - b.time);
-    fill(list, sorted.length ? sorted.map(bubble) : h("p", { class: "muted" }, "还没有记录。聊天记录从管理端上线后开始保存。"));
+    const sorted = [...entries.values()].sort((a, b) => a.seq - b.seq);
+    fill(list, sorted.length ? sorted.map(bubble) : h("p", { class: "muted" }, "还没有消息。"));
     if (stick) list.scrollTop = list.scrollHeight;
   };
   const load = async (before) => {
     const page = await api.get("chat/history", { chat, before, limit: 100 });
     for (const e of page) entries.set(e.id, e);
-    return page.length;
+    // A short page means the log has nothing older.
+    return page.length === 100;
   };
   more.addEventListener("click", async () => {
-    const oldest = Math.min(...[...entries.values()].map((e) => e.time));
+    const oldest = Math.min(...[...entries.values()].map((e) => e.seq));
     const height = list.scrollHeight;
-    if (!(await load(oldest))) more.hidden = true;
+    more.hidden = !(await load(oldest));
     draw(false);
     list.scrollTop = list.scrollHeight - height;
   });
@@ -74,7 +75,10 @@ function renderHistory(body, chat, info) {
     await load();
     if (entries.size !== before || stick) draw(stick || wasNear);
   };
-  load().then(() => draw(true));
+  load().then((hasMore) => {
+    more.hidden = !hasMore;
+    draw(true);
+  });
   const stops = [every(4000, () => refresh(false)), composer.stop];
   return () => stops.forEach((s) => s());
 }
@@ -171,7 +175,7 @@ const REASONS = {
 
 const FILTERS = {
   all: ["全部", () => true],
-  messages: ["消息", (e) => e.type.startsWith("user/") || e.type === "admin/message" || e.type === "session/reset"],
+  messages: ["消息", (e) => e.type.startsWith("user/") || e.type === "bot/sent" || e.type === "admin/message" || e.type === "session/reset"],
   model: ["模型", (e) => e.type.startsWith("assistant/") || e.type === "developer/message" || e.type === "compaction/summary"],
   tools: ["工具", (e) => e.type.startsWith("tool/")],
   errors: ["出错", (e) => (e.type === "turn/end" && e.data.reason !== "completed") || e.type === "assistant/attempt" || (e.type === "tool/result" && e.data.output.startsWith("Error:"))],
@@ -237,6 +241,8 @@ function summarize(e) {
       return `压缩了第 ${d.fromSeq} 条之前的内容：${cut(d.summary)}`;
     case "admin/message":
       return [pill("info", "管理员代发"), ` ${d.text}`];
+    case "bot/sent":
+      return [pill("ok", "已发出"), ` ${cut(d.text)}`];
     default:
       return "";
   }

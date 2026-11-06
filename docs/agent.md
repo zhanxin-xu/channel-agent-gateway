@@ -52,8 +52,10 @@
 | `tool/result` | ✅ | 工具结果 |
 | `tool/images` | ✅ | `read_file` 打开的图片 |
 | `compaction/summary` | ✅ | 压缩摘要，替代 `fromSeq` 之前的全部内容 |
+| `bot/sent` | — | 机器人实际发出的一条内容（文字、表情包、语音、文件、运行时的提示），管理端的聊天记录用它 |
+| `admin/message` | ✅（当作模型自己说的） | 管理员以机器人身份发的话 |
 
-**推导规则**：从最近一次 `/reset` 之后、最近一条摘要开始，按顺序转换：摘要和用户消息变成 `user` 消息，系统提示变成 `developer` 消息，模型输出原样展开，工具结果变成 `function_call_output`，其余事件跳过。系统提示词放在 `instructions` 里，不入库。
+**推导规则**：从最近一次 `/reset` 之后、最近一条摘要开始，按顺序转换：摘要和用户消息变成 `user` 消息，系统提示变成 `developer` 消息，管理员代发的话变成 `assistant` 消息，模型输出原样展开，工具结果变成 `function_call_output`，其余事件跳过。系统提示词放在 `instructions` 里，不入库。
 
 两处特殊处理，都只影响推导结果，不改事件流：
 - 一步执行期间到达的消息，推导时放在这一步的工具结果之后，保证每个工具调用后面紧跟着它的结果。
@@ -165,7 +167,7 @@
 | `chat_lock` / `chat_claim_ambient` | 运行锁的获取、续期、释放；旁观采样 |
 | `chat_begin_turn` / `chat_set_cursor` | 轮次计数、游标 |
 | `reply_get` / `reply_put`、`image_put` / `image_get` | 回复状态、图片 |
-| `gateway_expire` | 每天清理：删除 7 天没有新消息的会话，以及过期的聊天记录、用量和操作记录 |
+| `gateway_expire` | 每天清理：删除 7 天没有新消息的会话，以及过期的用量和操作记录 |
 
 发送 `/reset` 会删除当前会话之前的全部事件、图片和回复状态，seq 继续往后编号。
 
@@ -177,7 +179,6 @@
 | `settings` | 管理端里填的配置，按环境变量名存；key 带 `secret` 标记，管理端只显示打码后的样子 |
 | `chat_profiles` | 每个聊天的设置：备注名、回复方式、插话频率、工具开关、额外设定、额度 |
 | `usage_daily` | 每个聊天每个 UTC 日的用量（轮次、token、花费、画图 / 语音 / 搜索次数） |
-| `history` | 聊天记录：谁说了什么，不受压缩影响，保留 `HISTORY_RETENTION_DAYS` 天 |
 | `admin_log`、`admin_login_failures` | 管理操作记录；登录失败次数 |
 
 每个聊天的设置会影响一轮对话：
@@ -190,3 +191,5 @@
 “只记录”模式下收到的消息带 `quiet` 标记，模型以后能看到它们，但它们不算待处理的消息。
 
 管理员代发的话记为 `admin/message`，模型会把它当成自己说过的话。
+
+机器人每发出一条内容（不管是工具发的，还是运行时自己发的提示），都会记一条 `bot/sent`。它只写日志，不进模型输入，管理端的聊天记录就是从 `user/message`、`bot/sent`、`admin/message` 渲染出来的。

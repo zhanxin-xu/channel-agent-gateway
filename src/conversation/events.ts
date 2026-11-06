@@ -76,6 +76,13 @@ export interface EventMap {
      */
     quiet?: true;
   };
+  /**
+   * Something the bot delivered to the chat: through a tool, or a notice from
+   * the runner (a plain-text answer, "out of credit"…). How it reads: text, an
+   * image's label, "[语音] …", "[文件：…]". Log-only: what the model said is
+   * already in its output; this is the chat's side, for the admin console's history.
+   */
+  "bot/sent": { turn?: number; text: string; replyTo: number };
   /** Something an admin sent in the bot's name; the model sees it as its own message. */
   "admin/message": { text: string };
   /** The same platform message arrived again as an @ (QQ can send both). Log-only. */

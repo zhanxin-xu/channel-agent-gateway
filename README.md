@@ -117,7 +117,7 @@ src/
   chats/                 每个聊天
     profile.ts           回复方式、插话频率、工具开关、额外设定、额度
     usage.ts             用量统计与额度
-    history.ts           聊天记录
+    history.ts           从事件流渲染聊天记录
   admin/                 管理端
     handler.ts / routes/ 接口
     auth.ts              登录

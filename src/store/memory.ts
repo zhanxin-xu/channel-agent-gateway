@@ -3,7 +3,6 @@ import {
   SCHEMA_VERSION,
   type AdminLogEntry,
   type ChatSummary,
-  type HistoryEntry,
   type IngestInput,
   type LockMode,
   type NewStoredEvent,
@@ -33,7 +32,6 @@ export class MemoryStore implements Store {
   private profiles = new Map<string, Record<string, unknown>>();
   /** chat → day → counts */
   private usageDays = new Map<string, Map<string, UsageCounts>>();
-  private historyEntries = new Map<string, HistoryEntry[]>();
   private logEntries: AdminLogEntry[] = [];
   private loginFailureTimes = new Map<string, number[]>();
 
@@ -225,34 +223,15 @@ export class MemoryStore implements Store {
     return result;
   }
 
-  async addHistory(chat: string, entries: Array<Omit<HistoryEntry, "time"> & { time?: number }>) {
-    const list = this.historyEntries.get(chat) ?? [];
-    this.historyEntries.set(chat, list);
-    for (const e of entries) {
-      if (list.some((x) => x.id === e.id)) continue;
-      list.push({ ...e, sender: e.sender ?? null, time: e.time ?? Date.now() });
-    }
-  }
-
-  async history(chat: string, beforeMs: number, limit: number) {
-    return (this.historyEntries.get(chat) ?? [])
-      .filter((e) => e.time < beforeMs)
-      .sort((a, b) => b.time - a.time)
-      .slice(0, limit)
-      .map((e) => ({ ...e }));
-  }
-
   async schemaVersion() {
     return SCHEMA_VERSION;
   }
 
   async chats(day: string) {
-    const keys = new Set([...this.sessions.keys(), ...this.profiles.keys(), ...this.historyEntries.keys()]);
+    const keys = new Set([...this.sessions.keys(), ...this.profiles.keys()]);
     const now = Date.now();
     const summaries: ChatSummary[] = [...keys].map((chat) => {
       const s = this.sessions.get(chat);
-      const lastHistory = Math.max(...(this.historyEntries.get(chat) ?? []).map((e) => e.time), -Infinity);
-      const lastActiveAt = Math.max(s?.lastActiveAt ?? -Infinity, lastHistory);
       return {
         chat,
         channel: s?.channel ?? null,
@@ -260,7 +239,7 @@ export class MemoryStore implements Store {
         chatType: s?.chatType ?? null,
         turn: s?.turn ?? null,
         locked: (s?.lockExpiresAt ?? 0) > now,
-        lastActiveAt: Number.isFinite(lastActiveAt) ? lastActiveAt : null,
+        lastActiveAt: s?.lastActiveAt ?? null,
         profile: this.profiles.get(chat) ?? null,
         usage: this.usageDays.get(chat)?.get(day) ?? null,
       };
