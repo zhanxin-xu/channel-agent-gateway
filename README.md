@@ -71,7 +71,7 @@
 |---|---|
 | [部署](docs/deployment.md) | Vercel 部署、存储、自定义域名、免费额度与资源消耗 |
 | [管理端](docs/admin.md) | 新手引导、配置存进数据库、聊天记录与事件流、代发、每群额度 |
-| [渠道接入](docs/channels.md) | QQ、Telegram、HTTP 的配置方法，QQ 被动回复规则，如何新增渠道 |
+| [渠道接入](docs/channels.md) | QQ、Telegram、HTTP 的配置方法，QQ 被动回复和主动消息，如何新增渠道 |
 | [Agent 与对话](docs/agent.md) | 事件流格式、一个聊天一个 agent、挂断机制、步数与时间、上下文压缩、崩溃恢复 |
 | [工具](docs/tools.md) | 内置工具、长期记忆、沙盒工作区、表情包，如何新增工具 |
 | [配置参考](docs/configuration.md) | 全部环境变量及默认值 |

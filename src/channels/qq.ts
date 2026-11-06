@@ -10,7 +10,7 @@
 import crypto from "node:crypto";
 import { config } from "../config.js";
 import { pcmToSilk } from "../media/voice.js";
-import { ChannelUnreachableError, platformFetch, unreachableReason } from "./net.js";
+import { ChannelUnreachableError, platformFetch, PushRefusedError, unreachableReason } from "./net.js";
 import { partsToText, personLabel } from "./format.js";
 import {
   chunkText,
@@ -100,7 +100,8 @@ async function qqApi<T = unknown>(path: string, body: unknown): Promise<T> {
   const text = await res.text();
   if (!res.ok) {
     const Err = res.status >= 500 ? ChannelUnreachableError : Error;
-    throw new Err(`QQ POST ${path} failed: HTTP ${res.status} ${text.slice(0, 300)}`);
+    const error = new Err(`QQ POST ${path} failed: HTTP ${res.status} ${text.slice(0, 300)}`);
+    throw Object.assign(error, { qqCode: errorCode(text) });
   }
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -132,6 +133,31 @@ function qqFileType(name: string): number {
   if (/\.mp4$/i.test(name)) return 2;
   if (/\.(silk|mp3|wav)$/i.test(name)) return 3;
   return 4;
+}
+
+/** QQ's error code in a failed response body ({"code":40034105,…}), if any. */
+function errorCode(body: string): number | undefined {
+  try {
+    const code = (JSON.parse(body) as { code?: unknown }).code;
+    return typeof code === "number" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Past the reply window: a reply to this message can only go out as a push. */
+const windowPassed = (replyContext: Record<string, string>) => Date.now() > Number(replyContext.expiresAt ?? Infinity);
+
+/**
+ * QQ's answers to a push it won't deliver: 40034105 no permission (the group
+ * owner hasn't turned on 机器人主动在群聊内发言, or the user turned off pushes),
+ * 40034100 / 22009 over the push rate limits.
+ */
+function pushRefusal(err: unknown): string | undefined {
+  const code = (err as { qqCode?: number }).qqCode;
+  if (code === 40034105) return "QQ refused a message of the bot's own here: the group hasn't turned on 机器人主动在群聊内发言 (or, in a DM, the user turned off messages from bots)";
+  if (code === 40034100 || code === 22009) return "QQ refused a message of the bot's own: too many sent recently";
+  return undefined;
 }
 
 /**
@@ -424,7 +450,10 @@ const ACK = () => json({ op: OP_HTTP_CALLBACK_ACK, d: 0 });
 export const qqAdapter: ChannelAdapter = {
   name: "qq",
   label: "QQ",
-  replyRule: "QQ 只能回复最近的消息：群里 5 分钟内、私聊 60 分钟内要有人说话，每条消息最多回 5 次",
+  replyRule:
+    "QQ 群里 5 分钟内、私聊 60 分钟内可以直接回复；过了改发主动消息，要群主开启「机器人主动在群聊内发言」（私聊要对方没关闭接收主动消息）",
+  // QQ groups and DMs take pushes (bot-docs message overview: 20/min per chat, 1000/day), where allowed; guild channels don't here.
+  canPush: (replyContext) => replyContext.scope === "c2c" || replyContext.scope === "group",
   promptHint: "This is QQ: reply in plain text, no Markdown syntax. Keep replies under 1500 characters.",
   /** Passive replies: 5 per inbound message (bot-docs send.md). */
   maxRepliesPerMessage: 5,
@@ -512,7 +541,8 @@ export const qqAdapter: ChannelAdapter = {
       await replyV2(message, { msg_type: 2, markdown: { content } });
     } catch (err) {
       // QQ unreachable: the outbox stops the run; a retry here could post the message twice.
-      if (unreachableReason(err)) throw err;
+      // A refused push would be refused again as plain text.
+      if (unreachableReason(err) || err instanceof PushRefusedError) throw err;
       console.warn(`[qq] markdown with mentions refused, sending plain text: ${err instanceof Error ? err.message : String(err)}`);
       await qqAdapter.send!(message, plain);
     }
@@ -588,10 +618,22 @@ function escapeMarkdown(text: string): string {
  * message_reference to the message's msg_idx, which QQ shows as a 回复 box.
  * The quote isn't in QQ's docs (NoneBot sends it the same way), so if QQ
  * refuses a quoted reply, it goes again without the quote.
+ *
+ * Past the reply window it's a push instead: no msg_id, msg_seq or quote.
+ * QQ delivers it where the chat allows pushes; a refusal is a PushRefusedError.
  */
 async function replyV2(message: InboundMessage, body: Record<string, unknown>): Promise<void> {
   const ctx = message.replyContext;
   const path = `${v2Base(ctx.scope!, ctx.target!)}/messages`;
+  if (windowPassed(ctx)) {
+    try {
+      await qqApi(path, body);
+    } catch (err) {
+      const refusal = pushRefusal(err);
+      throw refusal ? new PushRefusedError(refusal, { cause: err }) : err;
+    }
+    return;
+  }
   const post = (quote: boolean) =>
     qqApi(path, { ...body, msg_id: ctx.msgId, msg_seq: nextSeq(ctx), ...(quote ? { message_reference: { message_id: ctx.refIdx } } : {}) });
   if (!message.quote || !ctx.refIdx) {

@@ -192,9 +192,13 @@ async function drain(
         await session.setCursor(pending.at(-1)!.seq);
         continue;
       }
-      // Replies go by default to the newest @ (else newest) message that can still take one.
+      // Replies go by default to the newest @ (else newest) message that can still take one:
+      // a real reply where the window is open, else a push (QQ, where the chat allows it).
+      const mentioned = pending.filter((m) => m.data.mentioned);
       const main =
-        (await findLastAsync(pending.filter((m) => m.data.mentioned), (m) => outbox.canReply(m.seq))) ??
+        (await findLastAsync(mentioned, (m) => outbox.canReply(m.seq, { inWindow: true }))) ??
+        (await findLastAsync(pending, (m) => outbox.canReply(m.seq, { inWindow: true }))) ??
+        (await findLastAsync(mentioned, (m) => outbox.canReply(m.seq))) ??
         (await findLastAsync(pending, (m) => outbox.canReply(m.seq))) ??
         pending.at(-1)!;
       turnState.main = main.seq;

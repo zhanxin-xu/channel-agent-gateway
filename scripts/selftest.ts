@@ -734,16 +734,17 @@ await test("qq: retried event is de-duplicated", async () => {
 await test("qq reply window: the turn's default target is a message that can still be answered", async () => {
   const groupAtOld = (id: string, m: number) =>
     qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id, content: "hi", timestamp: minutesAgo(m), group_openid: "GROUP2", author: { member_openid: "M2" } } });
-  // Group message from 6 minutes ago: past the 5-minute window, so nothing is posted to QQ.
+  // Group message from 6 minutes ago: past the 5-minute window, so the answer goes out as a push (no msg_id).
   await handleWebhook(groupAtOld("g-old", 6), "qq");
   await drain();
-  assert.equal(sentTo("/v2/groups/GROUP2/messages").length, 0, "expired group reply is not sent");
-  assert.ok(llmCalls > 0, "the model still ran");
-  // 4 minutes ago: still inside the window.
+  const pushed = sentTo("/v2/groups/GROUP2/messages");
+  assert.equal(pushed.length, 1);
+  assert.deepEqual([pushed[0].msg_id, pushed[0].msg_seq, pushed[0].content], [undefined, undefined, "答案是 20"], "a push replies to nothing");
+  // 4 minutes ago: still inside the window, a real reply.
   await handleWebhook(groupAtOld("g-new", 4), "qq");
   await drain();
-  assert.deepEqual(sentTo("/v2/groups/GROUP2/messages").map((b) => b.msg_id), ["g-new"]);
-  // C2C: 30 minutes is fine (60-minute window), 61 is not; arriving together, the run answers the one it can.
+  assert.deepEqual(sentTo("/v2/groups/GROUP2/messages").map((b) => b.msg_id), [undefined, "g-new"]);
+  // C2C: 30 minutes is inside the 60-minute window, 61 isn't; arriving together, the run replies to the one in its window.
   await handleWebhook(c2c("c-30", "hi", "USER9", { timestamp: minutesAgo(30) }), "qq");
   await handleWebhook(c2c("c-61", "hi", "USER9", { timestamp: minutesAgo(61) }), "qq");
   await drain();
@@ -1408,31 +1409,37 @@ await test("budget: a model call may take what's left of the function, minus the
   assert.ok(timeouts.some((ms) => ms > 125_000 && ms <= 130_000), JSON.stringify(timeouts));
 });
 
-await test("reply window closed: the send is refused with guidance, and later turns are reminded until it gets through", async () => {
+await test("push refused (the group doesn't allow the bot to post on its own): guidance, and later turns are reminded until it gets through", async () => {
   const at = (id: string, text: string, sentAt: string) =>
     qqRequest({ op: 0, t: "GROUP_AT_MESSAGE_CREATE", d: { id, content: text, timestamp: sentAt, group_openid: "GLATE", author: { member_openid: "MLATE" } } });
-  // QQ takes group replies for 5 minutes: this one was sent 6 minutes ago.
-  await handleWebhook(at("late-1", " 表情", minutesAgo(6)), "qq");
-  await drain();
-  const results = (await events("qq:group:GLATE")).filter((e) => e.type === "tool/result").map((e) => e.data.output);
-  assert.match(results[0]!, /^Error: reply window closed for 第0条: .*nothing was sent\. Don't retry on another old message/);
-  assert.equal(sentTo("/v2/groups/GLATE/messages").length, 0, "refused before reaching QQ");
+  // QQ refuses pushes here (40034105): 机器人主动在群聊内发言 is off.
+  qqReply = (body) => (body && !body.msg_id && "msg_type" in body ? Response.json({ code: 40034105, message: "主动消息发送失败，无权限" }, { status: 400 }) : undefined);
+  try {
+    // QQ takes group replies for 5 minutes: this one was sent 6 minutes ago, so only a push could answer it.
+    await handleWebhook(at("late-1", " 表情", minutesAgo(6)), "qq");
+    await drain();
+    const results = (await events("qq:group:GLATE")).filter((e) => e.type === "tool/result").map((e) => e.data.output);
+    assert.match(results[0]!, /^Error: reply window closed for 第0条: QQ refused a message of the bot's own here: the group hasn't turned on 机器人主动在群聊内发言.*nothing was sent\. Don't retry on another old message/);
+    assert.ok(sentTo("/v2/groups/GLATE/messages").every((b) => b.msg_id === undefined), "only pushes were tried");
 
-  calls.length = 0;
-  await handleWebhook(at("late-2", " 路过", minutesAgo(0)), "qq");
-  await drain();
-  const opening = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "developer").content;
-  assert.match(opening, /之前有 2 条消息因为回复窗口关了没发出去：「红温了」「气死我了」。如果还用得上，这一轮回复时补上。/);
+    calls.length = 0;
+    await handleWebhook(at("late-2", " 路过", minutesAgo(0)), "qq");
+    await drain();
+    const opening = llmRequests()[0]!.body.input.findLast((i: any) => i.role === "developer").content;
+    assert.match(opening, /之前有 2 条消息因为回复窗口关了没发出去：「红温了」「气死我了」。如果还用得上，这一轮回复时补上。/);
 
-  // Once a message gets through, the reminder stops. (One at a time: a message that lands
-  // mid-turn would become the fake model's latest and change what it does.)
-  calls.length = 0;
-  await handleWebhook(at("late-3", " 表情", minutesAgo(0)), "qq");
-  await drain();
-  assert.equal(sentTo("/v2/groups/GLATE/messages").length, 2, "the sticker and the text got through");
-  await handleWebhook(at("late-4", " 路过", minutesAgo(0)), "qq");
-  await drain();
-  assert.doesNotMatch(llmRequests().at(-1)!.body.input.findLast((i: any) => i.role === "developer").content, /没发出去/);
+    // Once a message gets through, the reminder stops. (One at a time: a message that lands
+    // mid-turn would become the fake model's latest and change what it does.)
+    calls.length = 0;
+    await handleWebhook(at("late-3", " 表情", minutesAgo(0)), "qq");
+    await drain();
+    assert.equal(sentTo("/v2/groups/GLATE/messages").filter((b) => b.msg_id === "late-3").length, 2, "the sticker and the text got through");
+    await handleWebhook(at("late-4", " 路过", minutesAgo(0)), "qq");
+    await drain();
+    assert.doesNotMatch(llmRequests().at(-1)!.body.input.findLast((i: any) => i.role === "developer").content, /没发出去/);
+  } finally {
+    qqReply = undefined;
+  }
 });
 
 // ── Tools ──

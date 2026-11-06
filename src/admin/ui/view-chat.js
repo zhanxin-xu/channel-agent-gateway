@@ -144,6 +144,11 @@ function renderComposer(chat, info, onSent) {
     }
     send.disabled = false;
     const left = state.closesAt ? Math.max(0, Math.floor((state.closesAt - Date.now()) / 1000)) : null;
+    if (state.push) {
+      // Past the reply window: it goes to the chat as a message of its own, if the chat allows that.
+      fill(windowLine, pill("info", "作为主动消息发出"), " ", h("span", { class: "muted" }, `回复窗口已过 · 还能发 ${state.max - state.replies} 条`));
+      return;
+    }
     fill(
       windowLine,
       pill("info", `挂在第 ${state.seq} 条（${state.sender}）上`),

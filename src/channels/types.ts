@@ -82,6 +82,13 @@ export interface ChannelAdapter {
   readonly replyRule?: string;
   /** Extra instructions appended to the system prompt, e.g. formatting limits. */
   readonly promptHint?: string;
+  /**
+   * Whether a message whose reply window closed (replyContext.expiresAt) can
+   * still be answered with a push: a message to the same chat that replies to
+   * nothing. The platform may still refuse it (send throws PushRefusedError).
+   * Unset: no pushes; after the window, the message takes no more replies.
+   */
+  canPush?(replyContext: Record<string, string>): boolean;
   /** How many replies one inbound message can take on this platform. Unset: the gateway's default (5). */
   readonly maxRepliesPerMessage?: number;
   isConfigured(): boolean;

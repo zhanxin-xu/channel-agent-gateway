@@ -23,6 +23,15 @@ export class ChannelUnreachableError extends Error {
   override name = "ChannelUnreachableError";
 }
 
+/**
+ * The platform refused a push (a message replying to nothing): the chat
+ * doesn't allow the bot to post on its own, or too many were sent. Waiting
+ * for someone to write opens a reply window again.
+ */
+export class PushRefusedError extends Error {
+  override name = "PushRefusedError";
+}
+
 const causeCode = (err: unknown): string | undefined =>
   err instanceof Error ? ((err.cause as { code?: unknown } | undefined)?.code as string | undefined) : undefined;
 

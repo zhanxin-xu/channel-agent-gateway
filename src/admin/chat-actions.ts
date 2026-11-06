@@ -18,7 +18,7 @@ import { isEvent, isWhisper, type SessionEvent } from "../conversation/events.js
 import { chatPeople } from "../conversation/people.js";
 import { deliverOutgoing } from "../runtime/deliver.js";
 import { handleMessage, resetLog } from "../runtime/ingress.js";
-import { Outbox, type MessageLookup } from "../runtime/outbox.js";
+import { DeliveryRefusedError, Outbox, type MessageLookup } from "../runtime/outbox.js";
 import type { ChatMeta } from "../runtime/types.js";
 import { getStore, type SessionState } from "../store/index.js";
 import { HttpError } from "./http.js";
@@ -68,6 +68,8 @@ export interface ReplyWindow {
   replies?: number;
   max?: number;
   closesAt?: number;
+  /** It would go out as a message of its own (the reply window closed; the platform takes pushes). */
+  push?: boolean;
 }
 
 /** What say / whisper would reply to now. */
@@ -103,9 +105,16 @@ export async function say(chat: string, text: string): Promise<{ seq: number; st
   const c = await openChat(chat);
   const target = await replyTarget(c);
   if (!target) throw new HttpError(409, (await replyWindow(chat)).reason ?? "现在发不出去");
-  const status = await c.outbox.deliver(target.seq, (msg) =>
-    deliverOutgoing(c.adapter, c.meta, { kind: "text", text: body }, msg, { people: () => chatPeople(c.events) }),
-  );
+  let status: string;
+  try {
+    status = await c.outbox.deliver(target.seq, (msg) =>
+      deliverOutgoing(c.adapter, c.meta, { kind: "text", text: body }, msg, { people: () => chatPeople(c.events) }),
+    );
+  } catch (err) {
+    // The platform wouldn't take it (QQ: the group doesn't allow the bot to post on its own).
+    if (err instanceof DeliveryRefusedError) throw new HttpError(409, `发不出去。${c.adapter.replyRule ?? err.reason}`);
+    throw err;
+  }
   const store = getStore();
   const seq = await store.appendUnlocked(chat, [{ type: "admin/message", data: { text: body } }]);
   await store.log("say", chat, { text: body, replyTo: target.seq });
