@@ -36,7 +36,6 @@ export class MemoryStore implements Store {
   private historyEntries = new Map<string, HistoryEntry[]>();
   private logEntries: AdminLogEntry[] = [];
   private loginFailureTimes = new Map<string, number[]>();
-  private metaValues = new Map<string, string>();
 
   private appendTo(s: MemorySession, events: NewStoredEvent[]): number {
     const first = s.nextSeq;
@@ -245,14 +244,6 @@ export class MemoryStore implements Store {
 
   async schemaVersion() {
     return SCHEMA_VERSION;
-  }
-
-  async meta(key: string) {
-    return this.metaValues.get(key) ?? null;
-  }
-
-  async setMeta(key: string, value: string) {
-    this.metaValues.set(key, value);
   }
 
   async chats(day: string) {

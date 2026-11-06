@@ -52,7 +52,6 @@ export async function renderSetup(main, [stepId], app) {
   fill(
     main,
     h("header", { class: "page-head" }, h("h1", null, "新手引导"), h("p", { class: "muted" }, "从零配置到收到第一条消息。每一步都可以回来改，配置页里有全部选项。")),
-    await banners(status, app),
     h(
       "div",
       { class: "setup" },
@@ -77,25 +76,6 @@ export async function renderSetup(main, [stepId], app) {
     ),
   );
   return STEP_VIEWS[current.id](panel, status, app, next);
-}
-
-async function banners(status, app) {
-  const items = [];
-  if (status.envOnly.length) {
-    items.push(
-      h(
-        "div",
-        { class: "banner banner-info" },
-        h("span", null, `有 ${status.envOnly.length} 个设置还在用环境变量（${status.envOnly.slice(0, 4).join("、")}${status.envOnly.length > 4 ? "…" : ""}）。导入数据库后就能在这里改，Vercel 里的可以删掉。`),
-        action("导入到数据库", async () => {
-          const { saved } = await api.post("settings/import-env");
-          toast(`导入了 ${saved.length} 个设置`);
-          app.go(location.hash);
-        }, { primary: true }),
-      ),
-    );
-  }
-  return items;
 }
 
 const STEP_VIEWS = {

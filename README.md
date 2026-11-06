@@ -113,7 +113,7 @@ src/
   config.ts              配置：管理端 → 环境变量 → 默认值
   settings/              存在数据库里的配置
     catalog.ts           每项配置的默认值、类型与校验
-    service.ts           加载、保存、导入环境变量
+    service.ts           加载、保存、各项配置的来源
   chats/                 每个聊天
     profile.ts           回复方式、插话频率、工具开关、额外设定、额度
     usage.ts             用量统计与额度

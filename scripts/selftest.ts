@@ -2032,7 +2032,7 @@ await test("out of credit: an @ or a DM is told, an ordinary group message is sk
 });
 
 // ── Admin console ──
-const { saveSettings, refreshSettings, describeSettings, importEnv } = await import("../src/settings/service.js");
+const { saveSettings, refreshSettings, describeSettings } = await import("../src/settings/service.js");
 const { saveChatProfile } = await import("../src/chats/profile.js");
 const { quotaPolicy, turnUsage } = await import("../src/chats/usage.js");
 const { utcDay } = await import("../src/chats/day.js");
@@ -2057,10 +2057,7 @@ await test("settings: the console's values win over the environment; secrets onl
     await saveSettings({ OPENAI_RESPONSES_MODEL: null, DEEPSEEK_API_KEY: "" });
     assert.equal(config.llm.model, "openai/gpt-6-luna", "cleared: back to the environment");
     assert.equal(config.deepseek.apiKey, "ds-key");
-
-    const imported = await importEnv();
-    assert.ok(imported.includes("QQ_APP_SECRET") && imported.includes("OPENAI_RESPONSES_EXTRA_BODY"));
-    assert.equal(config.qq.appSecret, process.env.QQ_APP_SECRET);
+    assert.equal((await describeSettings()).values.find((v) => v.key === "QQ_APP_SECRET")!.source, "env", "not in the console: the environment's");
   } finally {
     await getStore().putSettings((await getStore().listSettings()).map((r) => ({ key: r.key, value: null, secret: r.secret })));
     await refreshSettings({ force: true });
@@ -2091,10 +2088,6 @@ await test("admin api: login, cookie session, same-origin JSON only; a new ADMIN
     const status = (await (await req("GET", "status", undefined, auth)).json()) as any;
     assert.equal(status.model, true);
     assert.equal(status.channels.find((c: any) => c.name === "qq").webhook, "https://bot.example.com/api/webhook/qq");
-    assert.ok(status.autoImported.includes("OPENAI_RESPONSES_API_KEY"), "the environment moves in the first time");
-    assert.deepEqual(status.envOnly, []);
-    const again = (await (await req("GET", "status", undefined, auth)).json()) as any;
-    assert.deepEqual(again.autoImported, [], "only once");
     assert.equal((await req("PUT", "settings", { changes: { AGENT_MAX_STEPS: "abc" } }, auth)).status, 400);
     assert.equal((await req("GET", "nope", undefined, auth)).status, 404);
 

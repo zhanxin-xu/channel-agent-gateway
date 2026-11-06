@@ -1,7 +1,7 @@
 /** Reading and changing the settings (src/settings). */
 import crypto from "node:crypto";
 import { settingDef } from "../../settings/catalog.js";
-import { describeSettings, importEnv, saveSettings, SettingsError } from "../../settings/service.js";
+import { describeSettings, saveSettings, SettingsError } from "../../settings/service.js";
 import { field, HttpError, type Route } from "../http.js";
 
 /** Secrets the console can make up itself. */
@@ -32,7 +32,6 @@ export const settingsRoutes: Route[] = [
       return { saved };
     },
   },
-  { method: "POST", path: "settings/import-env", handler: async () => ({ saved: await checked(importEnv) }) },
   {
     method: "POST",
     path: "settings/generate",

@@ -36,7 +36,6 @@ export async function renderConfig(main, [groupId], app) {
   });
   form.el.querySelector(".row")?.append(...[groupActions(group.id, form, status, slot)].flat().filter(Boolean));
 
-  const envCount = index.keysOf(group.id).filter((k) => index.values.get(k).source === "env").length;
   fill(
     main,
     h("header", { class: "page-head" }, h("h1", null, "配置"), h("p", { class: "muted" }, "保存后 30 秒内所有实例生效，不用重新部署。密钥只能替换，不能查看。")),
@@ -54,13 +53,6 @@ export async function renderConfig(main, [groupId], app) {
         h("h2", null, group.label, " ", channel ? (channel.configured ? pill("ok", "已配置") : pill("mute", "未配置")) : null),
         h("p", { class: "muted" }, group.help),
         channel ? h("p", null, "回调地址：", copyable(channel.webhook)) : null,
-        envCount
-          ? h("div", { class: "banner banner-info" }, h("span", null, `这一组有 ${envCount} 项来自环境变量。`), action("把环境变量导入数据库", async () => {
-              const { saved } = await api.post("settings/import-env");
-              toast(`导入了 ${saved.length} 个设置`);
-              app.go(`#/config/${group.id}`);
-            }))
-          : null,
         form.el,
         slot,
         group.id === "console" ? databaseCard(status, app) : null,

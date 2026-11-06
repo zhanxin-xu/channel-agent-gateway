@@ -134,30 +134,3 @@ export async function saveSettings(changes: Record<string, string | null>, actio
   await refreshSettings({ force: true });
   return keys;
 }
-
-/** Copy every setting the environment provides into the database (keys already there are skipped). */
-export async function importEnv(): Promise<string[]> {
-  const stored = new Set((await getStore().listSettings()).map((r) => r.key));
-  const changes: Record<string, string> = {};
-  for (const def of SETTINGS) {
-    const value = envValue(def);
-    if (value && !stored.has(def.key)) changes[def.key] = value;
-  }
-  return saveSettings(changes, "import-env");
-}
-
-const ENV_IMPORTED = "env_imported_at";
-
-/**
- * The first time the console finds the admin schema in place: import what
- * the environment provides, once. After that the console is where settings
- * change (the database wins over the environment), and a key cleared in the
- * console stays cleared. Returns the keys imported ([] when it already ran).
- */
-export async function importEnvOnce(): Promise<string[]> {
-  const store = getStore();
-  if (await store.meta(ENV_IMPORTED)) return [];
-  const saved = await importEnv();
-  await store.setMeta(ENV_IMPORTED, new Date().toISOString());
-  return saved;
-}

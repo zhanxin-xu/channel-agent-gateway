@@ -200,9 +200,6 @@ export interface AdminLogEntry {
 export interface ConsoleStore {
   /** Null when the database has no admin schema at all. */
   schemaVersion(): Promise<number | null>;
-  /** A marker the console keeps (gateway.meta), null when unset. */
-  meta(key: string): Promise<string | null>;
-  setMeta(key: string, value: string): Promise<void>;
   /** `day`: whose usage to include, "YYYY-MM-DD" UTC. */
   chats(day: string): Promise<ChatSummary[]>;
   /** The session and up to `limit` events before `beforeSeq`, newest first. */
